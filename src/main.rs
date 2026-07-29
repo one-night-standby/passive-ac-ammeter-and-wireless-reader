@@ -14,8 +14,8 @@ const ADDRESS_DECIMAL_OFFSET: usize = b"METER_TEST,ADDR=".len();
 async fn main(_spawner: Spawner) -> ! {
     let peripherals = embassy_mspm0::init(Default::default());
 
-    let mut led = Output::new(peripherals.PA0, Level::Low);
-    led.set_inversion(true);
+    let mut tx_green_led = Output::new(peripherals.PB27, Level::Low);
+    tx_green_led.set_inversion(true);
 
     // Each switch connects its GPIO to GND when ON. The internal pull-up makes
     // an open switch read as 0 and a closed switch read as 1 after inversion.
@@ -50,7 +50,7 @@ async fn main(_spawner: Spawner) -> ! {
 
         hc42.blocking_write(&test_frame).unwrap();
         hc42.blocking_flush().unwrap();
-        led.toggle();
+        tx_green_led.toggle();
         Timer::after_secs(1).await;
     }
 }
