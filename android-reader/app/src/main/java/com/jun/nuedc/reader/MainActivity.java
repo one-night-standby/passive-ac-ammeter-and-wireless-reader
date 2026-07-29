@@ -387,12 +387,20 @@ public final class MainActivity extends Activity {
     }
 
     private void showIntervalDialog() {
-        int[] values = {1, 2, 5, 10};
-        String[] labels = {"1 分钟", "2 分钟（题目默认）", "5 分钟", "10 分钟"};
+        int[] values = {10, 30, 60, 120, 180, 240, 300};
+        String[] labels = {
+                "10 秒",
+                "30 秒",
+                "1 分钟",
+                "2 分钟（题目默认）",
+                "3 分钟",
+                "4 分钟",
+                "5 分钟"
+        };
         new AlertDialog.Builder(this)
                 .setTitle("设置自动采集间隔")
                 .setItems(labels, (dialog, which) -> {
-                    preferences.savePollingIntervalMinutes(values[which]);
+                    preferences.savePollingIntervalSeconds(values[which]);
                     updateIntervalButton();
                     if (autoMode) {
                         startReaderAction(MeterPollingService.ACTION_UPDATE_INTERVAL);
@@ -406,8 +414,8 @@ public final class MainActivity extends Activity {
         if (intervalButton != null) {
             intervalButton.setText(String.format(
                     Locale.CHINA,
-                    "自动采集间隔：%d 分钟",
-                    preferences.pollingIntervalMinutes()
+                    "自动采集间隔：%s",
+                    preferences.pollingIntervalText()
             ));
         }
     }
