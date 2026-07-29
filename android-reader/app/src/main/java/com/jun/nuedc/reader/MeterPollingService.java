@@ -25,6 +25,7 @@ import android.os.Build;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
+import android.os.SystemClock;
 import android.util.Log;
 
 import java.util.ArrayDeque;
@@ -97,11 +98,13 @@ public final class MeterPollingService extends Service {
     private boolean manualReadRequested;
     private String currentSource = "BASIC";
     private long cycleStartedAt;
+    private long nextCycleAtElapsedMs;
 
     private final Runnable scanTimeout = this::finishScan;
     private final Runnable connectionTimeout = () -> failCurrent("连接超时");
     private final Runnable frameTimeout = this::handleFrameTimeout;
     private final Runnable nextCycle = this::beginAutoCycle;
+    private final Runnable countdownTick = this::updateCountdownNotification;
     private final Runnable reconnectBasic = () -> {
         if (basicMode && !autoMode && !operationActive) {
             beginScan("BASIC");
@@ -276,6 +279,8 @@ public final class MeterPollingService extends Service {
         if (!autoMode) {
             return;
         }
+        handler.removeCallbacks(countdownTick);
+        nextCycleAtElapsedMs = 0L;
         cycleStartedAt = System.currentTimeMillis();
         beginScan("AUTO");
     }
@@ -619,11 +624,7 @@ public final class MeterPollingService extends Service {
                 cycleStartedAt + pollingIntervalMs
         );
         long delay = nextAt - System.currentTimeMillis();
-        updateNotification(
-                String.format(Locale.CHINA, "%d秒后开始下一轮", Math.max(1, delay / 1_000L))
-        );
-        handler.removeCallbacks(nextCycle);
-        handler.postDelayed(nextCycle, delay);
+        scheduleNextAutoCycle(delay);
     }
 
     private void rescheduleAutoCycle() {
@@ -644,16 +645,51 @@ public final class MeterPollingService extends Service {
                 "AUTO_WAIT",
                 String.format(Locale.CHINA, "采集间隔已设为%s，重新计时", interval)
         );
-        updateNotification(String.format(Locale.CHINA, "%s后开始下一轮", interval));
-        handler.postDelayed(nextCycle, delay);
+        scheduleNextAutoCycle(delay);
+    }
+
+    private void scheduleNextAutoCycle(long delayMs) {
+        long safeDelayMs = Math.max(1_000L, delayMs);
+        handler.removeCallbacks(nextCycle);
+        handler.removeCallbacks(countdownTick);
+        nextCycleAtElapsedMs = SystemClock.elapsedRealtime() + safeDelayMs;
+        updateCountdownNotification();
+        handler.postDelayed(nextCycle, safeDelayMs);
+    }
+
+    private void updateCountdownNotification() {
+        if (!autoMode || operationActive || nextCycleAtElapsedMs <= 0L) {
+            return;
+        }
+
+        long remainingMs = nextCycleAtElapsedMs - SystemClock.elapsedRealtime();
+        if (remainingMs <= 0L) {
+            updateNotification("即将开始下一轮");
+            return;
+        }
+
+        long remainingSeconds = Math.max(1L, (remainingMs + 999L) / 1_000L);
+        updateNotification(String.format(
+                Locale.CHINA,
+                "%d秒后开始下一轮",
+                remainingSeconds
+        ));
+
+        long untilNextSecond = remainingMs - (remainingSeconds - 1L) * 1_000L;
+        handler.postDelayed(
+                countdownTick,
+                Math.max(50L, Math.min(1_000L, untilNextSecond))
+        );
     }
 
     private void cancelOperation() {
         handler.removeCallbacks(nextCycle);
+        handler.removeCallbacks(countdownTick);
         handler.removeCallbacks(reconnectBasic);
         handler.removeCallbacks(scanTimeout);
         handler.removeCallbacks(connectionTimeout);
         handler.removeCallbacks(frameTimeout);
+        nextCycleAtElapsedMs = 0L;
         scanning = false;
         operationActive = false;
         if (scanner != null && hasBlePermissions()) {
