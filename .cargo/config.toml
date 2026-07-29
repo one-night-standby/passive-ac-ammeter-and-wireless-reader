@@ -1,0 +1,5 @@
+[target.thumbv6m-none-eabi]
+runner = "pyocd flash --target mspm0g3507 --format elf"
+
+[build]
+target = "thumbv6m-none-eabi"

@@ -1,0 +1,22 @@
+[package]
+name = "passive-ac-ammeter-and-wireless-reader"
+version = "0.1.0"
+edition = "2024"
+publish = false
+license-file = "LICENSE-PROPRIETARY"
+
+[dependencies]
+embassy-mspm0 = { git = "https://github.com/ozongzi/embassy", rev = "f6daf50db52bb90e7dbee2314a04eee77b46b03b", features = ["mspm0g3507pm", "rt", "time-driver-any"] }
+embassy-executor = { git = "https://github.com/ozongzi/embassy", rev = "f6daf50db52bb90e7dbee2314a04eee77b46b03b", features = ["platform-cortex-m", "executor-thread"] }
+embassy-time = { git = "https://github.com/ozongzi/embassy", rev = "f6daf50db52bb90e7dbee2314a04eee77b46b03b" }
+cortex-m = { version = "0.7.7", features = ["inline-asm", "critical-section-single-core"] }
+cortex-m-rt = "0.7.5"
+panic-halt = "1"
+
+[profile.dev]
+opt-level = "s"
+
+[profile.release]
+debug = 2
+lto = true
+opt-level = "s"
