@@ -43,6 +43,10 @@ public final class MainActivity extends Activity {
     private TextView currentText;
     private TextView readingStatus;
     private TextView readingTime;
+    private TextView trendTitle;
+    private TextView historySummary;
+    private LinearLayout historyList;
+    private TrendView trendView;
     private Button autoButton;
     private boolean autoMode;
     private int selectedAddress;
@@ -51,10 +55,7 @@ public final class MainActivity extends Activity {
         @Override
         public void onReceive(Context context, Intent intent) {
             if (MeterPollingService.ACTION_READING.equals(intent.getAction())) {
-                int address = intent.getIntExtra(MeterPollingService.EXTRA_ADDRESS, -1);
-                if (address == selectedAddress) {
-                    refreshSelectedReading();
-                }
+                refreshDataViews();
             } else if (MeterPollingService.ACTION_STATE.equals(intent.getAction())) {
                 String detail = intent.getStringExtra(MeterPollingService.EXTRA_DETAIL);
                 String state = intent.getStringExtra(MeterPollingService.EXTRA_STATE);
@@ -74,14 +75,14 @@ public final class MainActivity extends Activity {
         database = new MeterDatabase(this);
         buildUi();
         registerEventReceiver();
-        refreshSelectedReading();
+        refreshDataViews();
         ensurePermissions(() -> startReaderAction(MeterPollingService.ACTION_CONNECT_BASIC));
     }
 
     @Override
     protected void onResume() {
         super.onResume();
-        refreshSelectedReading();
+        refreshDataViews();
     }
 
     @Override
@@ -206,6 +207,38 @@ public final class MainActivity extends Activity {
         readingCard.addView(readingTime);
         root.addView(readingCard, readingParams);
 
+        trendTitle = text("00号表电流趋势", 20, TEXT);
+        trendTitle.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        LinearLayout.LayoutParams trendTitleParams = matchWrap();
+        trendTitleParams.topMargin = dp(28);
+        root.addView(trendTitle, trendTitleParams);
+
+        TextView trendHint = text("显示当前地址最近120条有效电流数据", 14, MUTED);
+        trendHint.setPadding(0, dp(6), 0, dp(12));
+        root.addView(trendHint);
+
+        trendView = new TrendView(this);
+        trendView.setBackground(card(Color.WHITE, Color.TRANSPARENT));
+        trendView.setElevation(dp(5));
+        root.addView(trendView, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                dp(260)
+        ));
+
+        TextView historyTitle = text("历史数据", 20, TEXT);
+        historyTitle.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        LinearLayout.LayoutParams historyTitleParams = matchWrap();
+        historyTitleParams.topMargin = dp(28);
+        root.addView(historyTitle, historyTitleParams);
+
+        historySummary = text("", 14, MUTED);
+        historySummary.setPadding(0, dp(6), 0, dp(10));
+        root.addView(historySummary);
+
+        historyList = new LinearLayout(this);
+        historyList.setOrientation(LinearLayout.VERTICAL);
+        root.addView(historyList, matchWrap());
+
         setContentView(scrollView);
         updateModeControls();
     }
@@ -213,7 +246,20 @@ public final class MainActivity extends Activity {
     private void switchAddress(int delta) {
         selectedAddress = (selectedAddress + delta + 16) % 16;
         addressText.setText(String.format(Locale.CHINA, "%02d", selectedAddress));
+        refreshDataViews();
+    }
+
+    private void refreshDataViews() {
         refreshSelectedReading();
+        if (trendView != null) {
+            trendTitle.setText(String.format(
+                    Locale.CHINA,
+                    "%02d号表电流趋势",
+                    selectedAddress
+            ));
+            trendView.setReadings(database.trendForAddress(selectedAddress, 120));
+        }
+        rebuildHistory();
     }
 
     private void refreshSelectedReading() {
@@ -243,6 +289,62 @@ public final class MainActivity extends Activity {
         readingStatus.setText(selected.statusText());
         readingStatus.setTextColor(statusColor(selected.status));
         readingTime.setText("采集时间  " + timeFormat.format(new Date(selected.timestamp)));
+    }
+
+    private void rebuildHistory() {
+        if (historyList == null || historySummary == null) {
+            return;
+        }
+        List<MeterReading> history = database.history(50);
+        int storedCount = database.storedCount();
+        historySummary.setText(String.format(
+                Locale.CHINA,
+                "已掉电保存 %d 条，容量 %d 条；下方显示最近 %d 条",
+                storedCount,
+                MeterDatabase.MAX_STORED_READINGS,
+                Math.min(50, storedCount)
+        ));
+        historyList.removeAllViews();
+        if (history.isEmpty()) {
+            TextView empty = text("暂无历史数据", 14, MUTED);
+            empty.setPadding(dp(14), dp(16), dp(14), dp(16));
+            empty.setBackground(card(Color.WHITE, Color.TRANSPARENT));
+            historyList.addView(empty, matchWrap());
+            return;
+        }
+
+        for (MeterReading reading : history) {
+            LinearLayout row = new LinearLayout(this);
+            row.setOrientation(LinearLayout.VERTICAL);
+            row.setPadding(dp(14), dp(11), dp(14), dp(11));
+            row.setBackground(card(Color.WHITE, Color.TRANSPARENT));
+
+            TextView value = text(
+                    String.format(
+                            Locale.CHINA,
+                            "%02d号表    %s    %s",
+                            reading.address,
+                            reading.currentText(),
+                            reading.statusText()
+                    ),
+                    15,
+                    statusColor(reading.status)
+            );
+            value.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+            row.addView(value);
+
+            TextView timestamp = text(
+                    timeFormat.format(new Date(reading.timestamp)),
+                    12,
+                    MUTED
+            );
+            timestamp.setPadding(0, dp(4), 0, 0);
+            row.addView(timestamp);
+
+            LinearLayout.LayoutParams rowParams = matchWrap();
+            rowParams.bottomMargin = dp(8);
+            historyList.addView(row, rowParams);
+        }
     }
 
     private void updateModeControls() {
