@@ -13,8 +13,7 @@ import java.util.Set;
 
 public final class MeterDatabase extends SQLiteOpenHelper {
     private static final String DATABASE_NAME = "wireless_meter_reader.db";
-    private static final int DATABASE_VERSION = 1;
-    private static final int MAX_STORED_READINGS = 1000;
+    private static final int DATABASE_VERSION = 2;
 
     public MeterDatabase(Context context) {
         super(context, DATABASE_NAME, null, DATABASE_VERSION);
@@ -47,7 +46,13 @@ public final class MeterDatabase extends SQLiteOpenHelper {
 
     @Override
     public void onUpgrade(SQLiteDatabase db, int oldVersion, int newVersion) {
-        // Version 1 is the initial schema.
+        if (oldVersion < 2) {
+            db.execSQL(
+                    "DELETE FROM readings WHERE id NOT IN (" +
+                            "SELECT MAX(id) FROM readings GROUP BY address" +
+                            ")"
+            );
+        }
     }
 
     public synchronized MeterReading insertReading(MeterReading reading) {
@@ -55,7 +60,7 @@ public final class MeterDatabase extends SQLiteOpenHelper {
         ContentValues values = valuesFor(reading);
         long id = db.insertOrThrow("readings", null, values);
         registerMeter(db, reading);
-        prune(db);
+        deleteOlderAddressReading(db, reading.address, id);
         return new MeterReading(
                 id,
                 reading.timestamp,
@@ -109,6 +114,7 @@ public final class MeterDatabase extends SQLiteOpenHelper {
                         "AUTO"
                 );
                 long id = db.insertOrThrow("readings", null, valuesFor(offline));
+                deleteOlderAddressReading(db, address, id);
                 inserted.add(new MeterReading(
                         id,
                         offline.timestamp,
@@ -122,7 +128,6 @@ public final class MeterDatabase extends SQLiteOpenHelper {
                 ));
             }
         }
-        prune(db);
         return inserted;
     }
 
@@ -137,43 +142,6 @@ public final class MeterDatabase extends SQLiteOpenHelper {
                         "SELECT address,MAX(id) latest_id FROM readings GROUP BY address" +
                         ") latest ON r.id=latest.latest_id ORDER BY r.address ASC";
         try (Cursor cursor = db.rawQuery(sql, null)) {
-            while (cursor.moveToNext()) {
-                result.add(fromCursor(cursor));
-            }
-        }
-        return result;
-    }
-
-    public synchronized List<MeterReading> history(int limit) {
-        return queryReadings(null, null, Math.max(1, limit));
-    }
-
-    public synchronized List<MeterReading> trend(int limit) {
-        List<MeterReading> descending = queryReadings(
-                "status<>?",
-                new String[]{MeterReading.OFFLINE},
-                Math.max(1, limit)
-        );
-        List<MeterReading> ascending = new ArrayList<>(descending.size());
-        for (int i = descending.size() - 1; i >= 0; i--) {
-            ascending.add(descending.get(i));
-        }
-        return ascending;
-    }
-
-    private List<MeterReading> queryReadings(String selection, String[] args, int limit) {
-        SQLiteDatabase db = getReadableDatabase();
-        List<MeterReading> result = new ArrayList<>();
-        try (Cursor cursor = db.query(
-                "readings",
-                null,
-                selection,
-                args,
-                null,
-                null,
-                "timestamp DESC,id DESC",
-                Integer.toString(limit)
-        )) {
             while (cursor.moveToNext()) {
                 result.add(fromCursor(cursor));
             }
@@ -232,12 +200,11 @@ public final class MeterDatabase extends SQLiteOpenHelper {
         );
     }
 
-    private void prune(SQLiteDatabase db) {
-        db.execSQL(
-                "DELETE FROM readings WHERE id NOT IN (" +
-                        "SELECT id FROM readings ORDER BY id DESC LIMIT " +
-                        MAX_STORED_READINGS +
-                        ")"
+    private void deleteOlderAddressReading(SQLiteDatabase db, int address, long keepId) {
+        db.delete(
+                "readings",
+                "address=? AND id<>?",
+                new String[]{Integer.toString(address), Long.toString(keepId)}
         );
     }
 }
