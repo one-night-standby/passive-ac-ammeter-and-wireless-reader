@@ -2,6 +2,7 @@ package com.jun.nuedc.reader;
 
 import android.Manifest;
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
@@ -145,43 +146,6 @@ public final class MainActivity extends Activity {
         )));
         root.addView(autoButton, autoParams);
 
-        TextView addressHeading = text("地址码切换", 20, TEXT);
-        addressHeading.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
-        LinearLayout.LayoutParams addressHeadingParams = matchWrap();
-        addressHeadingParams.topMargin = dp(28);
-        root.addView(addressHeading, addressHeadingParams);
-
-        TextView addressHint = text(
-                "地址码由电流表拨码开关设置，此处只切换查看00～15号表。",
-                14,
-                MUTED
-        );
-        addressHint.setPadding(0, dp(6), 0, dp(12));
-        root.addView(addressHint);
-
-        LinearLayout addressRow = new LinearLayout(this);
-        addressRow.setOrientation(LinearLayout.HORIZONTAL);
-        addressRow.setGravity(Gravity.CENTER);
-        Button previous = actionButton("－", PRIMARY);
-        previous.setTextSize(24);
-        previous.setOnClickListener(view -> switchAddress(-1));
-        addressRow.addView(previous, new LinearLayout.LayoutParams(dp(72), dp(54)));
-
-        addressText = text("00", 34, TEXT);
-        addressText.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
-        addressText.setGravity(Gravity.CENTER);
-        LinearLayout.LayoutParams addressParams = new LinearLayout.LayoutParams(0, dp(54), 1f);
-        addressParams.leftMargin = dp(12);
-        addressParams.rightMargin = dp(12);
-        addressText.setBackground(card(Color.WHITE, Color.TRANSPARENT));
-        addressRow.addView(addressText, addressParams);
-
-        Button next = actionButton("＋", PRIMARY);
-        next.setTextSize(24);
-        next.setOnClickListener(view -> switchAddress(1));
-        addressRow.addView(next, new LinearLayout.LayoutParams(dp(72), dp(54)));
-        root.addView(addressRow, matchWrap());
-
         LinearLayout readingCard = new LinearLayout(this);
         readingCard.setOrientation(LinearLayout.VERTICAL);
         readingCard.setGravity(Gravity.CENTER);
@@ -225,6 +189,43 @@ public final class MainActivity extends Activity {
                 dp(260)
         ));
 
+        TextView addressHeading = text("地址码切换", 20, TEXT);
+        addressHeading.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        LinearLayout.LayoutParams addressHeadingParams = matchWrap();
+        addressHeadingParams.topMargin = dp(28);
+        root.addView(addressHeading, addressHeadingParams);
+
+        TextView addressHint = text(
+                "地址码由电流表拨码开关设置，此处只切换查看00～15号表。",
+                14,
+                MUTED
+        );
+        addressHint.setPadding(0, dp(6), 0, dp(12));
+        root.addView(addressHint);
+
+        LinearLayout addressRow = new LinearLayout(this);
+        addressRow.setOrientation(LinearLayout.HORIZONTAL);
+        addressRow.setGravity(Gravity.CENTER);
+        Button previous = actionButton("－", PRIMARY);
+        previous.setTextSize(24);
+        previous.setOnClickListener(view -> switchAddress(-1));
+        addressRow.addView(previous, new LinearLayout.LayoutParams(dp(72), dp(54)));
+
+        addressText = text("00", 34, TEXT);
+        addressText.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
+        addressText.setGravity(Gravity.CENTER);
+        LinearLayout.LayoutParams addressParams = new LinearLayout.LayoutParams(0, dp(54), 1f);
+        addressParams.leftMargin = dp(12);
+        addressParams.rightMargin = dp(12);
+        addressText.setBackground(card(Color.WHITE, Color.TRANSPARENT));
+        addressRow.addView(addressText, addressParams);
+
+        Button next = actionButton("＋", PRIMARY);
+        next.setTextSize(24);
+        next.setOnClickListener(view -> switchAddress(1));
+        addressRow.addView(next, new LinearLayout.LayoutParams(dp(72), dp(54)));
+        root.addView(addressRow, matchWrap());
+
         TextView historyTitle = text("历史数据", 20, TEXT);
         historyTitle.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         LinearLayout.LayoutParams historyTitleParams = matchWrap();
@@ -234,6 +235,12 @@ public final class MainActivity extends Activity {
         historySummary = text("", 14, MUTED);
         historySummary.setPadding(0, dp(6), 0, dp(10));
         root.addView(historySummary);
+
+        Button clearHistory = actionButton("清除历史数据", Color.rgb(183, 28, 28));
+        clearHistory.setOnClickListener(view -> confirmClearHistory());
+        LinearLayout.LayoutParams clearParams = matchWrap();
+        clearParams.bottomMargin = dp(12);
+        root.addView(clearHistory, clearParams);
 
         historyList = new LinearLayout(this);
         historyList.setOrientation(LinearLayout.VERTICAL);
@@ -345,6 +352,19 @@ public final class MainActivity extends Activity {
             rowParams.bottomMargin = dp(8);
             historyList.addView(row, rowParams);
         }
+    }
+
+    private void confirmClearHistory() {
+        new AlertDialog.Builder(this)
+                .setTitle("清除历史数据")
+                .setMessage("将永久删除全部读数和已登记电流表，是否继续？")
+                .setNegativeButton("取消", null)
+                .setPositiveButton("确认清除", (dialog, which) -> {
+                    database.clearHistory();
+                    refreshDataViews();
+                    Toast.makeText(this, "历史数据已清除", Toast.LENGTH_SHORT).show();
+                })
+                .show();
     }
 
     private void updateModeControls() {

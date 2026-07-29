@@ -170,6 +170,18 @@ public final class MeterDatabase extends SQLiteOpenHelper {
         }
     }
 
+    public synchronized void clearHistory() {
+        SQLiteDatabase db = getWritableDatabase();
+        db.beginTransaction();
+        try {
+            db.delete("readings", null, null);
+            db.delete("meters", null, null);
+            db.setTransactionSuccessful();
+        } finally {
+            db.endTransaction();
+        }
+    }
+
     private List<MeterReading> queryReadings(String selection, String[] args, int limit) {
         SQLiteDatabase db = getReadableDatabase();
         List<MeterReading> result = new ArrayList<>();
