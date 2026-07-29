@@ -187,7 +187,11 @@ public final class MainActivity extends Activity {
         trendTitleParams.topMargin = dp(28);
         root.addView(trendTitle, trendTitleParams);
 
-        TextView trendHint = text("显示当前地址最近120条有效电流数据", 14, MUTED);
+        TextView trendHint = text(
+                "显示当前地址最近120条有效数据；双指可分别缩放时间轴和电流轴",
+                14,
+                MUTED
+        );
         trendHint.setPadding(0, dp(6), 0, dp(12));
         root.addView(trendHint);
 
@@ -263,6 +267,7 @@ public final class MainActivity extends Activity {
     private void switchAddress(int delta) {
         selectedAddress = (selectedAddress + delta + 16) % 16;
         addressText.setText(String.format(Locale.CHINA, "%02d", selectedAddress));
+        trendView.resetZoom();
         refreshDataViews();
     }
 
