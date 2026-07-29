@@ -1,11 +1,11 @@
-题面/HC42规格在 docs, 务必阅读
+题面/HC42规格在 docs
 
 DSP流程
 
 原始输入                                     +- 1.414 V <input>
 片内 OPA 偏置                                 0.236 - 3.064
 4k samples per sec 采样 800 点 （市电，50Hz）  292 - 3802
-RMS                                           u32 IVpp
+RMS                                           u64 IVpp
 Calibration                                   f32 Vpp <output>
 
 output 1. OLED 128x64 显示
