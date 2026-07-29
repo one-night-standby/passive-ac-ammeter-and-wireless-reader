@@ -9,8 +9,8 @@ use embassy_mspm0::dma::{self, Channel, TransferOptions};
 use embassy_mspm0::gpio::{Level, Output};
 use embassy_mspm0::pac;
 use embassy_mspm0::peripherals;
-use embedded_graphics::mono_font::ascii::FONT_9X15;
 use embedded_graphics::mono_font::MonoTextStyle;
+use embedded_graphics::mono_font::ascii::FONT_9X15;
 use embedded_graphics::pixelcolor::BinaryColor;
 use embedded_graphics::prelude::*;
 use embedded_graphics::text::Text;
@@ -250,7 +250,7 @@ fn init_timer() {
 /// ~/embed/Single-Phase-Power-Analyzer/src/bin/analyzer/dsp.rs's `Calib`
 /// for the calibration procedure/pattern this should follow. Placeholder
 /// (1 LSB RMS == 1 A) until real reference readings exist.
-const CAL_A_PER_LSB: f32 = 1.0;
+const CAL_A_PER_LSB: f32 = 0.00639869;
 
 /// RMS over one captured frame, in raw ADC-LSB units (DC bias removed
 /// dynamically -- the OPA stage biases the signal to ~1.7 V, not 0 V, so
@@ -373,6 +373,6 @@ async fn main(_spawner: Spawner) -> ! {
         }
 
         // Heartbeat: one toggle per measurement cycle.
-        led.toggle();
+        // led.toggle();
     }
 }
