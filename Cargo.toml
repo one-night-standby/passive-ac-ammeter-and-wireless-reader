@@ -12,6 +12,12 @@ embassy-time = { git = "https://github.com/ozongzi/embassy", rev = "f6daf50db52b
 cortex-m = { version = "0.7.7", features = ["inline-asm", "critical-section-single-core"] }
 cortex-m-rt = "0.7.5"
 panic-halt = "1"
+embedded-graphics-core = "0.4.0"
+embedded-graphics = "0.8"
+embedded-hal = "1.0.0"
+ssd1306 = "0.10"
+heapless = "0.8"
+libm = "0.2"
 
 [profile.dev]
 opt-level = "s"
