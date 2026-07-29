@@ -6,9 +6,11 @@ use core::fmt::Write as _;
 use embassy_executor::Spawner;
 use embassy_mspm0::bind_interrupts;
 use embassy_mspm0::dma::{self, Channel, TransferOptions};
-use embassy_mspm0::gpio::{Level, Output};
+use embassy_mspm0::gpio::{Input, Level, Output, Pull};
 use embassy_mspm0::pac;
 use embassy_mspm0::peripherals;
+use embassy_mspm0::uart::{Config as UartConfig, Uart};
+use embassy_time::Timer;
 use embedded_graphics::mono_font::MonoTextStyle;
 use embedded_graphics::mono_font::ascii::FONT_9X15;
 use embedded_graphics::pixelcolor::BinaryColor;
@@ -45,6 +47,8 @@ const LOAD: u32 = TIMER_CLK_HZ / SAMPLE_HZ - 1;
 
 const PINCM_PA18: usize = 40; // OPA1_IN1+ (signal in)
 const PINCM_PA16: usize = 38; // OPA1_OUT (also ADC1 channel 1, signal out)
+
+const HC42_BAUD_RATE: u32 = 9_600;
 
 fn set_analog(pincm: usize) {
     pac::IOMUX.pincm(pincm).modify(|w| {
@@ -292,6 +296,23 @@ async fn main(_spawner: Spawner) -> ! {
     let mut led = Output::new(unsafe { peripherals::PA0::steal() }, Level::Low);
     led.set_inversion(true);
 
+    let mut tx_green_led = Output::new(p.PB27, Level::Low);
+    tx_green_led.set_inversion(true);
+
+    // Each switch connects its GPIO to GND when ON. The internal pull-up makes
+    // an open switch read as 0 and a closed switch read as 1 after inversion.
+    let address_bit0 = Input::new(p.PB0, Pull::Up);
+    let address_bit1 = Input::new(p.PB6, Pull::Up);
+    let address_bit2 = Input::new(p.PB7, Pull::Up);
+    let address_bit3 = Input::new(p.PB8, Pull::Up);
+
+    let mut uart_config = UartConfig::default();
+    uart_config.baudrate = HC42_BAUD_RATE;
+    let mut hc42 = Uart::new_blocking(p.UART2, p.PB16, p.PB15, uart_config).unwrap();
+
+    // HC-42 needs about 300 ms after power-on before it is ready.
+    Timer::after_millis(500).await;
+
     loop {
         // Stop the timer before re-arming so every frame starts aligned
         // on sample 0 (mirrors
@@ -380,6 +401,26 @@ async fn main(_spawner: Spawner) -> ! {
             let _ = Text::new(&line2, Point::new(4, 60), style).draw(display);
             let _ = display.flush();
         }
+
+        // Address dip switches, read once per cycle -- the Android app
+        // re-derives alarm status from CURRENT_MA itself (see
+        // MeterReading::classify), so STATUS here is just a fixed token
+        // that satisfies the app's frame parser.
+        let address = u8::from(address_bit0.is_low())
+            | (u8::from(address_bit1.is_low()) << 1)
+            | (u8::from(address_bit2.is_low()) << 2)
+            | (u8::from(address_bit3.is_low()) << 3);
+        let current_ma = (amps * 1000.0) as u32;
+
+        let mut frame: String<64> = String::new();
+        let _ = write!(
+            frame,
+            "METER_TEST,ADDR={:02},CURRENT_MA={},STATUS=NORMAL\r\n",
+            address, current_ma
+        );
+        let _ = hc42.blocking_write(frame.as_bytes());
+        let _ = hc42.blocking_flush();
+        tx_green_led.toggle();
 
         // Heartbeat: one toggle per measurement cycle.
         // led.toggle();

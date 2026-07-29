@@ -1,2 +1,6 @@
 /target/
 .DS_Store
+.android-toolchain/
+android-reader/.gradle/
+android-reader/local.properties
+android-reader/**/build/
