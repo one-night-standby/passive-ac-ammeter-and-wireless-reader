@@ -49,6 +49,8 @@ public final class MainActivity extends Activity {
     private LinearLayout historyList;
     private TrendView trendView;
     private Button autoButton;
+    private Button intervalButton;
+    private ReaderPreferences preferences;
     private boolean autoMode;
     private int selectedAddress;
 
@@ -74,6 +76,7 @@ public final class MainActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         database = new MeterDatabase(this);
+        preferences = new ReaderPreferences(this);
         buildUi();
         registerEventReceiver();
         refreshDataViews();
@@ -122,7 +125,7 @@ public final class MainActivity extends Activity {
         root.addView(modeStatus, modeParams);
 
         TextView modeHint = text(
-                "基本模式手动读取一次；自动模式每2分钟搜索并采集覆盖范围内的全部电流表。",
+                "基本模式手动读取一次；自动模式按设定间隔搜索并采集覆盖范围内的全部电流表。",
                 14,
                 MUTED
         );
@@ -145,6 +148,13 @@ public final class MainActivity extends Activity {
                         : MeterPollingService.ACTION_START_AUTO
         )));
         root.addView(autoButton, autoParams);
+
+        intervalButton = actionButton("", PRIMARY);
+        intervalButton.setOnClickListener(view -> showIntervalDialog());
+        LinearLayout.LayoutParams intervalParams = matchWrap();
+        intervalParams.topMargin = dp(10);
+        root.addView(intervalButton, intervalParams);
+        updateIntervalButton();
 
         LinearLayout readingCard = new LinearLayout(this);
         readingCard.setOrientation(LinearLayout.VERTICAL);
@@ -374,6 +384,32 @@ public final class MainActivity extends Activity {
         modeStatus.setText(autoMode ? "自动模式" : "基本模式");
         modeStatus.setTextColor(autoMode ? ACCENT : PRIMARY);
         autoButton.setText(autoMode ? "停止自动模式，返回基本模式" : "一键启动自动模式");
+    }
+
+    private void showIntervalDialog() {
+        int[] values = {1, 2, 5, 10};
+        String[] labels = {"1 分钟", "2 分钟（题目默认）", "5 分钟", "10 分钟"};
+        new AlertDialog.Builder(this)
+                .setTitle("设置自动采集间隔")
+                .setItems(labels, (dialog, which) -> {
+                    preferences.savePollingIntervalMinutes(values[which]);
+                    updateIntervalButton();
+                    if (autoMode) {
+                        startReaderAction(MeterPollingService.ACTION_UPDATE_INTERVAL);
+                    }
+                })
+                .setNegativeButton("取消", null)
+                .show();
+    }
+
+    private void updateIntervalButton() {
+        if (intervalButton != null) {
+            intervalButton.setText(String.format(
+                    Locale.CHINA,
+                    "自动采集间隔：%d 分钟",
+                    preferences.pollingIntervalMinutes()
+            ));
+        }
     }
 
     private void ensurePermissions(Runnable action) {

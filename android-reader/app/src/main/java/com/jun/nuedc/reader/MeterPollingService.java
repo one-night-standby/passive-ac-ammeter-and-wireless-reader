@@ -48,6 +48,8 @@ public final class MeterPollingService extends Service {
             "com.jun.nuedc.reader.action.START_AUTO";
     public static final String ACTION_STOP_AUTO =
             "com.jun.nuedc.reader.action.STOP_AUTO";
+    public static final String ACTION_UPDATE_INTERVAL =
+            "com.jun.nuedc.reader.action.UPDATE_INTERVAL";
     public static final String ACTION_READING =
             "com.jun.nuedc.reader.event.READING";
     public static final String ACTION_STATE =
@@ -85,6 +87,7 @@ public final class MeterPollingService extends Service {
     private BluetoothGattCharacteristic meterCharacteristic;
     private ScanTarget currentTarget;
     private MeterDatabase database;
+    private ReaderPreferences preferences;
     private NotificationManager notificationManager;
 
     private boolean autoMode;
@@ -163,6 +166,7 @@ public final class MeterPollingService extends Service {
     public void onCreate() {
         super.onCreate();
         database = new MeterDatabase(this);
+        preferences = new ReaderPreferences(this);
         notificationManager = getSystemService(NotificationManager.class);
         BluetoothManager manager = getSystemService(BluetoothManager.class);
         adapter = manager == null ? null : manager.getAdapter();
@@ -194,6 +198,8 @@ public final class MeterPollingService extends Service {
             startAutoMode();
         } else if (ACTION_STOP_AUTO.equals(action)) {
             switchToBasicMode();
+        } else if (ACTION_UPDATE_INTERVAL.equals(action)) {
+            rescheduleAutoCycle();
         }
         return START_NOT_STICKY;
     }
@@ -212,7 +218,14 @@ public final class MeterPollingService extends Service {
 
     private void ensureBasicConnection() {
         if (autoMode) {
-            broadcastState("AUTO_WAIT", "自动模式运行中，每2分钟采集一次");
+            broadcastState(
+                    "AUTO_WAIT",
+                    String.format(
+                            Locale.CHINA,
+                            "自动模式运行中，每%d分钟采集一次",
+                            preferences.pollingIntervalMinutes()
+                    )
+            );
             return;
         }
         if (basicMode && currentGatt != null && meterCharacteristic != null) {
@@ -592,18 +605,46 @@ public final class MeterPollingService extends Service {
         closeCurrentGatt();
         broadcastState(
                 "AUTO_WAIT",
-                String.format(Locale.CHINA, "本轮完成：成功%d台，2分钟后再次采集", successCount)
+                String.format(
+                        Locale.CHINA,
+                        "本轮完成：成功%d台，%d分钟后再次采集",
+                        successCount,
+                        preferences.pollingIntervalMinutes()
+                )
         );
 
+        long pollingIntervalMs = preferences.pollingIntervalMs();
         long nextAt = Math.max(
                 System.currentTimeMillis() + 1_000L,
-                cycleStartedAt + ReaderPreferences.POLLING_INTERVAL_MS
+                cycleStartedAt + pollingIntervalMs
         );
         long delay = nextAt - System.currentTimeMillis();
         updateNotification(
                 String.format(Locale.CHINA, "%d秒后开始下一轮", Math.max(1, delay / 1_000L))
         );
         handler.removeCallbacks(nextCycle);
+        handler.postDelayed(nextCycle, delay);
+    }
+
+    private void rescheduleAutoCycle() {
+        if (!autoMode) {
+            return;
+        }
+        int minutes = preferences.pollingIntervalMinutes();
+        if (operationActive) {
+            broadcastState(
+                    "AUTO_ACTIVE",
+                    String.format(Locale.CHINA, "采集间隔已设为%d分钟，下轮生效", minutes)
+            );
+            return;
+        }
+        long delay = preferences.pollingIntervalMs();
+        handler.removeCallbacks(nextCycle);
+        broadcastState(
+                "AUTO_WAIT",
+                String.format(Locale.CHINA, "采集间隔已设为%d分钟，重新计时", minutes)
+        );
+        updateNotification(String.format(Locale.CHINA, "%d分钟后开始下一轮", minutes));
         handler.postDelayed(nextCycle, delay);
     }
 
