@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">C无线读表器</string>
+    <string name="notification_channel">无线读表服务</string>
+    <string name="notification_title">自动读表运行中</string>
+</resources>
