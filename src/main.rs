@@ -67,7 +67,16 @@ fn setup_opa1_pga(gain: Gain) {
     });
 
     opa.ctl().write(|w| w.set_enable(true));
-    while !opa.stat().read().rdy() {}
+    // Bounded wait -- never block the CPU forever on external hardware
+    // state. If RDY never asserts (bad register sequencing, an invalid
+    // config, or a real hardware limit on this gain/topology combo), give
+    // up and move on rather than hanging the whole MCU (which is exactly
+    // what made the last build unflashable without forcing BSL).
+    for _ in 0..100_000u32 {
+        if opa.stat().read().rdy() {
+            break;
+        }
+    }
 }
 
 /// ADC1 channel 1 (PA16 = OPA1_OUT), software-triggered single conversions.
@@ -160,6 +169,6 @@ async fn main(_spawner: Spawner) -> ! {
     led.set_inversion(true);
     loop {
         led.toggle();
-        Timer::after_millis(100).await;
+        Timer::after_millis(1000).await;
     }
 }

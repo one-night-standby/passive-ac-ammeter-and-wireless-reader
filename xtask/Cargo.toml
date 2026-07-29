@@ -1,0 +1,13 @@
+[package]
+name = "xtask"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license-file = "../LICENSE-PROPRIETARY"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+image = { version = "0.25", default-features = false, features = ["bmp", "png"] }
+nusb = "0.1"
+pollster = "0.3"

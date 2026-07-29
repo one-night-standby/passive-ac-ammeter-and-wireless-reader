@@ -1,0 +1,5 @@
+# xtask is a host-side tool (flashing helper, oscilloscope screenshots), not
+# firmware -- override the repo root's `build.target = thumbv6m-none-eabi`
+# (config.toml settings are inherited from parent directories otherwise).
+[build]
+target = "aarch64-apple-darwin"
