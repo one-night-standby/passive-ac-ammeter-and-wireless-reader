@@ -19,10 +19,10 @@ async fn main(_spawner: Spawner) -> ! {
 
     // Each switch connects its GPIO to GND when ON. The internal pull-up makes
     // an open switch read as 0 and a closed switch read as 1 after inversion.
-    let address_bit0 = Input::new(peripherals.PB13, Pull::Up);
-    let address_bit1 = Input::new(peripherals.PB20, Pull::Up);
-    let address_bit2 = Input::new(peripherals.PA31, Pull::Up);
-    let address_bit3 = Input::new(peripherals.PA28, Pull::Up);
+    let address_bit0 = Input::new(peripherals.PB0, Pull::Up);
+    let address_bit1 = Input::new(peripherals.PB6, Pull::Up);
+    let address_bit2 = Input::new(peripherals.PB7, Pull::Up);
+    let address_bit3 = Input::new(peripherals.PB8, Pull::Up);
 
     let mut uart_config = Config::default();
     uart_config.baudrate = HC42_BAUD_RATE;
