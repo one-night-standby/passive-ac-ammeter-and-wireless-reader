@@ -74,9 +74,13 @@ enum Gain {
 /// 1.7 / 3.3 * 4096 ~= 2110.
 const DAC_CODE_1V7: u16 = 2110;
 
-/// OPA1 as a non-inverting PGA (TRM 21.2.7.3.2): PSEL=EXTPIN1 (PA18, direct
-/// to the amplifier's real high-impedance input), NSEL=RTAP (the ladder
-/// tap feeds the inverting input), MSEL=DAC12OUT (ladder bottom biased to
+/// OPA1 as a non-inverting PGA (TRM 21.2.7.3.2): PSEL=EXTPIN1 (PA18, through
+/// the P-MUX into the amplifier's true input -- datasheet SS7.19.1 puts this
+/// mux's series resistance at 2.6 kOhm TYP, but the real op-amp input beyond
+/// it draws only leakage-level bias current, so that resistance drops
+/// negligible voltage and doesn't meaningfully load an external source),
+/// NSEL=RTAP (the ladder tap feeds the inverting input), MSEL=DAC12OUT
+/// (ladder bottom biased to
 /// 1.7 V instead of ground, so the gain acts on (Vin - 1.7 V) rather than
 /// Vin itself -- same pattern as
 /// ~/embed/Single-Phase-Power-Analyzer's OPA1 setup, just a different bias
@@ -250,7 +254,7 @@ fn init_timer() {
 /// ~/embed/Single-Phase-Power-Analyzer/src/bin/analyzer/dsp.rs's `Calib`
 /// for the calibration procedure/pattern this should follow. Placeholder
 /// (1 LSB RMS == 1 A) until real reference readings exist.
-const CAL_A_PER_LSB: f32 = 0.00639869;
+const CAL_A_PER_LSB: f32 = 0.003433733774564919;
 
 /// RMS over one captured frame, in raw ADC-LSB units (DC bias removed
 /// dynamically -- the OPA stage biases the signal to ~1.7 V, not 0 V, so
@@ -361,14 +365,19 @@ async fn main(_spawner: Spawner) -> ! {
         // SAFETY: the DMA transfer above either completed or was
         // paused, so nothing else touches BUF concurrently with this
         // read.
-        let amps = unsafe { rms_lsb(&*core::ptr::addr_of!(BUF)) } * CAL_A_PER_LSB;
+        let original_rms = unsafe { rms_lsb(&*core::ptr::addr_of!(BUF)) };
+        let amps = original_rms * CAL_A_PER_LSB;
 
         if let Ok(display) = &mut display {
             let _ = display.clear(BinaryColor::Off);
             let style = MonoTextStyle::new(&FONT_9X15, BinaryColor::On);
             let mut line: String<32> = String::new();
-            let _ = write!(line, "I = {:.3} A", amps);
+            let _ = write!(line, "{:.3} A", amps);
             let _ = Text::new(&line, Point::new(4, 30), style).draw(display);
+
+            let mut line2: String<32> = String::new();
+            let _ = write!(line2, "orig{:.3} A", original_rms);
+            let _ = Text::new(&line2, Point::new(4, 60), style).draw(display);
             let _ = display.flush();
         }
 
