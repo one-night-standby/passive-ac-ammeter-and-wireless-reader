@@ -69,7 +69,7 @@ body {
   font-variant-numeric: tabular-nums;
 }
 .sb-left, .sb-right { display: flex; align-items: center; gap: 8px; }
-.stream-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); flex: none; }
+.stream-dot { width: 6px; height: 6px; border-radius: 50%; flex: none; }
 .batt { width: 19px; height: 9px; border: 1px solid currentColor; border-radius: 3px; padding: 1.5px; position: relative; }
 .batt::after { content: ""; position: absolute; right: -3px; top: 2.5px; width: 2px; height: 4px; background: currentColor; border-radius: 0 2px 2px 0; }
 .batt i { display: block; height: 100%; width: 74%; background: currentColor; border-radius: 1px; }
@@ -110,7 +110,7 @@ body {
   -webkit-tap-highlight-color: transparent;
 }
 .slot-head { display: flex; align-items: center; justify-content: center; gap: 4px; }
-.slot-dot { width: 5px; height: 5px; border-radius: 50%; flex: none; background: currentColor; will-change: transform, opacity; }
+.slot-dot { width: 5px; height: 5px; border-radius: 50%; flex: none; }
 .slot-id { font: 600 12px/1.1 var(--mono); letter-spacing: .04em; }
 .slot-bar { display: block; height: 3px; margin-top: 4px; border-radius: 2px; background: var(--line); overflow: hidden; }
 .slot-bar i { display: block; height: 100%; width: 0; border-radius: 2px; background: currentColor; transition: width .32s var(--ease); }
@@ -133,20 +133,15 @@ body {
   -webkit-tap-highlight-color: transparent;
 }
 .hub:active { transform: scale(.985); }
+.hub.is-busy { animation: hubbump .26s var(--ease); }
+@keyframes hubbump { 0%, 100% { transform: none; } 45% { transform: scale(.972); } }
 .hub-addr { font: 600 13px/1 var(--mono); color: var(--ink-3); letter-spacing: .1em; }
 .hub-line { display: flex; align-items: baseline; gap: 4px; margin: 3px 0 1px; }
-.hub-value { font-size: 40px; font-weight: 600; line-height: 1; letter-spacing: -.04em; font-variant-numeric: tabular-nums; }
+.hub-value { font-size: 40px; font-weight: 600; line-height: 1; font-variant-numeric: tabular-nums; }
 .hub-unit { font-size: 15px; font-weight: 500; color: var(--ink-3); }
 .hub-state { font-size: 12px; font-weight: 600; }
 .hub-sub { font: 10.5px/1.2 var(--mono); color: var(--ink-3); }
 
-/* 里程表式数字：所有位同速滚动 */
-.odo { display: inline-flex; align-items: baseline; height: 1em; }
-.odo-win { position: relative; display: inline-block; width: .60em; height: 1em; overflow: hidden; flex: none; }
-.odo-track { position: absolute; left: 0; top: 0; width: 100%; will-change: transform; }
-.odo-face { display: block; height: 1em; line-height: 1; text-align: center; }
-.odo-dot { display: inline-block; width: .24em; text-align: center; flex: none; }
-.odo-dash { display: inline-block; width: .44em; text-align: center; flex: none; }
 
 .left-foot { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; gap: 12px; padding-top: 2px; }
 
@@ -171,17 +166,17 @@ body {
 .mode-toggle button[aria-pressed="true"] { color: var(--ink); }
 .foot-note { font-size: 11.5px; color: var(--ink-3); font-variant-numeric: tabular-nums; }
 
-/* 测完之后飞到右边、morph 成一条记录 */
+/* 测完之后飞到右边、落地时正好变成那一行的数值单元格。
+   起点与 hub 的 .hub-line 逐项相同，终点与行里的 .rec-v 逐项相同，
+   所以两端交接时看不出接缝。 */
 .flyer {
   position: absolute; z-index: 30;
-  display: flex; align-items: center; justify-content: center; gap: 7px;
-  font-weight: 600; font-variant-numeric: tabular-nums;
-  background: var(--surface);
-  border: 1px solid var(--line);
-  box-shadow: 0 10px 24px -10px rgba(10, 16, 26, .4);
-  pointer-events: none; white-space: nowrap; overflow: hidden;
+  display: flex; align-items: baseline; justify-content: flex-end;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none; white-space: nowrap;
 }
-.flyer i { font-style: normal; font-size: .72em; opacity: .75; }
+.flyer .f-num { font-weight: 600; line-height: 1; }
+.flyer .f-unit { font-weight: 500; line-height: 1; }
 
 /* ── 右：曲线与记录 ── */
 .right { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
@@ -272,7 +267,16 @@ body {
 .rec-t { font: 11.5px/1 var(--mono); color: var(--ink-2); width: 60px; flex: none; }
 .rec-a { font: 600 11.5px/1 var(--mono); color: var(--ink-2); width: 22px; flex: none; }
 .rec-src { font-size: 10.5px; color: var(--ink-3); width: 26px; flex: none; }
-.rec-v { flex: 1; text-align: right; font-size: 13px; font-weight: 600; letter-spacing: -.01em; }
+.rec-v {
+  flex: 1; display: flex; align-items: baseline; justify-content: flex-end; gap: 3px;
+  font-size: 13px; font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.rec-v span { font-size: 13px; font-weight: 600; }
+/* 飞行落地前，这一行先只留骨架 */
+.rec > * { transition: opacity .26s var(--ease); }
+.rec.forming > *:not(.rec-v) { opacity: 0; }
+.rec.forming .rec-v { visibility: hidden; }
 .rec-s { width: 40px; text-align: right; flex: none; font-size: 10.5px; font-weight: 600; }
 .rec.fresh { animation: recin .5s var(--ease) both; }
 @keyframes recin {
@@ -332,7 +336,7 @@ body {
             <button class="hub" id="hub" aria-label="测一次并存档">
               <span class="hub-addr" id="hub-addr">1</span>
               <span class="hub-line">
-                <span class="hub-value odo" id="odo"></span>
+                <span class="hub-value" id="hub-value">-.---</span>
                 <span class="hub-unit">A</span>
               </span>
               <span class="hub-state" id="hub-state">未测量</span>
@@ -346,7 +350,7 @@ body {
               <button type="button" data-mode="manual" aria-pressed="true">手动</button>
               <button type="button" data-mode="auto" aria-pressed="false">自动</button>
             </div>
-            <span class="foot-note" id="foot-note">点中心或地址测一次</span>
+            <span class="foot-note" id="foot-note">点中心存一帧</span>
           </div>
         </section>
 
@@ -388,9 +392,9 @@ body {
     <h2>怎么读这个界面</h2>
     <ul>
       <li><b>16 个槽位就是 4 位编码开关的全部取值</b>，用 0–F 表示（4 位二进制刚好是一个十六进制字符）。拖动可自由滚动、松手按 22.5° 吸附。</li>
-      <li><b>小点跳动 = 那台表正在报数</b>（约 3.8 帧/秒，与固件循环同频）。但<b>收到帧不等于显示</b>——数值只在你按下时才更新，和固件那边「帧一直在发、App 决定收不收」是一回事。</li>
-      <li><b>点地址 = 安静地滚过去 + 收下一帧 + 存档。</b>读数会从中心飞到右侧、落地时 morph 成那条记录，不会凭空出现。表已经不报数了就等到超时，落一条离线记录。</li>
-      <li><b>点中心 = 测一次。</b>模式由下面的开关切换：自动模式下内环从满环开始顺时针走完就把全部表测一轮，手动模式下只在你点的时候测。</li>
+      <li><b>小点 = 在线状态</b>：绿色表示正在报数，红色表示已经不报了，空心圈是这个地址上没有表。它不跳——状态没变就不该动。</li>
+      <li><b>圆盘是实时的</b>，条子和中心数值一直跟着帧走。<b>点地址只是滚过去</b>，不存档。</li>
+      <li><b>点中心 = 把当前这一帧存下来。</b>读条走完（0.7 s）才落库，中途不会打断；存下的那个数从中心飞到右侧，落地正好成为那一行的数值。模式开关在下面：自动模式下内环从满环顺时针走完就把全部表存一轮。</li>
       <li><b>灰色 = 不再报数。</b>无源表掉电和负载断开在这里是同一个现象。只有状态真的变了才闪一下，稳态不抢注意力。</li>
       <li><b>图表可交互：</b>移动看读数、按住拖动平移、滚轮缩放时间轴、双击复位；点曲线上的点会把转盘转到那台表。记录分页，翻得到每一条。</li>
     </ul>
@@ -408,11 +412,10 @@ const HIGH_A      = 2.0;                // 超限阈值（2000 mA）
 const FULL_A      = 2.2;
 const FRAME_MS    = 262;                // 固件一轮：200 ms 采集 + OLED + 52 ms UART
 const SILENT_MS   = 1500;               // 连续无帧判为不再报数
-const READ_WAIT   = 1500;               // 等下一帧的超时（真机是 6 s，原型缩短）
+const STORE_MS    = 700;                // 存一帧的读条时长：一定走完，不中途打断
 const PERIOD_S    = 120;                // 自动存档周期
 const CAP         = 1000;               // 与 MeterDatabase.MAX_STORED_READINGS 一致
 const PAGE_SIZE   = 6;
-const ODO_SPEED   = 13;                 // 位/秒，所有位同速
 const ALERT_MS    = 2200;               // 状态变化后提示多久，之后归于安静
 const STORE_KEY   = "nuedc-b-reader-v3";
 
@@ -441,6 +444,7 @@ const meters = new Map();
 const state = {
   angle: 0, vel: 0, dragging: false,
   snapTarget: null,
+  snapAddr: null,
   sel: 1,
   archiving: false,
   remain: PERIOD_S,
@@ -448,7 +452,8 @@ const state = {
   scope: "one",
   page: 0,
   records: [],
-  pending: null,                        // { addr, from, deadline, source }
+  pending: null,                        // { addr, from, until, source }
+  hold: null,                           // 飞行途中冻住中心的那个值
   bootAt: performance.now()
 };
 
@@ -480,11 +485,9 @@ for (let i = 0; i < SLOTS; i++) {
     walk: 0, walkV: 0,
     nextFrameAt: 0,
     lastAt: -1e9,                       // 上一帧的 performance 时刻（判静默只用这个钟）
-    frame: null,                        // 最新到达的帧：不显示，只等着被收
-    shown: null,                        // 上次测量收下的值 { amps|null, ts }
-    status: null,                       // 上次测量的判定
+    frame: null,                        // 最新到达的帧：圆盘直接显示它
+    status: null,                       // 实时判定（报警按这个跳变沿提示）
     alertUntil: 0,                      // 状态变化后的短暂提示
-    flash: 0,
     silent: true
   });
 }
@@ -547,51 +550,52 @@ function tickSim(nowMs, dt) {
       const amps = Math.max(0, Math.round(clamp(raw, 0, FULL_A * 1.6) * 1000) / 1000);
       m.frame = { amps, ts: Date.now() };
       m.lastAt = nowMs;
-      m.flash = 1;
     }
   }
   for (const m of meters.values()) {
     m.silent = !m.frame || nowMs - m.lastAt > SILENT_MS;
-    m.flash = Math.max(0, m.flash - dt * 4.5);
+    if (!m.present) continue;
+    const st = m.silent ? "off" : classify(m.frame.amps);
+    if (m.status !== null && m.status !== st) m.alertUntil = nowMs + ALERT_MS;  // 只有变了才提示
+    m.status = st;
   }
 }
 
-/* ══════════ 测量：按下才收下一帧 ══════════ */
-function measure(addr, source) {
+/* ══════════ 存一帧：圆盘一直是实时的，点一下只是把当前帧存下来 ══════════ */
+/* 中心此刻显示的是哪台表。转盘还在滚过去的途中，中心显示的已经是目标地址，
+   所以存档必须用这个，不能用 state.sel（那是当前压在指针下的那一格）。 */
+function focusAddr() {
+  if (state.pending) return state.pending.addr;
+  if (state.hold && performance.now() < state.hold.until) return state.hold.addr;
+  if (state.snapTarget !== null && state.snapAddr !== null) return state.snapAddr;
+  return state.sel;
+}
+
+function capture(addr, source) {
   if (state.pending) return;
-  const m = meters.get(addr);
-  if (!m || !m.present) {               // 这个地址上没有表，直接落离线
-    commit(addr, null, source);
-    return;
-  }
-  state.pending = { addr, from: performance.now(), deadline: performance.now() + READ_WAIT, source };
+  const now = performance.now();
+  state.pending = { addr: addr, from: now, until: now + STORE_MS, source: source };
+  // 不指望任何循环：这一次读条自带一个到点闹钟
+  setTimeout(() => tickPending(performance.now()), STORE_MS + 20);
 }
 
 function tickPending(nowMs) {
   const p = state.pending;
   if (!p) return;
+  if (nowMs < p.until) return;           // 读条一定走完，不中途打断
+  state.pending = null;
   const m = meters.get(p.addr);
-  if (m && m.lastAt > p.from) {          // 等到了下一帧
-    state.pending = null;
-    commit(p.addr, m.frame, p.source);
-  } else if (nowMs > p.deadline) {       // 超时：表已经不报数了
-    state.pending = null;
-    commit(p.addr, null, p.source);
-  }
+  const frame = m && m.present && !m.silent ? m.frame : null;
+  commit(p.addr, frame, p.source);
 }
 
 function commit(addr, frame, source) {
-  const m = meters.get(addr);
   const status = frame ? classify(frame.amps) : "off";
-  if (m) {
-    if (m.status !== status) m.alertUntil = performance.now() + ALERT_MS;  // 只有变了才提示
-    m.shown = { amps: frame ? frame.amps : null, ts: frame ? frame.ts : Date.now() };
-    m.status = status;
-  }
   const rec = { addr: addr, amps: frame ? frame.amps : null, status: status };
-  const manual = source === "manual";
-  archive([rec], source, manual);        // 手动：先别播「长出来」，等飞过去落地再播
-  if (manual) flyToRecord(rec);
+  // 只有这条记录会出现在当前筛选里，才有得飞
+  const willFly = source === "manual" && (state.scope === "all" || panelAddr === addr);
+  archive([rec], source, willFly);       // 要飞：先别播「长出来」，等落地再播
+  if (willFly) flyToRecord(rec);
 }
 
 function archive(list, source, holdFresh) {
@@ -611,129 +615,90 @@ function archive(list, source, holdFresh) {
   renderPanel(fresh);
 }
 
-/* 因果：读数从中心飞到右侧，落地时 morph 成那条记录 */
+/* 因果：读数从中心飞到右侧，落地时正好成为那一行的数值。
+   起点逐项等于 hub 的 .hub-line（40/15 px、变暖色 + 灰单位），
+   终点逐项等于行里的 .rec-v（13/13 px、离散判定色），两端没有接缝。 */
 function flyToRecord(rec) {
   const dev = document.querySelector(".device");
-  const hubEl = $("#odo");
-  if (!dev || !hubEl || typeof hubEl.animate !== "function") return;
+  const line = document.querySelector(".hub-line");
+  const row = $("#log").firstElementChild;
+  const cell = row && row.classList.contains("rec") ? row.querySelector(".rec-v") : null;
+  if (!dev || !line || !cell || typeof line.animate !== "function") return;
+
+  // 圆盘是实时的，但飞行途中要把被抓走的这个值冻住 —— 否则下一帧一到，
+  // 中心的数字就变了，flyer 的起点和它就对不上了。
+  state.hold = { addr: rec.addr, amps: rec.amps, until: performance.now() + 480 };
+  setHubValue(rec.amps);
+  $("#hub-value").style.color = rec.amps === null ? statusColor("off") : warmCss(rec.amps);
 
   const devRect = dev.getBoundingClientRect();
-  const s = devRect.width / 980 || 1;                   // 抵掉整体缩放
+  const k = devRect.width / 980 || 1;                   // 抵掉整体缩放
   const toLocal = (r) => ({
-    left: (r.left - devRect.left) / s, top: (r.top - devRect.top) / s,
-    width: r.width / s, height: r.height / s
+    left: (r.left - devRect.left) / k, top: (r.top - devRect.top) / k,
+    width: r.width / k, height: r.height / k
   });
+  const from = toLocal(line.getBoundingClientRect());
+  const to = toLocal(cell.getBoundingClientRect());
 
-  const from = toLocal(hubEl.getBoundingClientRect());
-  const row = $("#log").firstElementChild;
-  const landed = row && row.classList.contains("rec");
-  const to = landed ? toLocal(row.getBoundingClientRect()) : toLocal($("#log").getBoundingClientRect());
-  if (landed) row.style.visibility = "hidden";
+  row.classList.add("forming");                         // 目标行先只留骨架
 
-  const color = statusColor(rec.status);
   const f = document.createElement("div");
   f.className = "flyer";
-  f.style.color = color;
-  f.innerHTML = (rec.amps === null ? "--" : fmtA(rec.amps)) + " A<i>" + LABEL[rec.status] + "</i>";
+  const num = document.createElement("span");
+  num.className = "f-num";
+  num.textContent = rec.amps === null ? BLANK : fmtA(rec.amps);
+  const unit = document.createElement("span");
+  unit.className = "f-unit";
+  unit.textContent = "A";
+  f.append(num, unit);
   dev.appendChild(f);
 
-  const frames = [
-    { left: from.left + "px", top: from.top - 6 + "px",
-      width: from.width + 34 + "px", height: from.height + 16 + "px",
-      borderRadius: "12px", fontSize: "26px", opacity: 1 },
+  const startColor = rec.amps === null ? statusColor("off") : warmCss(rec.amps);
+  const endColor = statusColor(rec.status);
+  const opt = { duration: 460, easing: "cubic-bezier(.34,.9,.3,1)", fill: "both" };
+
+  const anim = f.animate([
+    { left: from.left + "px", top: from.top + "px",
+      width: from.width + "px", height: from.height + "px", columnGap: "4px" },
     { left: to.left + "px", top: to.top + "px",
-      width: to.width + "px", height: Math.max(24, landed ? to.height : 30) + "px",
-      borderRadius: "4px", fontSize: "13px", opacity: 1 }
-  ];
-  const anim = f.animate(frames, { duration: 460, easing: "cubic-bezier(.34,.9,.3,1)", fill: "both" });
+      width: to.width + "px", height: to.height + "px", columnGap: "3px" }
+  ], opt);
+  num.animate([{ fontSize: "40px", color: startColor }, { fontSize: "13px", color: endColor }], opt);
+  unit.animate([{ fontSize: "15px", color: "rgba(19,25,34,.34)" },
+                { fontSize: "13px", color: endColor }], opt);
+
   let settled = false;
   const done = () => {
     if (settled) return;
     settled = true;
     f.remove();
-    if (landed) {
-      row.style.visibility = "";
-      row.classList.remove("fresh");
-      void row.getBoundingClientRect();
-      row.classList.add("fresh");
-    }
+    row.classList.remove("forming");                    // 其余列淡入，数值单元格接上
   };
   anim.onfinish = done;
-  setTimeout(done, 700);                                // 兜底：动画被节流也不会留下残影
+  setTimeout(done, 700);                                // 兜底：动画被节流也不留残影
 }
 
 /* 自动一轮：把每台表当前的最新帧收下来 */
 function autoRound() {
+  const list = [];
   for (const m of meters.values()) {
     if (!m.present) continue;
     const frame = m.silent ? null : m.frame;
-    const status = frame ? classify(frame.amps) : "off";
-    if (m.status !== status) m.alertUntil = performance.now() + ALERT_MS;
-    m.shown = { amps: frame ? frame.amps : null, ts: frame ? frame.ts : Date.now() };
-    m.status = status;
-  }
-  const list = [];
-  for (const m of meters.values()) {
-    if (m.present) list.push({ addr: m.addr, amps: m.shown.amps, status: m.status, ts: m.shown.ts });
+    list.push({
+      addr: m.addr,
+      amps: frame ? frame.amps : null,
+      status: frame ? classify(frame.amps) : "off",
+      ts: frame ? frame.ts : Date.now()
+    });
   }
   if (list.length) archive(list, "auto");
   state.remain = PERIOD_S;
 }
 
-/* ══════════ 里程表数字：所有位同速 ══════════ */
-const odoState = [];                    // 每个数字轮 { pos, target }
-function buildOdo(el, shape) {
-  el.dataset.shape = shape;
-  el.textContent = "";
-  odoState.length = 0;
-  for (const ch of shape) {
-    if (ch === "#") {
-      const win = document.createElement("span");
-      win.className = "odo-win";
-      const track = document.createElement("span");
-      track.className = "odo-track";
-      for (let d = 0; d <= 10; d++) {   // 第 11 面是 0，跨越 9→0 无缝
-        const face = document.createElement("span");
-        face.className = "odo-face";
-        face.textContent = String(d % 10);
-        track.appendChild(face);
-      }
-      win.appendChild(track);
-      el.appendChild(win);
-      odoState.push({ pos: 0, target: 0, track });
-    } else {
-      const s = document.createElement("span");
-      s.className = ch === "." ? "odo-dot" : "odo-dash";
-      s.textContent = ch;
-      el.appendChild(s);
-    }
-  }
-}
-
-function odoTarget(value) {
-  const el = $("#odo");
-  if (value === null || value === undefined) {
-    if (el.dataset.shape !== "-.--") buildOdo(el, "-.--");
-    return;
-  }
-  if (el.dataset.shape !== "#.###") buildOdo(el, "#.###");
-  const v = clamp(value, 0, 9.999);
-  const digits = v.toFixed(3).replace(".", "");
-  for (let i = 0; i < odoState.length && i < digits.length; i++) {
-    odoState[i].target = Number(digits[i]);
-  }
-}
-
-function tickOdo(dt) {
-  const stepMax = ODO_SPEED * dt;
-  for (const w of odoState) {
-    const dist = ((w.target - w.pos) % 10 + 10) % 10;   // 始终正向滚
-    if (dist > 0.001) {
-      w.pos = (w.pos + Math.min(dist, stepMax)) % 10;
-      if (((w.target - w.pos) % 10 + 10) % 10 < 0.001) w.pos = w.target;
-    }
-    w.track.style.transform = "translateY(" + (-w.pos).toFixed(4) + "em)";
-  }
+/* ══════════ 中心数值：直接跳变，不滚动 ══════════ */
+const BLANK = "-.---";
+function setHubValue(amps) {
+  $("#hub-value").textContent = (amps === null || amps === undefined) ? BLANK : clamp(amps, 0, 9.999).toFixed(3);
 }
 
 /* ══════════ 转盘 ══════════ */
@@ -780,9 +745,11 @@ const selectedFromAngle = () => ((Math.round(-state.angle / STEP) % SLOTS) + SLO
 function snapTo(addr) {
   const base = -addr * STEP;
   state.snapTarget = base + Math.round((state.angle - base) / 360) * 360;  // 走最近的一圈
+  state.snapAddr = addr;
 }
 
-let pointerAngle = 0, pointerId = null, lastMoveAt = 0, dragDist = 0, pressSlot = -1;
+let pointerAngle = 0, pointerId = null, lastMoveAt = 0, pressSlot = -1;
+let downX = 0, downY = 0, movePx = 0, velAtDown = 0;
 function angleOf(ev) {
   const box = dial.getBoundingClientRect();
   return Math.atan2(ev.clientY - (box.top + box.height / 2),
@@ -793,13 +760,15 @@ dial.addEventListener("pointerdown", (ev) => {
   const slot = ev.target.closest(".slot");
   pressSlot = slot ? slotEls.findIndex((g) => g.el === slot) : -1;
   pointerId = ev.pointerId;
-  dial.setPointerCapture(pointerId);
+  try { dial.setPointerCapture(pointerId); } catch (e) {}
   state.dragging = true;
   state.snapTarget = null;
+  state.snapAddr = null;
   dial.classList.add("is-drag");
   pointerAngle = angleOf(ev);
   lastMoveAt = performance.now();
-  dragDist = 0;
+  downX = ev.clientX; downY = ev.clientY; movePx = 0;
+  velAtDown = Math.abs(state.vel);       // 按住正在滑行的盘 = 想让它停，不是想测
   state.vel = 0;
 });
 dial.addEventListener("pointermove", (ev) => {
@@ -808,7 +777,7 @@ dial.addEventListener("pointermove", (ev) => {
   const d = norm180(a - pointerAngle);
   pointerAngle = a;
   state.angle += d;
-  dragDist += Math.abs(d) * 2.5;
+  movePx = Math.max(movePx, Math.hypot(ev.clientX - downX, ev.clientY - downY));
   const now = performance.now();
   const dt = Math.max(8, now - lastMoveAt) / 1000;
   lastMoveAt = now;
@@ -819,12 +788,8 @@ function endDrag(ev) {
   state.dragging = false;
   dial.classList.remove("is-drag");
   pointerId = null;
-  // 按在某个地址上又没拖动 → 安静地滚过去，并测一次
-  if (pressSlot >= 0 && dragDist < 6) {
-    const addr = pressSlot;
-    snapTo(addr);
-    measure(addr, "manual");
-  }
+  // 点地址只是选中并滚过去，不触发存档（存档只由中心那一下决定）
+  if (pressSlot >= 0 && movePx < 8 && velAtDown < 30) snapTo(pressSlot);
   pressSlot = -1;
 }
 dial.addEventListener("pointerup", endDrag);
@@ -833,13 +798,14 @@ dial.addEventListener("pointercancel", endDrag);
 dial.addEventListener("wheel", (ev) => {
   ev.preventDefault();
   state.snapTarget = null;
+  state.snapAddr = null;
   state.vel += (ev.deltaY > 0 ? -1 : 1) * 220;
 }, { passive: false });
 
 dial.addEventListener("keydown", (ev) => {
   if (ev.key === "ArrowRight" || ev.key === "ArrowDown") { snapTo((state.sel + 1) % SLOTS); ev.preventDefault(); }
   if (ev.key === "ArrowLeft" || ev.key === "ArrowUp")   { snapTo((state.sel + SLOTS - 1) % SLOTS); ev.preventDefault(); }
-  if (ev.key === "Enter") { measure(state.sel, "manual"); ev.preventDefault(); }
+  if (ev.key === "Enter") { if (state.pending) bumpHub(); else capture(focusAddr(), "manual"); ev.preventDefault(); }
 });
 
 function tickDial(dt) {
@@ -855,6 +821,7 @@ function tickDial(dt) {
       state.angle = target;
       state.vel = 0;
       state.snapTarget = null;
+      state.snapAddr = null;
     }
   }
   const sel = selectedFromAngle();
@@ -866,8 +833,17 @@ function tickDial(dt) {
 }
 
 /* ══════════ 自动存档 ══════════ */
-/* 中心 = 测一次（两种模式下都可用）；模式由下面的开关切换 */
-$("#hub").addEventListener("click", () => measure(state.sel, "manual"));
+/* 中心 = 把当前这一帧存下来（两种模式下都可用）；模式由下面的开关切换 */
+function bumpHub() {                     // 已经在读了：读条继续，但这一下也得有反应
+  const h = $("#hub");
+  h.classList.remove("is-busy");
+  void h.getBoundingClientRect();
+  h.classList.add("is-busy");
+}
+$("#hub").addEventListener("click", () => {
+  if (state.pending) { bumpHub(); return; }
+  capture(focusAddr(), "manual");
+});
 
 function setMode(mode) {
   const auto = mode === "auto";
@@ -893,10 +869,12 @@ function arcPath(cx, cy, r, p) {
          " A" + r + " " + r + " 0 " + (sweep > 180 ? 1 : 0) + " 1 " +
          (cx + r * Math.cos(rad(a1))).toFixed(2) + " " + (cy + r * Math.sin(rad(a1))).toFixed(2);
 }
-function sweepPath(cx, cy, r, a0, span) {
-  const a1 = a0 + span;
+/* 读条：从 12 点起顺时针填充 p 圈 */
+function arcFrom(cx, cy, r, p) {
+  const span = clamp(p, 0, 0.9999) * 360;
+  const a0 = -90, a1 = -90 + span;
   return "M" + (cx + r * Math.cos(rad(a0))).toFixed(2) + " " + (cy + r * Math.sin(rad(a0))).toFixed(2) +
-         " A" + r + " " + r + " 0 0 1 " +
+         " A" + r + " " + r + " 0 " + (span > 180 ? 1 : 0) + " 1 " +
          (cx + r * Math.cos(rad(a1))).toFixed(2) + " " + (cy + r * Math.sin(rad(a1))).toFixed(2);
 }
 
@@ -913,87 +891,88 @@ function renderLive(nowMs, dt) {
     }
     g.el.classList.toggle("is-sel", i === state.sel);
 
-    const measured = m.shown && m.shown.amps !== null;
-    if (m.present && !m.silent && measured) {
-      // 编号与小点用离散判定色（是不是报警），条用连续变暖色（离阈值多近）
+    // 圆盘是实时的：条子跟着帧走，编号用离散判定色，条用连续变暖色
+    if (m.present && !m.silent) {
       g.el.style.color = statusColor(m.status);
-      g.bar.style.width = (clamp(m.shown.amps / FULL_A, 0, 1) * 100).toFixed(1) + "%";
-      g.bar.style.background = warmCss(m.shown.amps);
+      g.bar.style.width = (clamp(m.frame.amps / FULL_A, 0, 1) * 100).toFixed(1) + "%";
+      g.bar.style.background = warmCss(m.frame.amps);
     } else {
       g.el.style.color = "";
-      g.bar.style.width = measured && m.present ? g.bar.style.width : "0%";
+      g.bar.style.width = "0%";
     }
-    if (m.present && !m.silent) {
-      g.dot.style.transform = "scale(" + (1 + m.flash * 0.9).toFixed(3) + ")";
-      g.dot.style.opacity = (0.42 + m.flash * 0.58).toFixed(3);
+    // 在线点：静态红绿。一直在线就一直是绿的，不跳。
+    if (!m.present) {
+      g.dot.style.background = "";                       // 空地址：空心灰圈（走 CSS）
     } else {
-      g.dot.style.transform = "scale(1)";
-      g.dot.style.opacity = m.present ? "0.55" : "1";
+      g.dot.style.background = m.silent ? statusColor("high") : statusColor("ok");
     }
   }
 
-  // 中心：显示上次测量的结果，不跟着帧跳
-  const m = meters.get(state.sel);
+  // 中心也是实时的。正在存某台表时中心立刻切到那台表 —— 点下去的反馈不等转盘转到位；
+  // 飞行途中冻住被抓走的那个值，好让 flyer 的起点和它逐像素重合。
+  const measuring = Boolean(state.pending);
+  const holding = state.hold && nowMs < state.hold.until ? state.hold : null;
+  const focus = focusAddr();
+  const m = meters.get(focus);
   const live = m.present && !m.silent;
-  const measuring = state.pending && state.pending.addr === state.sel;
-  const shown = m.shown ? m.shown.amps : null;
+  const shown = holding ? holding.amps : (live ? m.frame.amps : null);
 
   state.activation += ((state.archiving ? 1 : 0) - state.activation) * clamp(dt * 4.2, 0, 1);
-  odoTarget(m.shown ? shown : null);
 
-  // 大数字：测过就用变暖色（离阈值多近），没测过或不再报数就是灰的
-  $("#odo").style.color = (m.shown && shown !== null && live) ? warmCss(shown) : statusColor("off");
-  $("#hub-addr").textContent = hex1(state.sel);
+  setHubValue(shown);
+  $("#hub-value").style.color = shown === null ? statusColor("off") : warmCss(shown);
+  $("#hub-addr").textContent = hex1(focus);
 
   // 大数字用连续变暖色（离阈值多近），状态标签用离散判定色（到底是不是报警）
   let label, labelCol;
-  if (!m.present)      { label = "无表";   labelCol = statusColor("off"); }
+  if (measuring)       { label = "存档中"; labelCol = "var(--accent)"; }
+  else if (!m.present) { label = "无表";   labelCol = statusColor("off"); }
   else if (!live)      { label = "离线";   labelCol = statusColor("off"); }
-  else if (!m.shown)   { label = "未测量"; labelCol = statusColor("off"); }
   else                 { label = LABEL[m.status]; labelCol = statusColor(m.status); }
   $("#hub-state").textContent = label;
   $("#hub-state").style.color = labelCol;
 
+  const lastStored = state.records.find((r) => r.addr === focus);
   if (measuring) {
-    $("#hub-sub").textContent = "等下一帧…";
+    $("#hub-sub").textContent = "抓这一帧";
   } else if (state.archiving) {
     const s = Math.max(0, Math.ceil(state.remain));
     $("#hub-sub").textContent = pad2(Math.floor(s / 60)) + ":" + pad2(s % 60);
   } else if (!m.present) {
     $("#hub-sub").textContent = "此地址无表";
-  } else if (m.shown) {
-    $("#hub-sub").textContent = "测于 " + clockOf(m.shown.ts);
+  } else if (!live) {
+    $("#hub-sub").textContent = m.frame ? "最后一帧 " + clockOf(m.frame.ts) : "没有帧";
+  } else if (lastStored) {
+    $("#hub-sub").textContent = "上次存 " + clockOf(lastStored.ts);
   } else {
-    $("#hub-sub").textContent = "点一下测一次";
+    $("#hub-sub").textContent = "点一下存一帧";
   }
 
-  // 倒计时环 / 测量扫针
+  // 倒计时环（自动模式）/ 读条（正在存一帧，一定走完整条）
+  const reading = Boolean(state.pending);
   const vis = state.activation;
-  trackEl.style.opacity = (vis * 0.9).toFixed(3);
-  arcEl.style.opacity = (state.pending ? 0 : vis).toFixed(3);
-  arcEl.setAttribute("stroke", m.shown ? statusColor(m.status) : "var(--accent)");
+  trackEl.style.opacity = (reading ? 0.9 : vis * 0.9).toFixed(3);
+  arcEl.style.opacity = (reading ? 0 : vis).toFixed(3);
+  arcEl.setAttribute("stroke", m.status ? statusColor(m.status) : "var(--accent)");
   arcEl.setAttribute("d", arcPath(183, 183, 104, state.archiving ? state.remain / PERIOD_S : 1));
-  if (state.pending) {
+  if (reading) {
     sweepEl.style.opacity = "1";
-    sweepEl.setAttribute("d", sweepPath(183, 183, 104, (nowMs / 2.2) % 360, 68));
+    sweepEl.setAttribute("d", arcFrom(183, 183, 104,
+      Math.max(0.012, clamp((nowMs - state.pending.from) / STORE_MS, 0, 1))));
   } else {
     sweepEl.style.opacity = "0";
   }
 
   if (state.archiving) {
-    state.remain -= dt;
-    if (state.remain <= 0) autoRound();
     $("#foot-note").textContent = "每 2 分钟自动测一轮";
   } else {
-    $("#foot-note").textContent = "点中心或地址测一次";
+    $("#foot-note").textContent = "点中心存一帧";
   }
 
   let alive = 0, known = 0;
   for (const x of meters.values()) if (x.present) { known++; if (!x.silent) alive++; }
   $("#link-text").textContent = "HC-42 透传 · " + alive + "/" + known + " 台在报数";
-  let anyFlash = 0;
-  for (const x of meters.values()) anyFlash = Math.max(anyFlash, x.flash);
-  $("#stream-dot").style.opacity = (0.3 + anyFlash * 0.7).toFixed(2);
+  $("#stream-dot").style.background = alive > 0 ? statusColor("ok") : statusColor("high");
 }
 
 /* ══════════ 右侧：曲线 ══════════ */
@@ -1230,7 +1209,8 @@ function recRow(r) {
     '<span class="rec-t">' + clockOf(r.ts) + "</span>" +
     '<span class="rec-a">' + hex1(r.addr) + "</span>" +
     '<span class="rec-src">' + (r.source === "auto" ? "自动" : "手动") + "</span>" +
-    '<span class="rec-v" style="color:' + c + '">' + (r.amps === null ? "--" : fmtA(r.amps)) + " A</span>" +
+    '<span class="rec-v" style="color:' + c + '"><span>' +
+      (r.amps === null ? BLANK : fmtA(r.amps)) + "</span><span>A</span></span>" +
     '<span class="rec-s" style="color:' + c + '">' + LABEL[r.status] + "</span>";
   row.addEventListener("click", () => snapTo(r.addr));
   return row;
@@ -1326,17 +1306,42 @@ $("#clear").addEventListener("click", () => {
   }, 3000);
 });
 
-/* ══════════ 主循环 ══════════ */
+/* ══════════ 模型（定时器）与视图（rAF）分开 ══════════
+   rAF 会被系统暂停：后台标签页、窗口被遮挡、最小化、无头环境都会停。
+   所以帧流、读条落库、自动倒计时这些「功能」必须挂在定时器上——
+   之前它们跑在 rAF 里，rAF 一停就表现为「点了没反应而且再也不恢复」。
+   rAF 只负责画，画不画都不影响状态对不对。 */
+function tickAuto(dt) {
+  if (!state.archiving) return;
+  state.remain -= dt;
+  if (state.remain <= 0) autoRound();
+}
+
+let modelPrev = performance.now();
+setInterval(() => {
+  const now = performance.now();
+  const dt = Math.min(0.5, (now - modelPrev) / 1000);
+  modelPrev = now;
+  try {
+    tickSim(now, dt);
+    tickPending(now);
+    tickAuto(dt);
+  } catch (e) {
+    console.error("model tick", e);     // 单帧出错也不能让模型停摆
+  }
+}, 60);
+
 let prev = performance.now();
 function loop(now) {
   const dt = Math.min(0.05, (now - prev) / 1000);
   prev = now;
-  tickSim(now, dt);
-  tickPending(now);
-  tickDial(dt);
-  tickOdo(dt);
-  layoutSlots(now);
-  renderLive(now, dt);
+  try {
+    tickDial(dt);
+    layoutSlots(now);
+    renderLive(now, dt);
+  } catch (e) {
+    console.error("render", e);         // 渲染出错也要继续排下一帧，否则整个界面死掉
+  }
   requestAnimationFrame(loop);
 }
 
@@ -1359,7 +1364,6 @@ state.records = loadRecords();
 state.angle = -1 * STEP;                 // 开机停在 01 号表
 state.sel = 1;
 panelAddr = 1;
-buildOdo($("#odo"), "-.--");
 layoutSlots(performance.now());
 renderPanel();
 dial.setAttribute("aria-valuenow", "1");

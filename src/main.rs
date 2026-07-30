@@ -360,6 +360,27 @@ static CAL: &[(f32, f32)] = &[
 /// uncalibrated build still reads approximately right. Fitted at one point.
 const CAL_FALLBACK_A_PER_LSB: f32 = 0.003433733774564919;
 
+/// Both columns of CAL must increase together. Checked at compile time
+/// because the table is typed in by hand, one pair per bench reading, and a
+/// transposed or out-of-order pair does not fail loudly at runtime -- it
+/// just interpolates on the wrong segment and reads plausibly wrong.
+/// NaN also fails this (every comparison against NaN is false), so a
+/// mistyped literal cannot slip through either.
+const fn cal_strictly_ascending() -> bool {
+    let mut i = 1;
+    while i < CAL.len() {
+        if !(CAL[i].0 > CAL[i - 1].0) || !(CAL[i].1 > CAL[i - 1].1) {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+const _: () = assert!(
+    cal_strictly_ascending(),
+    "CAL entries must be (lsb, amps) pairs, both strictly increasing"
+);
+
 /// Piecewise-linear lookup. Outside the table the end segments are extended
 /// rather than clamped -- a clamped reading would silently under-report an
 /// over-limit current, and 2(3) needs `> 2 A` to raise the alarm.
