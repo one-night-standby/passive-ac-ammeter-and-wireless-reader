@@ -244,6 +244,7 @@ pub fn pick_range(mean_in: i32, pp_in: u32) -> Range {
 /// opposed to merely exceeding `FILL_TARGET_PCT`, which is a margin, not a
 /// limit. Tested at 100% so the flag means "this frame is clipping", not
 /// "this frame spent its reserve".
+#[allow(dead_code)] // Retained for bench diagnostics; production OLED is RMS-only.
 pub fn over_range(range: Range, mean_in: i32, pp_in: u32) -> bool {
     !fits(range, mean_in, pp_in, 100)
 }

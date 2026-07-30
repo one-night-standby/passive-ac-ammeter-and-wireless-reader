@@ -85,6 +85,7 @@ const fn cos_const(x: f32) -> f32 {
 /// Sine for const evaluation. Same reduction shape as `cos_const`, with its
 /// own series rather than `cos(pi/2 - x)` -- the subtraction would move the
 /// rounding error into the argument, where it is worth the most for small x.
+#[allow(dead_code)] // Retained for the optional bench frequency estimator.
 const fn sin_const(x: f32) -> f32 {
     let mut t = x;
     while t < 0.0 {
@@ -146,6 +147,7 @@ static HANN: [f32; N] = {
 
 /// One nominal-frequency cycle of quadrature, for the `estimate_hz`
 /// correlator. Same story as `HANN`: compile-time, flash-resident.
+#[allow(dead_code)] // Retained for the optional bench frequency estimator.
 static COS_TAB: [f32; SPP_NOM] = {
     let mut t = [0.0f32; SPP_NOM];
     let mut n = 0;
@@ -156,6 +158,7 @@ static COS_TAB: [f32; SPP_NOM] = {
     t
 };
 
+#[allow(dead_code)] // Retained for the optional bench frequency estimator.
 static SIN_TAB: [f32; SPP_NOM] = {
     let mut t = [0.0f32; SPP_NOM];
     let mut n = 0;
@@ -167,6 +170,7 @@ static SIN_TAB: [f32; SPP_NOM] = {
 };
 
 /// How many recent frames the spread indicator remembers.
+#[allow(dead_code)] // Retained for bench noise characterization.
 pub const SPREAD_N: usize = 16;
 
 /// Peak-to-peak spread of the last SPREAD_N raw frame RMS values, in LSB.
@@ -188,12 +192,14 @@ pub const SPREAD_N: usize = 16;
 /// with no noise model assumed. That is the sigma measurement that decides
 /// whether a longer aperture is needed at all -- and it comes for free from
 /// the display, with no separate procedure.
+#[allow(dead_code)] // Retained for bench noise characterization.
 pub struct Spread {
     hist: [f32; SPREAD_N],
     idx: usize,
     len: usize,
 }
 
+#[allow(dead_code)] // Retained for bench noise characterization.
 impl Spread {
     pub const fn new() -> Self {
         Self {
@@ -333,6 +339,7 @@ pub fn rms_lsb(buf: &[u32; N], pivot: i32) -> f32 {
 /// `start` indexes the record, but the correlator is driven by the *local*
 /// index, which is what makes the two blocks' phase difference come out as
 /// the fundamental's advance across HALF samples.
+#[allow(dead_code)] // Retained for the optional bench frequency estimator.
 pub fn half_phase(buf: &[u32; N], start: usize, pivot: i32) -> f32 {
     let mut i_acc = 0.0f32;
     let mut q_acc = 0.0f32;
@@ -362,6 +369,7 @@ pub fn half_phase(buf: &[u32; N], start: usize, pivot: i32) -> f32 {
 /// Reported for the display and the design report only -- `rms_lsb` does
 /// not consume it, so a bad frequency estimate cannot corrupt the accuracy
 /// figure that carries the marks.
+#[allow(dead_code)] // Retained for the design report and bench diagnostics.
 pub fn estimate_hz(buf: &[u32; N], pivot: i32) -> f32 {
     let p1 = half_phase(buf, 0, pivot);
     let p2 = half_phase(buf, HALF, pivot);

@@ -219,7 +219,18 @@ pub fn init_timer() {
 /// Factored out of the main loop so the probe and the measurement frame run
 /// the identical arming sequence -- the pieces that are easy to drop (the
 /// timer stop, the DMAEN re-arm) are exactly the ones that fail silently.
+#[allow(dead_code)] // Used by diagnostic binaries that do not poll a button.
 pub fn capture(dma: &mut Channel<'_>, dst: &mut [u32]) -> bool {
+    capture_with_poll(dma, dst, || {})
+}
+
+/// Capture one frame while running a lightweight callback about once per
+/// millisecond. This lets latency-sensitive GPIO state be latched without
+/// changing the hardware-timed ADC/DMA sample path.
+pub fn capture_with_poll<F>(dma: &mut Channel<'_>, dst: &mut [u32], mut poll: F) -> bool
+where
+    F: FnMut(),
+{
     // Read the length before `dst` is handed to the DMA. Deriving the timeout
     // from DMASZ instead would read a counter the hardware has already begun
     // decrementing, shortening the budget by however long the arming took.
@@ -278,11 +289,13 @@ pub fn capture(dma: &mut Channel<'_>, dst: &mut [u32]) -> bool {
     // silently becomes a 25x wait for the 40 ms probe.
     let budget_ms = len * 5 / (SAMPLE_HZ / 1000);
     let mut captured = false;
+    poll();
     for _ in 0..budget_ms {
         if pac::DMA.chan(0).sz().read().size() == 0 {
             captured = true;
             break;
         }
+        poll();
         cortex_m::asm::delay(32_000); // ~1 ms at 32 MHz
     }
     if !captured {

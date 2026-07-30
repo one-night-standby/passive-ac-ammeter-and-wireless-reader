@@ -17,7 +17,7 @@ use embedded_graphics_core::pixelcolor::BinaryColor;
 use embedded_graphics_core::primitives::Rectangle;
 use embedded_hal::i2c::{ErrorType, I2c, Operation};
 use ssd1306::mode::{BufferedGraphicsMode, DisplayConfig};
-use ssd1306::prelude::{DisplayRotation, DisplaySize128x64, I2CInterface};
+use ssd1306::prelude::{Brightness, DisplayRotation, DisplaySize128x64, I2CInterface};
 use ssd1306::{I2CDisplayInterface, Ssd1306};
 
 type OpenDrainPin = OutputOpenDrain<'static>;
@@ -165,11 +165,24 @@ impl Oled {
         let mut inner = Ssd1306::new(interface, DisplaySize128x64, DisplayRotation::Rotate0)
             .into_buffered_graphics_mode();
         inner.init().map_err(|_| ())?;
+        // Lower the segment drive current while the panel is on. This sends
+        // Set Contrast Control (0x81, 0x0F); temporal duty cycling below is an
+        // independent power-saving layer.
+        inner
+            .set_brightness(Brightness::custom(0x2, 0x0F))
+            .map_err(|_| ())?;
+        // Keep the panel dark while the first framebuffer is prepared. The
+        // measurement loop turns it on only after S2 toggles display mode on.
+        inner.set_display_on(false).map_err(|_| ())?;
         Ok(Self { inner })
     }
 
     pub fn flush(&mut self) -> Result<(), ()> {
         self.inner.flush().map_err(|_| ())
+    }
+
+    pub fn set_display_on(&mut self, on: bool) -> Result<(), ()> {
+        self.inner.set_display_on(on).map_err(|_| ())
     }
 }
 

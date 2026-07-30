@@ -2,9 +2,10 @@
 #![no_main]
 
 //! "Passive" AC ammeter, circuit A + B: measure the harvested CT signal,
-//! show it, and push it out over the HC-42. The OLED and HC-42 are both kept
-//! inactive during the first measurement so the harvesting supply only has
-//! to start the analog and compute path.
+//! show it on demand, and push it out over the HC-42. The OLED stays inactive
+//! until S2 toggles it on, while the HC-42 is kept off during the first
+//! measurement so the harvesting supply only has to start the analog and
+//! compute path.
 //!
 //! This file is the wiring and the measurement period; the substance lives in
 //! the four modules below.
@@ -38,14 +39,12 @@ mod range;
 mod sampler;
 
 use cal::lsb_to_amps;
-use dsp::{Spread, coarse_pivot, estimate_hz, rms_lsb};
+use dsp::{coarse_pivot, rms_lsb};
 use oled::Oled;
-use range::{
-    DAC_MAX, Gain, Range, apply_range, next_range, over_range, probe_stats, setup_opa1_pga,
-};
+use range::{DAC_MAX, Gain, Range, apply_range, next_range, probe_stats, setup_opa1_pga};
 use sampler::{
-    ADC_CH_RAW_IN, BUF, PINCM_PA16, PINCM_PA18, PROBE_BUF, capture, init_adc1_event, init_timer,
-    set_adc_channel, set_analog,
+    ADC_CH_RAW_IN, BUF, PINCM_PA16, PINCM_PA18, PROBE_BUF, capture_with_poll, init_adc1_event,
+    init_timer, set_adc_channel, set_analog,
 };
 
 bind_interrupts!(struct Irqs {
@@ -55,6 +54,49 @@ bind_interrupts!(struct Irqs {
 const HC42_BAUD_RATE: u32 = 9_600;
 /// HC-42 manual: allow at least 350 ms after power-on before using its UART.
 const HC42_POWER_UP_MS: u64 = 350;
+const DISPLAY_BUTTON_RELEASE_DEBOUNCE_MS: u8 = 20;
+
+struct ToggleButton {
+    armed: bool,
+    released_ms: u8,
+    toggle_pending: bool,
+}
+
+impl ToggleButton {
+    const fn new() -> Self {
+        Self {
+            armed: true,
+            released_ms: DISPLAY_BUTTON_RELEASE_DEBOUNCE_MS,
+            toggle_pending: false,
+        }
+    }
+
+    fn poll(&mut self, pressed: bool) {
+        if pressed {
+            self.released_ms = 0;
+            if self.armed {
+                // Keep parity so two complete presses before the measurement
+                // frame ends still produce two state transitions.
+                self.toggle_pending = !self.toggle_pending;
+                self.armed = false;
+            }
+        } else if !self.armed {
+            self.released_ms = self
+                .released_ms
+                .saturating_add(1)
+                .min(DISPLAY_BUTTON_RELEASE_DEBOUNCE_MS);
+            if self.released_ms == DISPLAY_BUTTON_RELEASE_DEBOUNCE_MS {
+                self.armed = true;
+            }
+        }
+    }
+
+    fn take_toggle(&mut self) -> bool {
+        let pending = self.toggle_pending;
+        self.toggle_pending = false;
+        pending
+    }
+}
 
 #[embassy_executor::main]
 async fn main(_spawner: Spawner) -> ! {
@@ -90,7 +132,7 @@ async fn main(_spawner: Spawner) -> ! {
     // `None` deliberately leaves PB2/PB3 in their reset state during the
     // first probe, capture and calculation. `Some(Err(_))` records a failed
     // first initialization so fixed pins are never stolen a second time.
-    let mut display = None;
+    let mut display: Option<Result<Oled, ()>> = None;
 
     let mut led = Output::new(unsafe { peripherals::PA0::steal() }, Level::Low);
     led.set_inversion(true);
@@ -104,11 +146,13 @@ async fn main(_spawner: Spawner) -> ! {
     let address_bit1 = Input::new(p.PB6, Pull::Up);
     let address_bit2 = Input::new(p.PB7, Pull::Up);
     let address_bit3 = Input::new(p.PB8, Pull::Up);
+    // LaunchPad S2 is the independent user button on PB21. It pulls the pin
+    // low when pressed; unlike S1/PA18, it does not disturb the ADC input.
+    let display_button = Input::new(p.PB21, Pull::Up);
 
-    let mut spread_track = Spread::new();
     let mut range = Range::Pga(Gain::X2);
-    let mut input_bad = false;
-    let mut range_over = false;
+    let mut display_enabled = false;
+    let mut display_toggle_button = ToggleButton::new();
 
     loop {
         // --- Probe: the raw input at unity gain, straight off PA18 ---
@@ -121,16 +165,16 @@ async fn main(_spawner: Spawner) -> ! {
         set_adc_channel(ADC_CH_RAW_IN);
         // SAFETY: `capture` waits the transfer out (or pauses it) before
         // returning, so nothing else touches PROBE_BUF concurrently.
-        let probed = capture(&mut dma, unsafe {
-            &mut *core::ptr::addr_of_mut!(PROBE_BUF)
-        });
+        let probed = capture_with_poll(
+            &mut dma,
+            unsafe { &mut *core::ptr::addr_of_mut!(PROBE_BUF) },
+            || display_toggle_button.poll(display_button.is_low()),
+        );
         if probed {
             // SAFETY: as above -- the transfer is finished or paused.
             let (mean_in, pp_in, railed) = probe_stats(unsafe { &*core::ptr::addr_of!(PROBE_BUF) });
-            input_bad = railed;
             if !railed {
                 range = next_range(range, mean_in, pp_in);
-                range_over = over_range(range, mean_in, pp_in);
                 if apply_range(range, mean_in) {
                     // Settle the DAC and the re-tapped ladder before the frame
                     // that carries the marks. Both are microsecond-scale; 1 ms
@@ -152,7 +196,11 @@ async fn main(_spawner: Spawner) -> ! {
         // which case the channel is already the one the probe just used) ---
         // SAFETY: `capture` waits the transfer out (or pauses it) before
         // returning, so nothing else touches BUF concurrently.
-        let framed = capture(&mut dma, unsafe { &mut *core::ptr::addr_of_mut!(BUF) });
+        let _ = capture_with_poll(
+            &mut dma,
+            unsafe { &mut *core::ptr::addr_of_mut!(BUF) },
+            || display_toggle_button.poll(display_button.is_low()),
+        );
 
         // BUF now holds 800 hardware-timed samples of OPA1_OUT at 4 kHz
         // (TIM+ADC+DMA, zero CPU involvement per sample).
@@ -160,83 +208,40 @@ async fn main(_spawner: Spawner) -> ! {
         // ours for the rest of this iteration.
         let buf = unsafe { &*core::ptr::addr_of!(BUF) };
         let pivot = coarse_pivot(buf);
-        // One capture, one reading -- no cross-frame state. See `Spread`.
         let rms = rms_lsb(buf, pivot);
-        let spread = spread_track.push(rms);
-        let hz = estimate_hz(buf, pivot);
         let amps = lsb_to_amps(rms, range);
 
-        // Only now, after the first complete measurement is available, may
-        // the OLED pins be driven and the SSD1306 initialization traffic run.
-        if display.is_none() {
-            // SAFETY: PB2/PB3 have not been used above and this branch executes
-            // once because both Ok and Err are retained inside `Some`.
-            display = Some(unsafe { Oled::new() });
+        if display_toggle_button.take_toggle() {
+            display_enabled = !display_enabled;
+            if !display_enabled && let Some(Ok(display)) = &mut display {
+                let _ = display.set_display_on(false);
+            }
         }
 
-        if let Some(Ok(display)) = &mut display {
-            let _ = display.clear(BinaryColor::Off);
-            let style = MonoTextStyle::new(&FONT_9X15, BinaryColor::On);
+        if display_enabled {
+            // PB2/PB3 and the SSD1306 remain completely untouched until S2
+            // is first pressed after a complete measurement is available.
+            if display.is_none() {
+                // SAFETY: PB2/PB3 have not been used above and this branch
+                // executes once because both Ok and Err are retained.
+                display = Some(unsafe { Oled::new() });
+            }
 
-            // A leading marker means the reading below it is not to be
-            // believed, and says which of the two ways it went wrong:
-            //   '!' the probe found the input pinned at an ADC end, so the
-            //       signal is leaving `0..VDDA` and no internal gain or bias
-            //       choice can recover it -- that needs external conditioning.
-            //   '>' the arithmetic says the signal will not fit even on
-            //       Direct, the least demanding range there is, so the frame
-            //       is clipping. Every range is bounded by the supply and
-            //       nothing tighter (see range::OUT_LO -- OPA1's rails and
-            //       ADC1's full scale are the same two voltages), which makes
-            //       this exactly the same physical condition as '!', predicted
-            //       from the probe's mean/pp rather than seen as pinned
-            //       samples. Adding Direct to the ladder is what made it
-            //       near-unreachable; it is kept as the arithmetic backstop.
-            //   '?' the measurement frame's DMA never drained, so BUF is part
-            //       new samples and part stale ones.
-            // All three sit on the primary line on purpose: a number this
-            // display cannot stand behind should not look like the others.
-            let marker = if input_bad {
-                "!"
-            } else if range_over {
-                ">"
-            } else if !framed {
-                "?"
-            } else {
-                ""
-            };
-            let mut line: String<32> = String::new();
-            let _ = write!(line, "{}{:.3} A", marker, amps);
-            let _ = Text::new(&line, Point::new(4, 20), style).draw(display);
-
-            // Frequency, plus peak-to-peak spread of the last 16 frames in
-            // LSB -- read this to find out whether noise is actually a
-            // problem on this board. 0.5% at 0.1 A is 0.146 LSB, so a spread
-            // much above ~0.3 means a longer aperture is needed.
-            let mut line2: String<32> = String::new();
-            let _ = write!(line2, "{:.2}Hz p{:.2}", hz, spread);
-            let _ = Text::new(&line2, Point::new(4, 40), style).draw(display);
-
-            // Raw single-frame RMS in LSB and the gain it was taken at --
-            // together they are one row of one CAL table, and the gain says
-            // *which* table, so the calibration cannot be entered against the
-            // wrong one. Two decimals: 0.01 LSB is 0.03% at 0.1 A, so the
-            // display resolution is not what limits the calibration.
-            //
-            // Starts at x=0, not x=4 like the others: 14 characters of
-            // FONT_9X15 is exactly 126 px, so the margin is the difference
-            // between fitting and losing the last digit of the gain.
-            let mut line3: String<32> = String::new();
-            let _ = write!(line3, "rms {:.2} x{}", rms, range.nominal());
-            let _ = Text::new(&line3, Point::new(0, 60), style).draw(display);
-
-            let _ = display.flush();
+            if let Some(Ok(display)) = &mut display {
+                let _ = display.clear(BinaryColor::Off);
+                let style = MonoTextStyle::new(&FONT_9X15, BinaryColor::On);
+                let mut line: String<32> = String::new();
+                let _ = write!(line, "{:.3} A", amps);
+                let _ = Text::new(&line, Point::new(32, 38), style).draw(display);
+                let _ = display.flush();
+                let _ = display.set_display_on(true);
+            }
         }
 
-        // Power the HC-42 only after measurement and the first OLED refresh.
+        // Power the HC-42 only after the first measurement. OLED operation is
+        // independently gated by S2 and does not delay wireless availability.
         // The module stays on afterwards because a BLE peripheral must remain
-        // discoverable for the reader to decide when it is needed. Turning it
-        // off between frames would make wireless wake-up impossible.
+        // discoverable for the reader to decide when it is needed.
         if hc42.is_none() {
             hc42_power_enable.set_high();
             Timer::after_millis(HC42_POWER_UP_MS).await;
