@@ -3,28 +3,32 @@
 //! frame-to-frame spread indicator. Pure arithmetic over a sample buffer --
 //! no registers, no knowledge of which range produced the samples.
 
-use libm::{atan2f, cosf, sinf, sqrtf};
+use libm::{atan2f, sqrtf};
 
 use crate::sampler::{ADC_MASK, N, SAMPLE_HZ};
 
-pub const TWO_PI: f32 = 2.0 * core::f32::consts::PI;
+const TWO_PI: f32 = 2.0 * core::f32::consts::PI;
+const PI: f32 = core::f32::consts::PI;
 
 /// Nominal mains frequency. Only the *correlator* in `estimate_hz` assumes
 /// this value; the RMS path (`rms_lsb`) does not depend on the mains
 /// frequency at all -- see the Hann note there.
-pub const MAINS_NOM_HZ: u32 = 50;
+const MAINS_NOM_HZ: u32 = 50;
 
 /// Samples per nominal mains cycle -- 80. Must divide evenly, so the
 /// quadrature tables can be indexed by `n % SPP_NOM` instead of carrying a
 /// running phase (no drift, no per-sample sin/cos on a Cortex-M0+ that has
 /// no FPU).
-pub const SPP_NOM: usize = (SAMPLE_HZ / MAINS_NOM_HZ) as usize;
+const SPP_NOM: usize = (SAMPLE_HZ / MAINS_NOM_HZ) as usize;
 
 /// Half-record length for the two-block phase-difference frequency
 /// estimate.
-pub const HALF: usize = N / 2;
+const HALF: usize = N / 2;
 
-const _: () = assert!(SAMPLE_HZ.is_multiple_of(MAINS_NOM_HZ), "SPP_NOM must be exact");
+const _: () = assert!(
+    SAMPLE_HZ.is_multiple_of(MAINS_NOM_HZ),
+    "SPP_NOM must be exact"
+);
 
 const _: () = assert!(N.is_multiple_of(2));
 
@@ -35,70 +39,132 @@ const _: () = assert!(N.is_multiple_of(2));
 // frequency deviation.
 const _: () = assert!(HALF.is_multiple_of(SPP_NOM));
 
-/// Hann weights over the whole record, and one nominal-frequency cycle of
-/// quadrature. Built once at startup rather than stored as `const` tables:
-/// `cosf` is not const-callable, and 3.9 KB of the 32 KB SRAM is cheaper
-/// than hand-rolling a const-evaluable cosine.
-static mut HANN: [f32; N] = [0.0; N];
+/// Cosine for const evaluation, argument in radians.
+///
+/// Exists because `libm::cosf` is not a `const fn`, and the tables below are
+/// worth having as compile-time constants: see the note on `HANN`.
+///
+/// Quadrant-reduced to [0, pi/2] and then a Taylor series to x^14. At the
+/// reduced argument's worst case (pi/2) the first dropped term is ~1.6e-9,
+/// well under an f32 ULP, and the whole table checks out at 1.4e-7 max
+/// absolute error against a f64 reference -- about 1.2 ULP at magnitude 1.
+/// A window function needs nothing like that precision (the Hann sidelobe
+/// argument in `rms_lsb` would survive 1e-5), so this has margin to spare.
+const fn cos_const(x: f32) -> f32 {
+    let mut t = x;
+    while t < 0.0 {
+        t += TWO_PI;
+    }
+    while t >= TWO_PI {
+        t -= TWO_PI;
+    }
+    // cos(2pi - t) = cos(t), so fold onto [0, pi].
+    if t > PI {
+        t = TWO_PI - t;
+    }
+    // cos(pi - t) = -cos(t), so fold onto [0, pi/2] and carry the sign.
+    let sign = if t > PI / 2.0 {
+        t = PI - t;
+        -1.0
+    } else {
+        1.0
+    };
 
-static mut COS_TAB: [f32; SPP_NOM] = [0.0; SPP_NOM];
-
-static mut SIN_TAB: [f32; SPP_NOM] = [0.0; SPP_NOM];
-
-/// Read-only views of the tables above, so the `static mut` raw-pointer
-/// `unsafe` happens exactly once (at the top of `main`) instead of inside
-/// every DSP loop.
-pub struct Tables {
-    hann: &'static [f32; N],
-    cos: &'static [f32; SPP_NOM],
-    sin: &'static [f32; SPP_NOM],
+    let x2 = t * t;
+    let mut term = 1.0f32;
+    let mut sum = 1.0f32;
+    let mut k = 1usize;
+    while k <= 7 {
+        term = -term * x2 / ((2 * k - 1) * (2 * k)) as f32;
+        sum += term;
+        k += 1;
+    }
+    sign * sum
 }
 
-/// Fills the tables above and hands back the only handle to them.
-///
-/// Returning the `Tables` rather than exposing the statics keeps the whole
-/// `static mut` argument inside this module: the write happens here, the
-/// shared views are minted here immediately afterwards, and no other code can
-/// obtain a second path to the same memory. Callers get a plain `&` and never
-/// write `unsafe`.
-///
+/// Sine for const evaluation. Same reduction shape as `cos_const`, with its
+/// own series rather than `cos(pi/2 - x)` -- the subtraction would move the
+/// rounding error into the argument, where it is worth the most for small x.
+const fn sin_const(x: f32) -> f32 {
+    let mut t = x;
+    while t < 0.0 {
+        t += TWO_PI;
+    }
+    while t >= TWO_PI {
+        t -= TWO_PI;
+    }
+    // sin(t + pi) = -sin(t), then sin(pi - t) = sin(t).
+    let mut sign = 1.0f32;
+    if t > PI {
+        t -= PI;
+        sign = -1.0;
+    }
+    if t > PI / 2.0 {
+        t = PI - t;
+    }
+
+    let x2 = t * t;
+    let mut term = t;
+    let mut sum = t;
+    let mut k = 1usize;
+    while k <= 7 {
+        term = -term * x2 / ((2 * k) * (2 * k + 1)) as f32;
+        sum += term;
+        k += 1;
+    }
+    sign * sum
+}
+
 /// Periodic (DFT-even) Hann, `w[n] = 0.5*(1 - cos(2*pi*n/N))`. The periodic
 /// form is the one that makes `sum(w)` come out to exactly N/2 and puts the
 /// window's nulls on the analysis bins, which is the whole point here.
 ///
-/// Mirrored about n = N/2 so only N/2+1 `cosf` calls run: on a soft-float
-/// M0+ each call is ~1.5k cycles, so this is ~19 ms of startup instead of
-/// ~38 ms. Startup time is a scored item; the 500 ms HC-42 settle below
-/// still dominates, but there is no reason to pay double here.
-pub fn init_dsp_tables() -> Tables {
-    unsafe {
-        let hann = &mut *core::ptr::addr_of_mut!(HANN);
-        for n in 0..=N / 2 {
-            let w = 0.5 * (1.0 - cosf(TWO_PI * n as f32 / N as f32));
-            hann[n] = w;
-            if n > 0 && n < N / 2 {
-                hann[N - n] = w;
-            }
+/// Computed at compile time, so it costs flash instead of SRAM and nothing
+/// at startup. It used to be built by 401 runtime `cosf` calls (~19 ms on a
+/// soft-float M0+) into a `static mut`; startup time is a scored item, and
+/// that was the single largest avoidable chunk of it outside the HC-42's own
+/// 500 ms settle. Being a plain `static` also retires the last `static mut`
+/// in this module along with the `unsafe` and the `Tables` handle that
+/// existed only to contain it.
+///
+/// Still mirrored about n = N/2. At const-eval time that is no longer about
+/// speed: it makes `HANN[n] == HANN[N - n]` hold bit-for-bit, so the window
+/// is *exactly* symmetric and cannot bias the phase estimate in `half_phase`.
+static HANN: [f32; N] = {
+    let mut w = [0.0f32; N];
+    let mut n = 0;
+    while n <= N / 2 {
+        let v = 0.5 * (1.0 - cos_const(TWO_PI * n as f32 / N as f32));
+        w[n] = v;
+        if n > 0 && n < N / 2 {
+            w[N - n] = v;
         }
-
-        let cos_tab = &mut *core::ptr::addr_of_mut!(COS_TAB);
-        let sin_tab = &mut *core::ptr::addr_of_mut!(SIN_TAB);
-        for n in 0..SPP_NOM {
-            let a = TWO_PI * n as f32 / SPP_NOM as f32;
-            cos_tab[n] = cosf(a);
-            sin_tab[n] = sinf(a);
-        }
-
-        // SAFETY: the writes above are done, this runs exactly once, and
-        // nothing else in the crate can name these statics -- so these shared
-        // references are the only access from here on.
-        Tables {
-            hann: &*core::ptr::addr_of!(HANN),
-            cos: &*core::ptr::addr_of!(COS_TAB),
-            sin: &*core::ptr::addr_of!(SIN_TAB),
-        }
+        n += 1;
     }
-}
+    w
+};
+
+/// One nominal-frequency cycle of quadrature, for the `estimate_hz`
+/// correlator. Same story as `HANN`: compile-time, flash-resident.
+static COS_TAB: [f32; SPP_NOM] = {
+    let mut t = [0.0f32; SPP_NOM];
+    let mut n = 0;
+    while n < SPP_NOM {
+        t[n] = cos_const(TWO_PI * n as f32 / SPP_NOM as f32);
+        n += 1;
+    }
+    t
+};
+
+static SIN_TAB: [f32; SPP_NOM] = {
+    let mut t = [0.0f32; SPP_NOM];
+    let mut n = 0;
+    while n < SPP_NOM {
+        t[n] = sin_const(TWO_PI * n as f32 / SPP_NOM as f32);
+        n += 1;
+    }
+    t
+};
 
 /// How many recent frames the spread indicator remembers.
 pub const SPREAD_N: usize = 16;
@@ -228,14 +294,14 @@ pub fn coarse_pivot(buf: &[u32; N]) -> i32 {
 /// 50.000 Hz (and SYSOSC guarantees SAMPLE_HZ does not either), so the
 /// incoherent case is the real one; at 49.8 Hz the same test gives 0.07%.
 /// A generator at 50.02 Hz reproduces field behaviour, 50.000 does not.
-pub fn rms_lsb(buf: &[u32; N], pivot: i32, t: &Tables) -> f32 {
+pub fn rms_lsb(buf: &[u32; N], pivot: i32) -> f32 {
     // Pass 1: weighted mean of the pivot-centred residual. The mean has to
     // be weighted by the *same* window as the sum of squares -- an
     // unweighted mean leaves fundamental residue that Hann cannot then
     // suppress, and re-introduces the error this function exists to remove.
     let mut sum_w = 0.0f32;
     let mut sum_wd = 0.0f32;
-    for (&x, &w) in buf.iter().zip(t.hann.iter()) {
+    for (&x, &w) in buf.iter().zip(HANN.iter()) {
         sum_w += w;
         sum_wd += w * ((x & ADC_MASK) as i32 - pivot) as f32;
     }
@@ -246,7 +312,7 @@ pub fn rms_lsb(buf: &[u32; N], pivot: i32, t: &Tables) -> f32 {
     // pass 1 as sum(w*x^2)/sum(w) - mean^2 subtracts two ~4.2e6 quantities
     // to recover ~848, and f32 has no mantissa left for that cancellation.
     let mut sum_wd2 = 0.0f32;
-    for (&x, &w) in buf.iter().zip(t.hann.iter()) {
+    for (&x, &w) in buf.iter().zip(HANN.iter()) {
         let d = ((x & ADC_MASK) as i32 - pivot) as f32 - offset;
         sum_wd2 += w * d * d;
     }
@@ -267,14 +333,14 @@ pub fn rms_lsb(buf: &[u32; N], pivot: i32, t: &Tables) -> f32 {
 /// `start` indexes the record, but the correlator is driven by the *local*
 /// index, which is what makes the two blocks' phase difference come out as
 /// the fundamental's advance across HALF samples.
-pub fn half_phase(buf: &[u32; N], start: usize, pivot: i32, t: &Tables) -> f32 {
+pub fn half_phase(buf: &[u32; N], start: usize, pivot: i32) -> f32 {
     let mut i_acc = 0.0f32;
     let mut q_acc = 0.0f32;
     for m in 0..HALF {
-        let d = ((buf[start + m] & ADC_MASK) as i32 - pivot) as f32 * t.hann[2 * m];
+        let d = ((buf[start + m] & ADC_MASK) as i32 - pivot) as f32 * HANN[2 * m];
         let p = m % SPP_NOM;
-        i_acc += d * t.cos[p];
-        q_acc += d * t.sin[p];
+        i_acc += d * COS_TAB[p];
+        q_acc += d * SIN_TAB[p];
     }
     atan2f(i_acc, q_acc)
 }
@@ -296,9 +362,9 @@ pub fn half_phase(buf: &[u32; N], start: usize, pivot: i32, t: &Tables) -> f32 {
 /// Reported for the display and the design report only -- `rms_lsb` does
 /// not consume it, so a bad frequency estimate cannot corrupt the accuracy
 /// figure that carries the marks.
-pub fn estimate_hz(buf: &[u32; N], pivot: i32, t: &Tables) -> f32 {
-    let p1 = half_phase(buf, 0, pivot, t);
-    let p2 = half_phase(buf, HALF, pivot, t);
+pub fn estimate_hz(buf: &[u32; N], pivot: i32) -> f32 {
+    let p1 = half_phase(buf, 0, pivot);
+    let p2 = half_phase(buf, HALF, pivot);
 
     let mut dphi = p2 - p1;
     while dphi > core::f32::consts::PI {

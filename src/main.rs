@@ -36,9 +36,11 @@ mod range;
 mod sampler;
 
 use cal::lsb_to_amps;
-use dsp::{Spread, coarse_pivot, estimate_hz, init_dsp_tables, rms_lsb};
+use dsp::{Spread, coarse_pivot, estimate_hz, rms_lsb};
 use oled::Oled;
-use range::{DAC_MAX, Gain, Range, apply_range, next_range, over_range, probe_stats, setup_opa1_pga};
+use range::{
+    DAC_MAX, Gain, Range, apply_range, next_range, over_range, probe_stats, setup_opa1_pga,
+};
 use sampler::{
     ADC_CH_RAW_IN, BUF, PINCM_PA16, PINCM_PA18, PROBE_BUF, capture, init_adc1_event, init_timer,
     set_adc_channel, set_analog,
@@ -68,8 +70,6 @@ async fn main(_spawner: Spawner) -> ! {
     setup_opa1_pga(Gain::X2, (DAC_MAX / 2) as u16);
     init_adc1_event();
     init_timer();
-
-    let tables = init_dsp_tables();
 
     let mut dma = Channel::new(p.DMA_CH0, Irqs);
     // SAFETY: sole owner of the OLED's fixed pins (PB2/PB3) -- nothing
@@ -114,11 +114,12 @@ async fn main(_spawner: Spawner) -> ! {
         set_adc_channel(ADC_CH_RAW_IN);
         // SAFETY: `capture` waits the transfer out (or pauses it) before
         // returning, so nothing else touches PROBE_BUF concurrently.
-        let probed = capture(&mut dma, unsafe { &mut *core::ptr::addr_of_mut!(PROBE_BUF) });
+        let probed = capture(&mut dma, unsafe {
+            &mut *core::ptr::addr_of_mut!(PROBE_BUF)
+        });
         if probed {
             // SAFETY: as above -- the transfer is finished or paused.
-            let (mean_in, pp_in, railed) =
-                probe_stats(unsafe { &*core::ptr::addr_of!(PROBE_BUF) });
+            let (mean_in, pp_in, railed) = probe_stats(unsafe { &*core::ptr::addr_of!(PROBE_BUF) });
             input_bad = railed;
             if !railed {
                 range = next_range(range, mean_in, pp_in);
@@ -153,9 +154,9 @@ async fn main(_spawner: Spawner) -> ! {
         let buf = unsafe { &*core::ptr::addr_of!(BUF) };
         let pivot = coarse_pivot(buf);
         // One capture, one reading -- no cross-frame state. See `Spread`.
-        let rms = rms_lsb(buf, pivot, &tables);
+        let rms = rms_lsb(buf, pivot);
         let spread = spread_track.push(rms);
-        let hz = estimate_hz(buf, pivot, &tables);
+        let hz = estimate_hz(buf, pivot);
         let amps = lsb_to_amps(rms, range);
 
         if let Ok(display) = &mut display {

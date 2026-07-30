@@ -10,11 +10,11 @@ use core::convert::Infallible;
 
 use embassy_mspm0::gpio::{Level, OutputOpenDrain};
 use embassy_mspm0::peripherals;
+use embedded_graphics_core::Pixel;
 use embedded_graphics_core::draw_target::DrawTarget;
 use embedded_graphics_core::geometry::{OriginDimensions, Size};
 use embedded_graphics_core::pixelcolor::BinaryColor;
 use embedded_graphics_core::primitives::Rectangle;
-use embedded_graphics_core::Pixel;
 use embedded_hal::i2c::{ErrorType, I2c, Operation};
 use ssd1306::mode::{BufferedGraphicsMode, DisplayConfig};
 use ssd1306::prelude::{DisplayRotation, DisplaySize128x64, I2CInterface};

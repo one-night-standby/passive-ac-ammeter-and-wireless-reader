@@ -78,7 +78,12 @@ pub fn cal_for(range: Range) -> &'static [(f32, f32)] {
 /// so an uncalibrated build still reads approximately right on every step.
 /// Fitted at one point, at x4; other steps are extrapolated by the nominal
 /// ratio, which is precisely the approximation the tables exist to replace.
-pub const CAL_FALLBACK_A_PER_LSB: f32 = 0.003433733774564919;
+///
+/// Written to the shortest decimal that round-trips through f32. The bench
+/// fit produced 0.003433733774564919, but f32 stores 0.0034337337128818035
+/// either way -- the extra digits were never in the binary, only in the
+/// source, where they implied a precision this constant does not have.
+pub const CAL_FALLBACK_A_PER_LSB: f32 = 0.0034337337;
 
 pub const CAL_FALLBACK_GAIN: f32 = 4.0;
 
@@ -91,10 +96,15 @@ pub const CAL_FALLBACK_GAIN: f32 = 4.0;
 pub const fn cal_strictly_ascending(cal: &[(f32, f32)]) -> bool {
     let mut i = 1;
     while i < cal.len() {
-        if !(cal[i].0 > cal[i - 1].0) || !(cal[i].1 > cal[i - 1].1) {
+        // Phrased as the positive condition rather than a negated one so that
+        // NaN rejection is visible instead of incidental: every comparison
+        // against NaN is false, so a NaN in either column fails this `&&` and
+        // falls to the `else`.
+        if cal[i].0 > cal[i - 1].0 && cal[i].1 > cal[i - 1].1 {
+            i += 1;
+        } else {
             return false;
         }
-        i += 1;
     }
     true
 }
