@@ -8,6 +8,10 @@ import android.graphics.Paint;
 import android.graphics.Path;
 import android.graphics.RectF;
 import android.graphics.Typeface;
+import android.media.AudioAttributes;
+import android.media.Ringtone;
+import android.media.RingtoneManager;
+import android.net.Uri;
 import android.os.SystemClock;
 import android.os.VibrationEffect;
 import android.os.Vibrator;
@@ -51,6 +55,7 @@ public final class MeterDashboardView extends View {
     private static final long SILENT_MS = 1500;               // 连续无帧判为不再报数
     private static final long STORE_MS = 700;                 // 读条时长:一定走完
     private static final long ALERT_MS = 2200;                // 状态变化后的短暂提示
+    private static final long ALARM_RING_COOLDOWN_MS = 10_000; // 同一地址的响铃/震动冷却
     private static final int PAGE_SIZE = 6;
     private static final int CAP = MeterDatabase.MAX_STORED_READINGS;
     private static final String BLANK = "-.---";
@@ -209,6 +214,8 @@ public final class MeterDashboardView extends View {
     private boolean firstLoad = true;
     private boolean expectCaptureRefresh;
     private final Live[] live = new Live[SLOTS];
+    private final long[] alarmMuteUntil = new long[SLOTS];
+    private Ringtone alarmRingtone;
     private final List<Row> rows = new ArrayList<>();
     private boolean connectionError;
     private String connectionDetail = "正在连接 HC-42…";
@@ -424,6 +431,10 @@ public final class MeterDashboardView extends View {
             String st = m.silent ? MeterReading.OFFLINE : classifyStatus(m.frameMa);
             if (m.status != null && !m.status.equals(st)) {
                 m.alertUntil = now + ALERT_MS;                 // 只有变了才提示
+                // 报警走跳变沿:进入低限/超限才震动+振铃;离线只做视觉指示
+                if (MeterReading.LOW.equals(st) || MeterReading.HIGH.equals(st)) {
+                    alarmFeedback(i, now);
+                }
             }
             m.status = st;
         }
@@ -949,14 +960,44 @@ public final class MeterDashboardView extends View {
     }
 
     private void vibrate() {
+        vibrateEffect(VibrationEffect.createOneShot(8, VibrationEffect.DEFAULT_AMPLITUDE));
+    }
+
+    private void vibrateEffect(VibrationEffect effect) {
         Vibrator v = (Vibrator) getContext().getSystemService(Context.VIBRATOR_SERVICE);
         if (v == null) {
             return;
         }
         try {
-            v.vibrate(VibrationEffect.createOneShot(8, VibrationEffect.DEFAULT_AMPLITUDE));
+            v.vibrate(effect);
         } catch (Exception ignored) {
             // 没有振动权限或马达,静默跳过
+        }
+    }
+
+    /** 进入报警的沿:震动两下 + 响一声系统铃(走闹钟音量,静音通知也听得见)。 */
+    private void alarmFeedback(int addr, long now) {
+        if (now < alarmMuteUntil[addr]) {
+            return;                                            // 阈值附近游走的表,别把铃打成连发
+        }
+        alarmMuteUntil[addr] = now + ALARM_RING_COOLDOWN_MS;
+        vibrateEffect(VibrationEffect.createWaveform(new long[]{0, 120, 80, 120}, -1));
+        try {
+            if (alarmRingtone == null) {
+                Uri uri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION);
+                alarmRingtone = RingtoneManager.getRingtone(getContext(), uri);
+                if (alarmRingtone != null) {
+                    alarmRingtone.setAudioAttributes(new AudioAttributes.Builder()
+                            .setUsage(AudioAttributes.USAGE_ALARM)
+                            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                            .build());
+                }
+            }
+            if (alarmRingtone != null) {
+                alarmRingtone.play();
+            }
+        } catch (Exception ignored) {
+            // 没有可用铃声也不影响视觉报警
         }
     }
 
