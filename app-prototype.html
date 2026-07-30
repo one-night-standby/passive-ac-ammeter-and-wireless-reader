@@ -1,3391 +1,1370 @@
 <!doctype html>
-<html lang="en">
+<html lang="zh-CN">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="referrer" content="no-referrer">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; style-src 'unsafe-inline' blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; img-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; font-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; media-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; worker-src blob:; connect-src blob: data:; frame-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
-<title>Current Guard App</title>
-<style>:root{color-scheme:light dark;background:light-dark(rgb(255 255 255), rgb(24 24 24))}html,body{margin:0}body{box-sizing:border-box;padding:1rem;background:inherit}iframe{display:block;width:100%;height:calc(100vh - 2rem);margin:0 auto;border:0}</style>
-</head>
-<body>
-<iframe sandbox="allow-scripts" referrerpolicy="no-referrer" title="Current Guard App" srcdoc="&lt;!doctype html&gt;
-&lt;html lang=&quot;en&quot;&gt;
-&lt;head&gt;
-&lt;meta charset=&quot;utf-8&quot;&gt;
-&lt;meta name=&quot;viewport&quot; content=&quot;width=device-width, initial-scale=1&quot;&gt;
-&lt;meta name=&quot;referrer&quot; content=&quot;no-referrer&quot;&gt;
-&lt;meta http-equiv=&quot;Content-Security-Policy&quot; content=&quot;default-src &#x27;none&#x27;; script-src &#x27;unsafe-inline&#x27; &#x27;unsafe-eval&#x27; &#x27;wasm-unsafe-eval&#x27; blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; style-src &#x27;unsafe-inline&#x27; blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; img-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; font-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; media-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; worker-src blob:; connect-src blob: data:; frame-src &#x27;none&#x27;; object-src &#x27;none&#x27;; base-uri &#x27;none&#x27;; form-action &#x27;none&#x27;&quot;&gt;
-&lt;title&gt;Current Guard App&lt;/title&gt;
-&lt;style&gt;:root {
-  color-scheme: light dark;
-  background-color: var(
-    --background,
-    var(--color-background-primary, light-dark(rgb(255 255 255), rgb(24 24 24)))
-  ) !important;
+<title>无线读表器 · 横屏原型</title>
+<style>
+/* ─────────────────────────────────────────────────────────────
+   B 题 无线读表器 —— 横屏界面原型
+   左：16 位地址转盘（4 位编码开关的全部取值）。帧一直在流，但只有按下
+       才收下一帧并存档 —— 和固件/App 的真实语义一致。
+   右：可缩放的趋势图 + 分页的完整记录
+   单文件，无外部依赖。数据为本地模拟，帧率与固件一致（约 3.8 帧/秒）。
+   ───────────────────────────────────────────────────────────── */
 
-  /* Agent-facing contract; keep in sync with SKILL.md. */
-  --background: var(
-    --color-background-primary,
-    light-dark(rgb(255 255 255), rgb(24 24 24))
-  );
-  --foreground: var(
-    --color-text-primary,
-    light-dark(rgb(26 28 31), rgb(255 255 255))
-  );
-  --card: color-mix(in oklab, var(--foreground) 5%, transparent);
-  --card-foreground: var(
-    --color-text-primary,
-    light-dark(rgb(26 28 31), rgb(255 255 255))
-  );
-  --popover: var(
-    --color-background-secondary,
-    light-dark(rgb(255 255 255), rgb(45 45 45))
-  );
-  --popover-foreground: var(
-    --color-text-primary,
-    light-dark(rgb(26 28 31), rgb(255 255 255))
-  );
-  --primary: var(
-    --color-text-info,
-    light-dark(rgb(51 156 255), rgb(131 195 255))
-  );
-  --primary-foreground: var(
-    --color-text-inverse,
-    light-dark(rgb(255 255 255), rgb(13 13 13))
-  );
-  --secondary: var(
-    --color-background-secondary,
-    light-dark(rgb(255 255 255 / 96%), rgb(54 54 54 / 96%))
-  );
-  --secondary-foreground: var(
-    --color-text-primary,
-    light-dark(rgb(26 28 31), rgb(255 255 255))
-  );
-  --muted: color-mix(in srgb, var(--foreground) 10%, transparent);
-  --muted-foreground: var(
-    --color-text-secondary,
-    light-dark(rgb(26 28 31 / 49.4%), rgb(255 255 255 / 49.8%))
-  );
-  --accent: var(
-    --color-background-info,
-    light-dark(rgb(229 242 255), rgb(13 39 63))
-  );
-  --accent-foreground: var(
-    --color-text-info,
-    light-dark(rgb(51 156 255), rgb(131 195 255))
-  );
-  --destructive: var(
-    --color-text-warning,
-    light-dark(rgb(226 85 7), rgb(255 133 73))
-  );
-  --border: var(
-    --color-border-secondary,
-    light-dark(rgb(26 28 31 / 8%), rgb(255 255 255 / 8.2%))
-  );
-  --input: var(
-    --color-border-primary,
-    light-dark(
-      rgb(26 28 31 / 11.8%),
-      color-mix(in oklab, rgb(0 0 0) 10%, transparent)
-    )
-  );
-  --ring: var(
-    --color-ring-primary,
-    light-dark(rgb(51 156 255), rgb(131 195 255 / 76%))
-  );
-  --font-size-base: var(--font-text-md-size, 14px);
-  --red: light-dark(rgb(186 38 35), rgb(250 66 62));
-  --green: light-dark(rgb(0 162 64), rgb(64 201 119));
-  --viz-series-1: var(--primary);
-  --viz-series-2: light-dark(rgb(243 136 59), rgb(245 154 86));
-  --viz-series-3: light-dark(rgb(93 201 119), rgb(116 213 139));
-  --viz-series-4: light-dark(rgb(235 119 177), rgb(240 143 192));
-  --viz-series-5: light-dark(rgb(155 121 236), rgb(170 145 239));
-  --viz-series-6: light-dark(rgb(58 185 177), rgb(90 203 194));
+*, *::before, *::after { box-sizing: border-box; }
 
-  /* Internal implementation variables; not part of the agent contract. */
-  --font-sans: -apple-system, system-ui, &quot;Segoe UI&quot;, sans-serif;
-  --font-mono:
-    ui-monospace, SFMono-Regular, &quot;SF Mono&quot;, Menlo, Consolas, &quot;Liberation Mono&quot;,
-    monospace;
-  --font-size-normal: max(11px, var(--font-size-base));
-  --font-size-tooltip: calc(var(--font-size-base) - 1px);
-  --font-size-small: max(11px, calc(var(--font-size-base) - 2px));
-  --font-size-h1: calc(var(--font-size-normal) * 1.7142857143);
-  --font-size-h2: calc(var(--font-size-normal) * 1.4285714286);
-  --font-size-h3: calc(var(--font-size-normal) * 1.2857142857);
-  --font-weight-normal: 430;
-  --font-weight-medium: 500;
-  --line-height-normal: calc(var(--font-size-normal) * 1.5);
-  --line-height-tooltip: calc(var(--font-size-tooltip) * 1.4285714286);
-  --line-height-small: calc(var(--font-size-small) + 4px);
-  --radius: var(--border-radius-lg, 12.5px);
-  --radius-sm: calc(var(--radius) * 0.6);
-  --radius-md: calc(var(--radius) * 0.8);
-  --radius-lg: var(--radius);
-  --radius-2xl: calc(var(--radius) * 1.6);
-  --radius-full: 9999px;
-  --shadow-sm: 0 1px 2px -1px rgb(0 0 0 / 8%);
-  --checkmark-image: url(&quot;data:image/svg+xml,%3Csvg xmlns=&#x27;http://www.w3.org/2000/svg&#x27; viewBox=&#x27;0 0 17 17&#x27;%3E%3Cpath d=&#x27;M12.8961 3.64101C13.1297 3.41418 13.4984 3.37523 13.7779 3.56581C14.0571 3.75635 14.1554 4.11331 14.0299 4.41347L13.9615 4.53847L7.71151 13.7045C7.59411 13.8767 7.4063 13.9877 7.19881 14.0072C6.99136 14.0267 6.78564 13.9533 6.63826 13.806L2.88826 10.056L2.79842 9.9457C2.6192 9.67407 2.64927 9.30496 2.88826 9.06581C3.12738 8.82669 3.49647 8.79676 3.76815 8.97597L3.8785 9.06581L7.03084 12.2182L12.8053 3.74941L12.8961 3.64101Z&#x27;/%3E%3C/svg%3E&quot;);
-
-  /* Legacy aliases; not part of the current agent contract. */
-  --viz-bg: transparent;
-  --viz-panel: var(--card);
-  --viz-border: var(--border);
-  --viz-text: var(--foreground);
-  --viz-muted: var(--muted-foreground);
-  --viz-accent: var(--primary);
-  --viz-accent-text: var(--primary-foreground);
-  --viz-accent-bg: var(--accent);
-  --viz-font-size: var(--font-size-base);
-  --viz-warning: var(--destructive);
-}
-
-:root[data-theme=&quot;light&quot;] {
+:root {
   color-scheme: light;
+  --page:    #e8ecf2;
+  --frame:   #ffffff;
+  --surface: #ffffff;
+  --sunken:  #f1f4f9;
+  --ink:     #131922;
+  --ink-2:   rgba(19, 25, 34, .58);
+  --ink-3:   rgba(19, 25, 34, .34);
+  --line:    rgba(19, 25, 34, .10);
+  --line-2:  rgba(19, 25, 34, .16);
+  --accent:  #1f6feb;
+  --ease:    cubic-bezier(.22, 1, .36, 1);
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+          "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
 }
 
-:root[data-theme=&quot;dark&quot;] {
-  color-scheme: dark;
+html, body { margin: 0; min-height: 100%; }
+body {
+  font-family: var(--font);
+  background: var(--page);
+  color: var(--ink);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  padding: 26px 16px 40px;
 }
 
-* {
-  box-sizing: border-box;
+.stage { display: flex; flex-direction: column; align-items: center; gap: 26px; }
+.fitter { transform-origin: top center; }
+
+/* ── 横屏机身 ── */
+.device {
+  position: relative;
+  width: 980px;
+  height: 462px;
+  display: flex;
+  flex-direction: column;
+  background: var(--frame);
+  border: 1px solid var(--line-2);
+  border-radius: 30px;
+  overflow: hidden;
+  box-shadow: 0 26px 60px -22px rgba(10, 16, 26, .38);
 }
 
-html &gt; body {
-  /* Preserve MCP aliases for older inline renderers without creating :root cycles. */
-  --color-background-primary: var(
-    --background,
-    light-dark(rgb(255 255 255), rgb(24 24 24))
-  );
-  --color-text-primary: var(
-    --foreground,
-    light-dark(rgb(26 28 31), rgb(255 255 255))
-  );
-  --color-border-secondary: var(
-    --border,
-    light-dark(rgb(26 28 31 / 8%), rgb(255 255 255 / 8.2%))
-  );
-
-  margin: 0;
-  padding: 5px;
-  color: var(--foreground);
-  background: transparent !important;
-  font-family: var(--font-sans);
-  font-size: var(--font-size-normal);
-  font-weight: var(--font-weight-normal);
-  line-height: var(--line-height-normal);
-}
-
-a {
-  color: color-mix(in srgb, var(--viz-accent) 80%, var(--viz-text) 20%);
-  cursor: pointer;
-  font-weight: var(--font-weight-medium, 500);
-  text-decoration: none;
-  text-underline-offset: 2px;
-}
-
-a:is(:hover, :focus-visible) {
-  text-decoration-line: underline;
-  text-decoration-style: dashed;
-  text-decoration-thickness: 0.5px;
-}
-
-h1,
-h2,
-h3,
-h4,
-h5,
-h6,
-p {
-  margin-block: 0;
-}
-
-h1 {
-  font-size: var(--font-size-h1);
-  font-weight: var(--font-weight-medium);
-  line-height: 1.25;
-}
-
-h2 {
-  font-size: var(--font-size-h2);
-  font-weight: var(--font-weight-medium);
-  line-height: 1.25;
-}
-
-h3,
-h4,
-h5,
-h6 {
-  font-size: var(--font-size-h3);
-  font-weight: var(--font-weight-medium);
-  line-height: 1.3;
-}
-
-b,
-strong,
-th {
-  font-weight: var(--font-weight-medium);
-}
-
-code:not(pre code) {
-  display: inline;
-  padding: 1px 6px;
-  border-radius: var(--radius-sm);
-  corner-shape: superellipse(1.5);
-  background: var(--muted);
-  font-family: var(--font-mono);
-  font-size: 0.92em;
-  overflow-wrap: anywhere;
-  -webkit-box-decoration-break: clone;
-  box-decoration-break: clone;
-  word-break: break-word;
-}
-
-.table-responsive {
-  width: 100%;
-  overflow-x: auto;
-  scrollbar-width: thin;
-}
-
-.table {
-  width: 100%;
-  border-collapse: collapse;
-  color: var(--foreground);
-  font: inherit;
-  text-align: start;
-}
-
-.table :is(th, td) {
-  padding-block: 10px;
-  padding-inline: 0 24px;
-  overflow-wrap: anywhere;
-  border-bottom: 1px solid var(--border);
-  text-align: start;
-  vertical-align: top;
-}
-
-.table-responsive &gt; .table :is(th, td) {
-  overflow-wrap: break-word;
-}
-
-.table :is(th, td):last-child {
-  padding-inline-end: 0;
-}
-
-.table :is(caption, thead th) {
-  font-weight: 600;
-}
-
-.table thead th {
-  padding-block: 8px;
-  border-bottom-color: color-mix(in srgb, var(--foreground) 16%, transparent);
-}
-
-.table tbody tr:last-child :is(th, td) {
-  border-bottom: 0;
-}
-
-.table.table-sm :is(th, td) {
-  padding-block: 6px;
-}
-
-.table.table-sm :is(th, td):not(:last-child) {
-  padding-inline-end: 16px;
-}
-
-.table :is(.text-end, [align=&quot;right&quot;]) {
-  text-align: end;
+.statusbar {
+  flex: none;
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 9px 26px 5px;
+  font-size: 11.5px; color: var(--ink-2);
   font-variant-numeric: tabular-nums;
 }
+.sb-left, .sb-right { display: flex; align-items: center; gap: 8px; }
+.stream-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); flex: none; }
+.batt { width: 19px; height: 9px; border: 1px solid currentColor; border-radius: 3px; padding: 1.5px; position: relative; }
+.batt::after { content: ""; position: absolute; right: -3px; top: 2.5px; width: 2px; height: 4px; background: currentColor; border-radius: 0 2px 2px 0; }
+.batt i { display: block; height: 100%; width: 74%; background: currentColor; border-radius: 1px; }
 
-.table :is(.text-center, [align=&quot;center&quot;]) {
-  text-align: center;
-}
+.board { flex: 1; display: flex; min-height: 0; padding: 0 20px 16px; gap: 20px; }
 
-.table .text-nowrap {
-  white-space: nowrap;
-}
+/* ── 左：转盘 ── */
+.left { flex: none; width: 392px; display: flex; flex-direction: column; align-items: center; }
 
-#widget {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  width: 100%;
-  padding: 0;
-  background: transparent !important;
-}
-
-.card {
-  min-width: 0;
-  padding: 12px;
-  overflow: hidden;
-  overflow-wrap: break-word;
-  border-radius: var(--radius-2xl);
-  corner-shape: superellipse(1.5);
-  color: var(--card-foreground);
-  background: var(--card);
-}
-
-#widget &gt; :not(.card) {
-  width: 100% !important;
-  max-width: none !important;
-  margin: 0 !important;
-  padding: 0 !important;
-  border: 0 !important;
-  border-radius: 0 !important;
-  background: transparent !important;
-  box-shadow: none !important;
-}
-
-.tooltip {
-  position: fixed;
-  z-index: 50;
-  top: 0;
-  left: 0;
-  width: max-content;
-  max-width: min(
-    20rem,
-    var(--tooltip-available-width, calc(100vw - 10px)),
-    calc(100vw - 10px)
-  );
-  max-height: min(
-    var(--tooltip-available-height, calc(100vh - 10px)),
-    calc(100vh - 10px)
-  );
-  padding: 4px 8px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  corner-shape: superellipse(1.5);
-  color: var(--popover-foreground);
-  background: var(--popover);
-  box-shadow: none;
-  font-size: var(--font-size-tooltip);
-  line-height: var(--line-height-tooltip);
-  overflow-wrap: break-word;
-  white-space: normal;
-  pointer-events: none;
-  user-select: none;
-}
-
-.viz-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(max(180px, 24%), 1fr));
-  gap: 10px;
-}
-
-.viz-stat {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.viz-stat-value {
-  font-size: var(--font-size-h2);
-  font-weight: var(--font-weight-medium);
-  line-height: 1.25;
-}
-
-.viz-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 10px;
-}
-
-.viz-badge {
-  padding: 3px 8px;
-  border-radius: var(--radius-full);
-  color: var(--accent-foreground);
-  background: var(--accent);
-  font-weight: var(--font-weight-medium);
-}
-
-small,
-.text-small,
-.viz-badge {
-  font-size: var(--font-size-small);
-  line-height: var(--line-height-small);
-}
-
-.text-muted {
-  color: var(--muted-foreground);
-}
-
-.sr-only {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-  border: 0;
-}
-
-.viz-controls {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-}
-
-.viz-controls &gt; .form-label {
-  display: grid;
-  min-width: min(100%, 260px);
-  flex: 1 1 280px;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: baseline;
-  gap: 2px 12px;
-  margin-bottom: 0;
-}
-
-.viz-controls &gt; .form-label &gt; :is(.form-control, .form-range, .form-select) {
-  grid-column: 1 / -1;
-}
-
-.btn,
-.form-check-input,
-.form-control,
-.form-range,
-.form-select {
-  font: inherit;
-}
-
-.btn {
-  appearance: button;
-  display: inline-flex;
-  inline-size: fit-content;
-  max-inline-size: 100%;
-  min-height: 28px;
-  align-items: center;
-  justify-content: center;
-  gap: 4px;
-  margin: 0;
-  padding: 0 8px;
-  -webkit-app-region: no-drag;
-  border: 1px solid var(--input);
-  border-radius: var(--radius-lg);
-  corner-shape: superellipse(1.5);
-  color: var(--secondary-foreground);
-  background: var(--secondary);
-  cursor: var(--cursor-interaction, pointer);
-  text-align: center;
-  text-decoration: none;
-  white-space: nowrap;
-  user-select: none;
-  -webkit-font-smoothing: antialiased;
-}
-
-.btn:is(.btn-block, .viz-tile) {
-  inline-size: 100%;
-}
-
-.btn.viz-tile {
-  min-width: 0;
-  overflow-wrap: anywhere;
-  white-space: normal;
-}
-
-a.btn {
-  cursor: pointer;
-  text-decoration: none;
-}
-
-.btn:not(:disabled):hover {
-  background: color-mix(in srgb, var(--foreground) 6%, var(--secondary));
-}
-
-.btn-primary {
-  border-color: transparent;
-  color: var(--primary-foreground);
-  background: var(--foreground);
-  background-clip: padding-box;
-}
-
-.btn-primary .text-muted {
-  color: color-mix(in srgb, var(--primary-foreground) 50%, transparent);
-}
-
-.btn-primary:not(:disabled):hover {
-  background: color-mix(in srgb, var(--foreground) 80%, transparent);
-  background-clip: padding-box;
-}
-
-.btn-ghost {
-  border-color: transparent;
-  color: var(--muted-foreground);
-  background: transparent;
-}
-
-.btn-ghost:not(:disabled):hover {
-  color: var(--foreground);
-  background: color-mix(in srgb, var(--foreground) 6%, var(--secondary));
-}
-
-.btn:disabled {
-  cursor: not-allowed;
-  opacity: 0.4;
-}
-
-[data-lucide] {
-  stroke-width: 1.6;
-}
-
-.form-label {
-  display: block;
-  margin-bottom: 6px;
-  color: var(--foreground);
-}
-
-.form-control {
-  display: block;
-  width: 100%;
-  min-height: 28px;
-  padding: 0 8px;
-  outline: none;
-  border: 1px solid var(--input);
-  border-radius: var(--radius-lg);
-  corner-shape: superellipse(1.5);
-  color: var(--foreground);
-  background: var(--secondary);
-}
-
-.form-control::placeholder {
-  color: var(--muted-foreground);
-}
-
-.form-control[type=&quot;file&quot;] {
-  padding: 0;
-  overflow: hidden;
-  cursor: var(--cursor-interaction, pointer);
-}
-
-.form-control[type=&quot;file&quot;]::file-selector-button {
-  min-height: 26px;
-  margin-right: 8px;
-  padding: 0 8px;
-  border: 0;
-  border-right: 1px solid var(--input);
-  color: var(--secondary-foreground);
-  background: var(--secondary);
-  cursor: inherit;
-  font: inherit;
-}
-
-.form-control[type=&quot;file&quot;]:not(:disabled):hover::file-selector-button {
-  background: color-mix(in srgb, var(--foreground) 6%, var(--secondary));
-}
-
-.form-control-color[type=&quot;color&quot;] {
-  width: 40px;
-  height: 28px;
-  padding: 3px;
-  cursor: var(--cursor-interaction, pointer);
-}
-
-.form-control-color[type=&quot;color&quot;]::-webkit-color-swatch-wrapper {
-  padding: 0;
-}
-
-.form-control-color[type=&quot;color&quot;]::-webkit-color-swatch {
-  border: 0;
-  border-radius: calc(var(--radius-lg) - 4px);
-  corner-shape: superellipse(1.5);
-}
-
-textarea.form-control {
-  height: auto;
-  min-height: 72px;
-  padding: 8px 10px;
-  resize: vertical;
-}
-
-.form-control:focus-visible {
-  border-color: var(--ring);
-  box-shadow: inset 0 0 0 1px var(--ring);
-}
-
-.form-control:disabled,
-.form-select:disabled {
-  cursor: not-allowed;
-  opacity: 0.4;
-}
-
-.form-select {
-  appearance: none;
-  display: block;
-  width: 100%;
-  min-height: 28px;
-  margin: 0;
-  padding: 0 32px 0 8px;
-  outline: none;
-  border: 1px solid var(--input);
-  border-radius: var(--radius-lg);
-  corner-shape: superellipse(1.5);
-  color: var(--foreground);
-  background-color: var(--secondary);
-  background-image:
-    linear-gradient(45deg, transparent 50%, var(--muted-foreground) 50%),
-    linear-gradient(135deg, var(--muted-foreground) 50%, transparent 50%);
-  background-position:
-    calc(100% - 14px) 50%,
-    calc(100% - 10px) 50%;
-  background-repeat: no-repeat;
-  background-size: 4px 4px;
-  cursor: var(--cursor-interaction, default);
-}
-
-.form-select:not(:disabled):hover {
-  background-color: color-mix(in srgb, var(--foreground) 6%, var(--secondary));
-}
-
-.form-select:focus-visible {
-  border-color: var(--ring);
-  box-shadow: inset 0 0 0 1px var(--ring);
-}
-
-.form-check {
-  display: flex;
-  min-height: 20px;
-  align-items: center;
-  gap: 6px;
-}
-
-.form-check-input {
-  appearance: none;
-  width: 14px;
-  height: 14px;
-  flex: 0 0 auto;
-  margin: 0;
-  border: 1px solid var(--input);
-  color: var(--primary-foreground);
-  background-color: transparent;
-  cursor: var(--cursor-interaction, default);
-  transition:
-    background-color 150ms,
-    border-color 150ms,
-    box-shadow 150ms;
-}
-
-.form-check:not(.form-switch) .form-check-input[type=&quot;checkbox&quot;] {
-  border-color: var(--input);
-  border-radius: var(--radius-sm);
-  corner-shape: superellipse(1.5);
-  background-color: var(--secondary);
-  box-shadow: var(--shadow-sm);
-}
-
-.form-check:not(.form-switch)
-  .form-check-input:not(:disabled):not(:checked):hover {
-  background-color: var(--card);
-}
-
-.form-check:not(.form-switch) .form-check-input[type=&quot;checkbox&quot;]:checked {
-  border-color: var(--primary);
-  background-color: var(--primary);
-}
-
-.form-check:not(.form-switch)
-  .form-check-input[type=&quot;checkbox&quot;]:checked::before {
-  display: block;
-  width: 100%;
-  height: 100%;
-  background: var(--primary-foreground);
-  content: &quot;&quot;;
-  mask: var(--checkmark-image) center / 12px 12px no-repeat;
-}
-
-.form-check-input[type=&quot;radio&quot;] {
-  width: 14px;
-  height: 14px;
-  border-radius: var(--radius-full);
-}
-
-.form-check-input[type=&quot;radio&quot;]:checked {
-  border: 2px solid var(--primary);
-  background:
-    radial-gradient(circle, var(--primary-foreground) 0 2.5px, transparent 3px),
-    var(--primary);
-}
-
-.form-check:not(.form-switch) .form-check-input:focus-visible {
-  outline: 2px solid var(--ring);
-  outline-offset: 2px;
-}
-
-.form-check:not(.form-switch) .form-check-input:disabled {
-  cursor: not-allowed;
-  pointer-events: none;
-}
-
-.form-check:not(.form-switch) .form-check-input:disabled + .form-check-label {
-  cursor: not-allowed;
-}
-
-.form-switch .form-check-input:disabled,
-.form-switch .form-check-input:disabled + .form-check-label {
-  cursor: not-allowed;
-  opacity: 0.6;
-}
-
-.form-check-label {
-  color: var(--foreground);
-  cursor: var(--cursor-interaction, default);
-}
-
-.form-switch .form-check-input {
+.dial {
   position: relative;
-  width: 32px;
-  height: 20px;
-  border: 0;
-  border-radius: var(--radius-full);
-  background: var(--muted);
-  box-shadow: none;
-  transition: background-color 200ms cubic-bezier(0, 0, 0.2, 1);
+  width: 366px; height: 366px;
+  flex: none;
+  touch-action: none;
+  cursor: grab;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.dial.is-drag { cursor: grabbing; }
+
+.dial-svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; }
+.ring-track { fill: none; stroke: var(--line); stroke-width: 1; }
+.count-track { fill: none; stroke: var(--sunken); stroke-width: 8; }
+.count-arc { fill: none; stroke-width: 8; stroke-linecap: butt; }
+.sweep-arc { fill: none; stroke-width: 8; stroke-linecap: round; stroke: var(--accent); }
+.marker { stroke: var(--ink-3); stroke-width: 2; stroke-linecap: round; }
+
+/* 槽位 */
+.slot {
+  position: absolute; left: 50%; top: 50%;
+  width: 56px; margin: -18px 0 0 -28px;
+  padding: 4px 6px 5px;
+  border: 0; background: none; font: inherit; color: inherit;
+  border-radius: 10px;
+  will-change: transform;
+  text-align: center;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.slot-head { display: flex; align-items: center; justify-content: center; gap: 4px; }
+.slot-dot { width: 5px; height: 5px; border-radius: 50%; flex: none; background: currentColor; will-change: transform, opacity; }
+.slot-id { font: 600 12px/1.1 var(--mono); letter-spacing: .04em; }
+.slot-bar { display: block; height: 3px; margin-top: 4px; border-radius: 2px; background: var(--line); overflow: hidden; }
+.slot-bar i { display: block; height: 100%; width: 0; border-radius: 2px; background: currentColor; transition: width .32s var(--ease); }
+.slot.is-empty { color: var(--ink-3); }
+.slot.is-empty .slot-dot { background: none; box-shadow: inset 0 0 0 1px currentColor; }
+.slot.is-empty .slot-bar { visibility: hidden; }
+.slot.is-off { color: #8a94a3; }
+.slot.is-sel { background: var(--sunken); box-shadow: 0 0 0 1px var(--line-2); }
+
+/* 中心 */
+.hub {
+  position: absolute; left: 50%; top: 50%;
+  width: 176px; height: 176px; margin: -88px 0 0 -88px;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 2px;
+  border: 0; border-radius: 50%;
+  background: var(--surface);
+  box-shadow: 0 0 0 1px var(--line), 0 8px 22px -12px rgba(10, 16, 26, .3);
+  font: inherit; color: inherit; cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.hub:active { transform: scale(.985); }
+.hub-addr { font: 600 13px/1 var(--mono); color: var(--ink-3); letter-spacing: .1em; }
+.hub-line { display: flex; align-items: baseline; gap: 4px; margin: 3px 0 1px; }
+.hub-value { font-size: 40px; font-weight: 600; line-height: 1; letter-spacing: -.04em; font-variant-numeric: tabular-nums; }
+.hub-unit { font-size: 15px; font-weight: 500; color: var(--ink-3); }
+.hub-state { font-size: 12px; font-weight: 600; }
+.hub-sub { font: 10.5px/1.2 var(--mono); color: var(--ink-3); }
+
+/* 里程表式数字：所有位同速滚动 */
+.odo { display: inline-flex; align-items: baseline; height: 1em; }
+.odo-win { position: relative; display: inline-block; width: .60em; height: 1em; overflow: hidden; flex: none; }
+.odo-track { position: absolute; left: 0; top: 0; width: 100%; will-change: transform; }
+.odo-face { display: block; height: 1em; line-height: 1; text-align: center; }
+.odo-dot { display: inline-block; width: .24em; text-align: center; flex: none; }
+.odo-dash { display: inline-block; width: .44em; text-align: center; flex: none; }
+
+.left-foot { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; gap: 12px; padding-top: 2px; }
+
+/* 采集模式开关 */
+.mode-toggle {
+  position: relative; display: flex; flex: none;
+  padding: 3px; border-radius: 999px; background: var(--sunken);
+}
+.mode-ind {
+  position: absolute; top: 3px; bottom: 3px; left: 3px; width: calc(50% - 3px);
+  border-radius: 999px; background: var(--surface);
+  box-shadow: 0 1px 3px rgba(10, 16, 26, .14);
+  transition: transform .34s var(--ease);
+}
+.mode-toggle button {
+  position: relative; z-index: 1; width: 58px;
+  font: inherit; font-size: 12.5px; font-weight: 600;
+  padding: 6px 0; border: 0; background: none; cursor: pointer;
+  color: var(--ink-3); border-radius: 999px;
+  transition: color .26s var(--ease);
+}
+.mode-toggle button[aria-pressed="true"] { color: var(--ink); }
+.foot-note { font-size: 11.5px; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+
+/* 测完之后飞到右边、morph 成一条记录 */
+.flyer {
+  position: absolute; z-index: 30;
+  display: flex; align-items: center; justify-content: center; gap: 7px;
+  font-weight: 600; font-variant-numeric: tabular-nums;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  box-shadow: 0 10px 24px -10px rgba(10, 16, 26, .4);
+  pointer-events: none; white-space: nowrap; overflow: hidden;
+}
+.flyer i { font-style: normal; font-size: .72em; opacity: .75; }
+
+/* ── 右：曲线与记录 ── */
+.right { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+
+.right-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; }
+.right-title { font-size: 15px; font-weight: 600; }
+.right-title span { color: var(--ink-3); font-weight: 400; font-size: 12px; margin-left: 6px; }
+.chips { display: flex; gap: 5px; flex: none; }
+.chips button {
+  font: inherit; font-size: 11.5px; padding: 4px 11px; border-radius: 999px;
+  border: 1px solid var(--line-2); background: transparent; color: var(--ink-2);
+  cursor: pointer;
+  transition: background-color .22s var(--ease), color .22s var(--ease), border-color .22s var(--ease);
+}
+.chips button[aria-pressed="true"] { background: var(--ink); border-color: var(--ink); color: var(--frame); }
+
+.chart-card {
+  position: relative;
+  flex: none; height: 156px;
+  border: 1px solid var(--line); border-radius: 16px; background: var(--surface);
+  padding: 8px 10px 4px;
+}
+.chart-wrap { position: relative; width: 100%; height: 100%; touch-action: none; cursor: crosshair; }
+.chart-wrap.is-pan { cursor: grabbing; }
+.chart-svg { display: block; width: 100%; height: 100%; overflow: visible; }
+.chart-svg.fade { animation: chartfade .26s var(--ease); }
+@keyframes chartfade { from { opacity: 0; } to { opacity: 1; } }
+.c-grid { stroke: var(--line); stroke-width: 1; }
+.c-limit { stroke-width: 1; stroke-dasharray: 3 4; }
+.c-band { opacity: .06; }
+.c-line { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.c-dot { stroke-width: 2; }
+.c-txt { font-size: 9px; fill: var(--ink-3); font-family: var(--mono); }
+.c-hint { font-size: 11px; fill: var(--ink-3); font-family: var(--font); }
+.c-cursor { stroke: var(--ink-3); stroke-width: 1; stroke-dasharray: 2 3; }
+
+.readout {
+  position: absolute; z-index: 3;
+  padding: 5px 9px; border-radius: 9px;
+  background: var(--ink); color: var(--frame);
+  font-size: 11px; font-variant-numeric: tabular-nums;
+  white-space: nowrap; pointer-events: none;
+  opacity: 0; transition: opacity .14s var(--ease);
+  transform: translate(-50%, -100%);
+}
+.readout.on { opacity: 1; }
+.zoom-reset {
+  position: absolute; top: 6px; right: 8px; z-index: 4;
+  font: inherit; font-size: 10.5px; color: var(--ink-2);
+  padding: 3px 8px; border-radius: 999px;
+  border: 1px solid var(--line-2); background: var(--surface);
+  cursor: pointer; opacity: 0; pointer-events: none;
+  transition: opacity .2s var(--ease);
+}
+.zoom-reset.on { opacity: 1; pointer-events: auto; }
+
+.log-head {
+  display: flex; align-items: center; justify-content: space-between;
+  font-size: 11.5px; color: var(--ink-3); padding: 0 2px;
+  font-variant-numeric: tabular-nums;
+}
+.pager { display: flex; align-items: center; gap: 4px; }
+.pager button {
+  font: inherit; font-size: 12px; line-height: 1;
+  width: 20px; height: 20px; border-radius: 6px;
+  border: 1px solid var(--line-2); background: var(--surface); color: var(--ink-2);
+  cursor: pointer; padding: 0;
+}
+.pager button:hover:not([disabled]) { background: var(--sunken); color: var(--ink); }
+.pager button[disabled] { opacity: .35; cursor: default; }
+.pager span { min-width: 46px; text-align: center; }
+.log-clear { font: inherit; font-size: 11.5px; color: var(--ink-3); border: 0; background: none; cursor: pointer; padding: 2px 0; }
+.log-clear:hover { color: var(--ink); }
+.log-clear.armed { color: #dc2626; font-weight: 600; }
+
+.log {
+  flex: 1; min-height: 0; overflow: hidden;
+  border: 1px solid var(--line); border-radius: 16px; background: var(--surface);
+}
+.rec {
+  display: flex; align-items: center; gap: 10px;
+  padding: 6px 12px; border-top: 1px solid var(--line);
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+.rec:first-child { border-top: 0; }
+.rec:hover { background: var(--sunken); }
+.rec-t { font: 11.5px/1 var(--mono); color: var(--ink-2); width: 60px; flex: none; }
+.rec-a { font: 600 11.5px/1 var(--mono); color: var(--ink-2); width: 22px; flex: none; }
+.rec-src { font-size: 10.5px; color: var(--ink-3); width: 26px; flex: none; }
+.rec-v { flex: 1; text-align: right; font-size: 13px; font-weight: 600; letter-spacing: -.01em; }
+.rec-s { width: 40px; text-align: right; flex: none; font-size: 10.5px; font-weight: 600; }
+.rec.fresh { animation: recin .5s var(--ease) both; }
+@keyframes recin {
+  0%   { opacity: 0; clip-path: inset(0 0 100% 0); }
+  100% { opacity: 1; clip-path: inset(0 0 0 0); }
+}
+.rec.swap { animation: recswap .3s var(--ease) both; }
+@keyframes recswap {
+  0%   { opacity: 0; transform: translateY(-4px); }
+  100% { opacity: 1; transform: none; }
+}
+.log-empty { padding: 22px 14px; text-align: center; color: var(--ink-3); font-size: 12.5px; }
+
+/* ── 页面注释（不属于 App） ── */
+.notes { width: 980px; max-width: 100%; }
+.notes h2 { font-size: 12px; letter-spacing: .1em; color: var(--ink-3); margin: 0 0 10px; font-weight: 600; }
+.notes ul { margin: 0; padding-left: 18px; columns: 2; column-gap: 34px; }
+.notes li { font-size: 12.5px; color: var(--ink-2); margin-bottom: 7px; line-height: 1.6; }
+.notes b { color: var(--ink); font-weight: 600; }
+
+@media (prefers-reduced-motion: reduce) {
+  .rec, .chart-svg { animation: none !important; }
+}
+</style>
+</head>
+<body>
+
+<div class="stage">
+  <div class="fitter" id="fitter">
+    <div class="device">
+
+      <div class="statusbar">
+        <span class="sb-left">
+          <span class="stream-dot" id="stream-dot"></span>
+          <span id="link-text">HC-42 透传 · 6/6 台在报数</span>
+        </span>
+        <span class="sb-right">
+          <span id="clock">--:--</span>
+          <span class="batt"><i></i></span>
+        </span>
+      </div>
+
+      <div class="board">
+
+        <!-- ═══ 左：16 位地址转盘 ═══ -->
+        <section class="left">
+          <div class="dial" id="dial" tabindex="0" role="slider"
+               aria-label="电流表地址转盘" aria-valuemin="0" aria-valuemax="15" aria-valuenow="1">
+            <svg class="dial-svg" viewBox="0 0 366 366" aria-hidden="true">
+              <circle class="ring-track" cx="183" cy="183" r="168"></circle>
+              <circle class="count-track" cx="183" cy="183" r="104" id="count-track" style="opacity:0"></circle>
+              <path class="count-arc" id="count-arc" style="opacity:0"></path>
+              <path class="sweep-arc" id="sweep-arc" style="opacity:0"></path>
+              <line class="marker" x1="183" y1="1" x2="183" y2="11"></line>
+            </svg>
+            <div id="slots"></div>
+            <button class="hub" id="hub" aria-label="测一次并存档">
+              <span class="hub-addr" id="hub-addr">1</span>
+              <span class="hub-line">
+                <span class="hub-value odo" id="odo"></span>
+                <span class="hub-unit">A</span>
+              </span>
+              <span class="hub-state" id="hub-state">未测量</span>
+              <span class="hub-sub" id="hub-sub">点一下测一次</span>
+            </button>
+          </div>
+
+          <div class="left-foot">
+            <div class="mode-toggle" role="group" aria-label="采集模式">
+              <span class="mode-ind" id="mode-ind"></span>
+              <button type="button" data-mode="manual" aria-pressed="true">手动</button>
+              <button type="button" data-mode="auto" aria-pressed="false">自动</button>
+            </div>
+            <span class="foot-note" id="foot-note">点中心或地址测一次</span>
+          </div>
+        </section>
+
+        <!-- ═══ 右：曲线与记录 ═══ -->
+        <section class="right">
+          <div class="right-head">
+            <div class="right-title"><span id="right-name">01 号表</span><span id="right-sub">电流趋势</span></div>
+            <div class="chips" role="group" aria-label="记录范围">
+              <button type="button" data-scope="one" aria-pressed="true">本表</button>
+              <button type="button" data-scope="all" aria-pressed="false">全部</button>
+            </div>
+          </div>
+
+          <div class="chart-card">
+            <button type="button" class="zoom-reset" id="zoom-reset">复位</button>
+            <div class="chart-wrap" id="chart-wrap">
+              <svg class="chart-svg" id="chart" viewBox="0 0 520 156" preserveAspectRatio="none"></svg>
+              <span class="readout" id="readout"></span>
+            </div>
+          </div>
+
+          <div class="log-head">
+            <span id="log-count">共 0 条</span>
+            <span class="pager">
+              <button type="button" id="prev" aria-label="上一页">‹</button>
+              <span id="page-info">0 / 0</span>
+              <button type="button" id="next" aria-label="下一页">›</button>
+            </span>
+            <button type="button" class="log-clear" id="clear">清空</button>
+          </div>
+          <div class="log" id="log"></div>
+        </section>
+
+      </div>
+    </div>
+  </div>
+
+  <aside class="notes">
+    <h2>怎么读这个界面</h2>
+    <ul>
+      <li><b>16 个槽位就是 4 位编码开关的全部取值</b>，用 0–F 表示（4 位二进制刚好是一个十六进制字符）。拖动可自由滚动、松手按 22.5° 吸附。</li>
+      <li><b>小点跳动 = 那台表正在报数</b>（约 3.8 帧/秒，与固件循环同频）。但<b>收到帧不等于显示</b>——数值只在你按下时才更新，和固件那边「帧一直在发、App 决定收不收」是一回事。</li>
+      <li><b>点地址 = 安静地滚过去 + 收下一帧 + 存档。</b>读数会从中心飞到右侧、落地时 morph 成那条记录，不会凭空出现。表已经不报数了就等到超时，落一条离线记录。</li>
+      <li><b>点中心 = 测一次。</b>模式由下面的开关切换：自动模式下内环从满环开始顺时针走完就把全部表测一轮，手动模式下只在你点的时候测。</li>
+      <li><b>灰色 = 不再报数。</b>无源表掉电和负载断开在这里是同一个现象。只有状态真的变了才闪一下，稳态不抢注意力。</li>
+      <li><b>图表可交互：</b>移动看读数、按住拖动平移、滚轮缩放时间轴、双击复位；点曲线上的点会把转盘转到那台表。记录分页，翻得到每一条。</li>
+    </ul>
+  </aside>
+</div>
+
+<script>
+"use strict";
+
+/* ══════════ 与固件/App 对齐的常量 ══════════ */
+const SLOTS       = 16;                 // 4 位编码开关
+const STEP        = 360 / SLOTS;        // 22.5°
+const LOW_A       = 0.2;                // 低限阈值（ReaderPreferences: 200 mA）
+const HIGH_A      = 2.0;                // 超限阈值（2000 mA）
+const FULL_A      = 2.2;
+const FRAME_MS    = 262;                // 固件一轮：200 ms 采集 + OLED + 52 ms UART
+const SILENT_MS   = 1500;               // 连续无帧判为不再报数
+const READ_WAIT   = 1500;               // 等下一帧的超时（真机是 6 s，原型缩短）
+const PERIOD_S    = 120;                // 自动存档周期
+const CAP         = 1000;               // 与 MeterDatabase.MAX_STORED_READINGS 一致
+const PAGE_SIZE   = 6;
+const ODO_SPEED   = 13;                 // 位/秒，所有位同速
+const ALERT_MS    = 2200;               // 状态变化后提示多久，之后归于安静
+const STORE_KEY   = "nuedc-b-reader-v3";
+
+const COL = {
+  ok:   [ 13, 148, 100],
+  low:  [200, 124,   0],
+  high: [220,  38,  38],
+  off:  [130, 140, 152],
+  idle: [ 19,  25,  34]
+};
+const LABEL = { ok: "正常", low: "低限", high: "超限", off: "离线" };
+
+/* 现场：16 个地址里有 6 台表。02 在低限附近、03 在超限附近游走，
+   12 在第 25 秒负载断开、第 70 秒恢复。 */
+const PRESENT = [
+  { addr: 1,  base: 1.274, swing: 0.05 },
+  { addr: 2,  base: 0.235, swing: 0.09 },
+  { addr: 3,  base: 1.940, swing: 0.13 },
+  { addr: 5,  base: 0.862, swing: 0.06 },
+  { addr: 9,  base: 1.553, swing: 0.07 },
+  { addr: 12, base: 0.418, swing: 0.05, outage: [25, 70] }
+];
+
+/* ══════════ 状态 ══════════ */
+const meters = new Map();
+const state = {
+  angle: 0, vel: 0, dragging: false,
+  snapTarget: null,
+  sel: 1,
+  archiving: false,
+  remain: PERIOD_S,
+  activation: 0,
+  scope: "one",
+  page: 0,
+  records: [],
+  pending: null,                        // { addr, from, deadline, source }
+  bootAt: performance.now()
+};
+
+const $ = (s) => document.querySelector(s);
+const pad2 = (n) => String(n).padStart(2, "0");
+/* 4 位编码开关刚好是一个十六进制字符，0–F 就是全部 16 个取值 */
+const hex1 = (n) => n.toString(16).toUpperCase();
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const lerp = (a, b, t) => a + (b - a) * t;
+const rad = (d) => (d * Math.PI) / 180;
+const norm180 = (d) => ((d + 180) % 360 + 360) % 360 - 180;
+const fmtA = (a) => a.toFixed(3);
+const clockOf = (ts) => {
+  const d = new Date(ts);
+  return pad2(d.getHours()) + ":" + pad2(d.getMinutes()) + ":" + pad2(d.getSeconds());
+};
+const css = (c) => "rgb(" + Math.round(c[0]) + " " + Math.round(c[1]) + " " + Math.round(c[2]) + ")";
+const mixc = (a, b, t) => [lerp(a[0], b[0], t), lerp(a[1], b[1], t), lerp(a[2], b[2], t)];
+const statusColor = (s) => css(COL[s] || COL.off);
+
+for (let i = 0; i < SLOTS; i++) {
+  const spec = PRESENT.find((m) => m.addr === i);
+  meters.set(i, {
+    addr: i,
+    present: Boolean(spec),
+    base: spec ? spec.base : 0,
+    swing: spec ? spec.swing : 0,
+    outage: spec && spec.outage ? spec.outage : null,
+    walk: 0, walkV: 0,
+    nextFrameAt: 0,
+    lastAt: -1e9,                       // 上一帧的 performance 时刻（判静默只用这个钟）
+    frame: null,                        // 最新到达的帧：不显示，只等着被收
+    shown: null,                        // 上次测量收下的值 { amps|null, ts }
+    status: null,                       // 上次测量的判定
+    alertUntil: 0,                      // 状态变化后的短暂提示
+    flash: 0,
+    silent: true
+  });
 }
 
-.form-switch .form-check-input::before {
-  position: absolute;
-  top: 50%;
-  left: 0;
-  width: 16px;
-  height: 16px;
-  box-sizing: border-box;
-  border: 1px solid light-dark(var(--primary-foreground), var(--foreground));
-  border-radius: var(--radius-full);
-  background: light-dark(var(--primary-foreground), var(--foreground));
-  box-shadow: var(--shadow-sm);
-  content: &quot;&quot;;
-  transform: translate(2px, -50%);
-  transition: transform 200ms cubic-bezier(0, 0, 0.2, 1);
+function classify(amps) {
+  if (amps === null) return "off";
+  if (amps < LOW_A) return "low";
+  if (amps > HIGH_A) return "high";
+  return "ok";
 }
 
-.form-switch .form-check-input:checked {
-  background: var(--primary);
+/* 越靠近阈值越暖：报警是穿过阈值的过程，不是到点变色。
+   沿色相走「绿 → 琥珀 → 红」，不在 RGB 里直接插值 —— 绿和红在 RGB 里
+   对插会经过泥浆色，1.9 A 会显示成砖褐色。 */
+const hsl = (h, s, l) => "hsl(" + h.toFixed(0) + " " + s.toFixed(0) + "% " + l.toFixed(0) + "%)";
+function heat(t, toRed) {
+  const stop = toRed ? 0.55 : 1;                        // 低限一侧停在琥珀，不继续往红走
+  if (t <= stop) {
+    const u = stop > 0 ? t / stop : 0;
+    return hsl(lerp(160, 42, u), lerp(84, 100, u), lerp(32, 40, u));
+  }
+  const u = (t - stop) / (1 - stop);
+  return hsl(lerp(42, 0, u), lerp(100, 72, u), lerp(40, 50, u));
+}
+function warmCss(amps) {
+  if (amps === null || amps === undefined) return statusColor("off");
+  const lowP = clamp((LOW_A + 0.16 - amps) / 0.16, 0, 1);
+  const highP = clamp((amps - (HIGH_A - 0.32)) / 0.32, 0, 1);
+  return highP >= lowP ? heat(highP, true) : heat(lowP, false);
 }
 
-.form-switch .form-check-input:checked::before {
-  transform: translate(14px, -50%);
+/* ══════════ 记录 ══════════ */
+function loadRecords() {
+  try {
+    const raw = localStorage.getItem(STORE_KEY);
+    const list = raw ? JSON.parse(raw) : [];
+    return Array.isArray(list) ? list.slice(0, CAP) : [];
+  } catch (e) { return []; }
+}
+function saveRecords() {
+  try { localStorage.setItem(STORE_KEY, JSON.stringify(state.records.slice(0, CAP))); } catch (e) {}
 }
 
-.form-switch .form-check-input:focus-visible {
-  box-shadow: 0 0 0 2px var(--ring);
-}
-
-.form-range {
-  appearance: none;
-  display: block;
-  width: 100%;
-  height: 28px;
-  flex: 1;
-  margin: 0;
-  padding: 0;
-  outline: none;
-  border: 0;
-  accent-color: var(--primary);
-  background: linear-gradient(
-      color-mix(in srgb, var(--foreground) 7%, transparent),
-      color-mix(in srgb, var(--foreground) 7%, transparent)
-    )
-    center / 100% 2px no-repeat;
-}
-
-.form-range::-webkit-slider-runnable-track {
-  height: 28px;
-  background: transparent;
-}
-
-.form-range::-webkit-slider-thumb {
-  appearance: none;
-  width: 20px;
-  height: 20px;
-  margin-top: 4px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-full);
-  background: light-dark(var(--primary-foreground), var(--foreground));
-}
-
-.form-range:focus-visible::-webkit-slider-thumb {
-  border-color: var(--ring);
-  box-shadow: inset 0 0 0 1px var(--ring);
-}
-
-.form-range::-moz-range-track {
-  height: 28px;
-  background: transparent;
-}
-
-.form-range::-moz-range-thumb {
-  width: 20px;
-  height: 20px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-full);
-  background: light-dark(var(--primary-foreground), var(--foreground));
-}
-
-.form-range:focus-visible::-moz-range-thumb {
-  border-color: var(--ring);
-  box-shadow: inset 0 0 0 1px var(--ring);
-}
-
-.form-range:disabled {
-  cursor: not-allowed;
-  opacity: 0.4;
-}
-
-.btn:not(.btn-primary, .viz-tile):is(
-    [aria-pressed=&quot;true&quot;],
-    [aria-selected=&quot;true&quot;],
-    .is-selected
-  ) {
-  border-color: var(--primary);
-  color: var(--primary-foreground);
-  background: var(--primary);
-}
-
-.btn.viz-tile:is([aria-pressed=&quot;true&quot;], [aria-selected=&quot;true&quot;], .is-selected) {
-  border-color: var(--primary);
-  box-shadow: inset 0 0 0 1px var(--primary);
-}
-
-.btn:focus-visible {
-  outline: 2px solid var(--ring);
-  outline-offset: 2px;
-}
-
-svg {
-  display: block;
-  max-width: 100%;
-  height: auto;
-}
-
-#widget &gt; svg {
-  width: 100%;
-}
-
-.text-warning,
-.text-destructive {
-  color: var(--destructive);
-}
-
-html&gt;body{padding:0}&lt;/style&gt;
-&lt;/head&gt;
-&lt;body&gt;
-&lt;style&gt;
-  #current-guard-app {
-    color-scheme: light;
-    --background: #f4f7fb;
-    --foreground: #152033;
-    --card: #ffffff;
-    --card-foreground: #152033;
-    --popover: #ffffff;
-    --popover-foreground: #152033;
-    --primary: #1769e0;
-    --primary-foreground: #ffffff;
-    --secondary: #e9eef6;
-    --secondary-foreground: #24344e;
-    --muted: #e9eef6;
-    --muted-foreground: #617089;
-    --accent: #dceaff;
-    --accent-foreground: #164f9e;
-    --destructive: #d83a4b;
-    --border: #dce3ed;
-    --input: #dce3ed;
-    --ring: #1769e0;
-    --viz-series-1: #1769e0;
-    --viz-series-2: #0f9f76;
-    --app-ink-soft: color-mix(in srgb, var(--foreground) 62%, transparent);
-    --app-ink-faint: color-mix(in srgb, var(--foreground) 38%, transparent);
-    --app-line: color-mix(in srgb, var(--border) 76%, transparent);
-    --app-glow: color-mix(in srgb, var(--viz-series-1) 18%, transparent);
-    --app-series-soft: color-mix(in srgb, var(--viz-series-1) 12%, transparent);
-    --app-danger-soft: color-mix(in srgb, var(--destructive) 13%, transparent);
-    color: var(--foreground);
-    width: 100%;
-  }
-
-  #current-guard-app * {
-    box-sizing: border-box;
-  }
-
-  #current-guard-app .app-frame {
-    width: 100%;
-    max-width: 430px;
-    margin: 0 auto;
-    overflow: hidden;
-    border: 1px solid var(--app-line);
-    border-radius: 30px;
-    background:
-      radial-gradient(circle at 50% 2%, var(--app-glow), transparent 26%),
-      var(--background);
-    box-shadow: 0 24px 80px color-mix(in srgb, var(--foreground) 10%, transparent);
-  }
-
-  #current-guard-app .status-bar,
-  #current-guard-app .topbar,
-  #current-guard-app .connection-line,
-  #current-guard-app .reading-meta,
-  #current-guard-app .section-heading,
-  #current-guard-app .meter-row,
-  #current-guard-app .record-row,
-  #current-guard-app .auto-status,
-  #current-guard-app .bottom-nav,
-  #current-guard-app .mode-switch,
-  #current-guard-app .trend-labels,
-  #current-guard-app .chart-legend {
-    display: flex;
-    align-items: center;
-  }
-
-  #current-guard-app .status-bar {
-    justify-content: space-between;
-    padding: 10px 20px 2px;
-    color: var(--app-ink-soft);
-  }
-
-  #current-guard-app .status-icons {
-    display: flex;
-    align-items: center;
-    gap: 7px;
-  }
-
-  #current-guard-app .signal {
-    display: flex;
-    align-items: end;
-    gap: 2px;
-    height: 12px;
-  }
-
-  #current-guard-app .signal i {
-    display: block;
-    width: 3px;
-    background: currentColor;
-    border-radius: 2px;
-  }
-
-  #current-guard-app .signal i:nth-child(1) { height: 4px; }
-  #current-guard-app .signal i:nth-child(2) { height: 7px; }
-  #current-guard-app .signal i:nth-child(3) { height: 10px; }
-
-  #current-guard-app .battery {
-    width: 21px;
-    height: 10px;
-    border: 1px solid currentColor;
-    border-radius: 3px;
-    padding: 2px;
-    position: relative;
-  }
-
-  #current-guard-app .battery::after {
-    content: &quot;&quot;;
-    position: absolute;
-    right: -3px;
-    top: 3px;
-    width: 2px;
-    height: 4px;
-    background: currentColor;
-    border-radius: 0 2px 2px 0;
-  }
-
-  #current-guard-app .battery-fill {
-    width: 78%;
-    height: 100%;
-    border-radius: 1px;
-    background: currentColor;
-  }
-
-  #current-guard-app .topbar {
-    justify-content: space-between;
-    padding: 14px 20px 12px;
-  }
-
-  #current-guard-app .brand {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-  }
-
-  #current-guard-app .brand-mark {
-    display: grid;
-    place-items: center;
-    width: 34px;
-    height: 34px;
-    border-radius: 12px;
-    color: var(--primary-foreground);
-    background: var(--primary);
-  }
-
-  #current-guard-app .brand h2,
-  #current-guard-app .brand p,
-  #current-guard-app .reading-value,
-  #current-guard-app .reading-unit,
-  #current-guard-app .reading-label,
-  #current-guard-app .meter-row p,
-  #current-guard-app .record-row p,
-  #current-guard-app .auto-status p,
-  #current-guard-app .empty-copy p {
-    margin: 0;
-  }
-
-  #current-guard-app .brand p,
-  #current-guard-app .reading-label,
-  #current-guard-app .muted,
-  #current-guard-app .trend-labels,
-  #current-guard-app .chart-legend,
-  #current-guard-app .row-subtitle {
-    color: var(--app-ink-soft);
-  }
-
-  #current-guard-app .brand h2 {
-    font-weight: 500;
-  }
-
-  #current-guard-app .connection-pill,
-  #current-guard-app .state-pill,
-  #current-guard-app .tag {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    border-radius: 999px;
-  }
-
-  #current-guard-app .connection-pill {
-    padding: 7px 10px;
-    background: var(--app-series-soft);
-    color: var(--foreground);
-  }
-
-  #current-guard-app .status-dot {
-    width: 7px;
-    height: 7px;
-    border-radius: 50%;
-    background: var(--viz-series-1);
-    box-shadow: 0 0 0 4px var(--app-glow);
-  }
-
-  #current-guard-app .app-content {
-    padding: 4px 18px 18px;
-    min-height: 650px;
-  }
-
-  #current-guard-app .screen {
-    display: none;
-  }
-
-  #current-guard-app .screen.is-active {
-    display: block;
-    animation: app-screen-in 420ms cubic-bezier(.22, 1, .36, 1) both;
-  }
-
-  #current-guard-app .connection-line {
-    justify-content: space-between;
-    margin: 4px 2px 12px;
-  }
-
-  #current-guard-app .connection-copy {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-
-  #current-guard-app .reading-card {
-    position: relative;
-    padding: 22px;
-    overflow: hidden;
-    isolation: isolate;
-  }
-
-  #current-guard-app .reading-card::before {
-    content: &quot;&quot;;
-    position: absolute;
-    width: 180px;
-    height: 180px;
-    right: -60px;
-    top: -74px;
-    border-radius: 50%;
-    background: var(--app-glow);
-    filter: blur(2px);
-    z-index: -1;
-    transition: transform 700ms cubic-bezier(.22, 1, .36, 1);
-  }
-
-  #current-guard-app .reading-card.is-refreshing::before {
-    transform: scale(1.45);
-  }
-
-  #current-guard-app .reading-meta {
-    justify-content: space-between;
-  }
-
-  #current-guard-app .state-pill {
-    padding: 6px 10px;
-    background: var(--app-series-soft);
-  }
-
-  #current-guard-app .state-pill.is-alert {
-    background: var(--app-danger-soft);
-  }
-
-  #current-guard-app .reading-line {
-    display: flex;
-    align-items: baseline;
-    gap: 7px;
-    margin: 15px 0 2px;
-  }
-
-  #current-guard-app .reading-value {
-    font-size: calc(var(--font-size-base) * 3.8);
-    line-height: 1;
-    font-weight: 500;
-    letter-spacing: -0.06em;
-    font-variant-numeric: tabular-nums;
-    transition: transform 480ms cubic-bezier(.34, 1.56, .64, 1);
-  }
-
-  #current-guard-app .number-roller {
-    display: inline-flex;
-    align-items: baseline;
-    height: 1em;
-    overflow: visible;
-    letter-spacing: 0;
-  }
-
-  #current-guard-app .digit-window {
-    position: relative;
-    display: inline-block;
-    flex: 0 0 .59em;
-    width: .59em;
-    height: 1em;
-    overflow: hidden;
-    vertical-align: top;
-  }
-
-  #current-guard-app .digit-track {
-    position: absolute;
-    inset: 0 0 auto;
-    width: 100%;
-    will-change: transform;
-  }
-
-  #current-guard-app .digit-face {
-    display: block;
-    width: 100%;
-    height: 1em;
-    line-height: 1;
-    text-align: center;
-    font: inherit;
-    font-variant-numeric: tabular-nums;
-  }
-
-  #current-guard-app .decimal-glyph {
-    display: inline-block;
-    flex: 0 0 .27em;
-    width: .27em;
-    height: 1em;
-    line-height: 1;
-    text-align: center;
-  }
-
-  #current-guard-app .reading-value.is-bumping {
-    transform: translateY(-4px) scale(1.04);
-  }
-
-  #current-guard-app .reading-unit {
-    font-size: calc(var(--font-size-base) * 1.35);
-    color: var(--app-ink-soft);
-  }
-
-  #current-guard-app .mini-trend {
-    width: 100%;
-    height: 92px;
-    margin-top: 18px;
-    overflow: visible;
-  }
-
-  #current-guard-app .grid-line,
-  #current-guard-app .limit-line {
-    stroke: var(--app-line);
-    stroke-width: 1;
-  }
-
-  #current-guard-app .limit-line {
-    stroke-dasharray: 4 5;
-  }
-
-  #current-guard-app .trend-fill {
-    fill: url(#home-area-fill);
-  }
-
-  #current-guard-app .trend-line,
-  #current-guard-app .history-line {
-    fill: none;
-    stroke: var(--viz-series-1);
-    stroke-width: 3;
-    stroke-linecap: round;
-    stroke-linejoin: round;
-  }
-
-  #current-guard-app .trend-dot,
-  #current-guard-app .history-dot {
-    fill: var(--card);
-    stroke: var(--viz-series-1);
-    stroke-width: 3;
-  }
-
-  #current-guard-app .trend-labels {
-    justify-content: space-between;
-    margin-top: -2px;
-  }
-
-  #current-guard-app .mode-switch {
-    gap: 4px;
-    margin: 15px 0 10px;
-    padding: 4px;
-    border-radius: 14px;
-    background: var(--muted);
-  }
-
-  #current-guard-app .mode-switch .btn {
-    flex: 1;
-  }
-
-  #current-guard-app .primary-action {
-    width: 100%;
-    min-height: 50px;
-    position: relative;
-    overflow: hidden;
-  }
-
-  #current-guard-app .primary-action::after {
-    content: &quot;&quot;;
-    position: absolute;
-    inset: 50%;
-    border-radius: 50%;
-    background: color-mix(in srgb, var(--primary-foreground) 22%, transparent);
-    transform: scale(0);
-    opacity: 0;
-  }
-
-  #current-guard-app .primary-action.is-loading::after {
-    animation: action-ripple 900ms cubic-bezier(.22, 1, .36, 1);
-  }
-
-  #current-guard-app .button-copy {
-    display: inline-flex;
-    align-items: center;
-    gap: 9px;
-  }
-
-  #current-guard-app .spinner {
-    display: none;
-    width: 16px;
-    height: 16px;
-    border: 2px solid color-mix(in srgb, var(--primary-foreground) 42%, transparent);
-    border-top-color: var(--primary-foreground);
-    border-radius: 50%;
-    animation: app-spin 760ms linear infinite;
-  }
-
-  #current-guard-app .is-loading .spinner {
-    display: inline-block;
-  }
-
-  #current-guard-app .auto-panel {
-    display: none;
-    margin-top: 12px;
-    animation: panel-grow 420ms cubic-bezier(.22, 1, .36, 1) both;
-  }
-
-  #current-guard-app .auto-panel.is-visible {
-    display: block;
-  }
-
-  #current-guard-app .auto-status {
-    justify-content: space-between;
-    padding: 13px 2px 10px;
-  }
-
-  #current-guard-app .pulse-mark {
-    width: 10px;
-    height: 10px;
-    border-radius: 50%;
-    background: var(--viz-series-1);
-    box-shadow: 0 0 0 0 var(--app-glow);
-    animation: status-pulse 2s ease-out infinite;
-  }
-
-  #current-guard-app .auto-left {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-  }
-
-  #current-guard-app .section-heading {
-    justify-content: space-between;
-    margin: 22px 2px 10px;
-  }
-
-  #current-guard-app .section-heading h3 {
-    margin: 0;
-    font-weight: 500;
-  }
-
-  #current-guard-app .meter-list,
-  #current-guard-app .record-list,
-  #current-guard-app .device-list {
-    display: grid;
-    gap: 2px;
-  }
-
-  #current-guard-app .meter-row,
-  #current-guard-app .record-row {
-    justify-content: space-between;
-    width: 100%;
-    padding: 13px 2px;
-    border-bottom: 1px solid var(--app-line);
-  }
-
-  #current-guard-app button.meter-row {
-    color: var(--foreground);
-    text-align: left;
-    background: transparent;
-    border-top: 0;
-    border-left: 0;
-    border-right: 0;
-    cursor: pointer;
-  }
-
-  #current-guard-app .row-lead {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    min-width: 0;
-  }
-
-  #current-guard-app .meter-icon {
-    display: grid;
-    place-items: center;
-    flex: 0 0 auto;
-    width: 38px;
-    height: 38px;
-    border-radius: 13px;
-    background: var(--muted);
-    color: var(--foreground);
-  }
-
-  #current-guard-app .meter-icon.is-alert {
-    background: var(--app-danger-soft);
-  }
-
-  #current-guard-app .row-value {
-    text-align: right;
-    font-variant-numeric: tabular-nums;
-  }
-
-  #current-guard-app .row-value strong {
-    display: block;
-    font-weight: 500;
-  }
-
-  #current-guard-app .tag {
-    padding: 3px 7px;
-    margin-top: 2px;
-    background: var(--muted);
-  }
-
-  #current-guard-app .tag.is-alert {
-    color: var(--destructive);
-    background: var(--app-danger-soft);
-  }
-
-  #current-guard-app .history-chart {
-    padding: 20px 18px 14px;
-  }
-
-  #current-guard-app .history-head {
-    display: grid;
-    gap: 3px;
-    margin-bottom: 8px;
-  }
-
-  #current-guard-app .history-head strong {
-    font-size: calc(var(--font-size-base) * 1.8);
-    font-weight: 500;
-  }
-
-  #current-guard-app .history-plot {
-    width: 100%;
-    height: 190px;
-    margin-top: 8px;
-  }
-
-  #current-guard-app .history-area {
-    fill: url(#history-area-fill);
-  }
-
-  #current-guard-app .alert-dot {
-    fill: var(--destructive);
-    stroke: var(--card);
-    stroke-width: 3;
-  }
-
-  #current-guard-app .chart-legend {
-    justify-content: space-between;
-  }
-
-  #current-guard-app .legend-item {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-  }
-
-  #current-guard-app .legend-swatch {
-    width: 14px;
-    height: 3px;
-    border-radius: 4px;
-    background: var(--viz-series-1);
-  }
-
-  #current-guard-app .legend-swatch.alert {
-    height: 8px;
-    width: 8px;
-    border-radius: 50%;
-    background: var(--destructive);
-  }
-
-  #current-guard-app .period-controls {
-    margin: 2px 0 14px;
-  }
-
-  #current-guard-app .period-controls .btn {
-    flex: 1;
-  }
-
-  #current-guard-app .device-hero {
-    padding: 20px;
-    margin-bottom: 10px;
-  }
-
-  #current-guard-app .scan-orbit {
-    position: relative;
-    display: grid;
-    place-items: center;
-    width: 146px;
-    height: 146px;
-    margin: 2px auto 16px;
-    border-radius: 50%;
-    background:
-      radial-gradient(circle, var(--app-series-soft) 0 22%, transparent 23% 42%, var(--app-series-soft) 43% 44%, transparent 45% 63%, var(--app-series-soft) 64% 65%, transparent 66%);
-  }
-
-  #current-guard-app .scan-orbit::before {
-    content: &quot;&quot;;
-    position: absolute;
-    inset: 0;
-    border-radius: 50%;
-    background: conic-gradient(from 0deg, transparent 0 75%, var(--app-glow));
-    opacity: 0;
-  }
-
-  #current-guard-app .scan-orbit.is-scanning::before {
-    opacity: 1;
-    animation: app-spin 1.35s linear infinite;
-  }
-
-  #current-guard-app .scan-center {
-    display: grid;
-    place-items: center;
-    width: 56px;
-    height: 56px;
-    border-radius: 19px;
-    color: var(--primary-foreground);
-    background: var(--primary);
-    box-shadow: 0 10px 24px var(--app-glow);
-    z-index: 1;
-  }
-
-  #current-guard-app .scan-copy {
-    text-align: center;
-  }
-
-  #current-guard-app .scan-copy h3 {
-    margin: 0 0 3px;
-    font-weight: 500;
-  }
-
-  #current-guard-app .scan-action {
-    width: 100%;
-    margin-top: 14px;
-  }
-
-  #current-guard-app .bottom-nav {
-    justify-content: space-around;
-    padding: 9px 14px 14px;
-    border-top: 1px solid var(--app-line);
-    background: color-mix(in srgb, var(--background) 94%, transparent);
-  }
-
-  #current-guard-app .nav-button {
-    display: grid;
-    justify-items: center;
-    gap: 3px;
-    min-width: 88px;
-  }
-
-  #current-guard-app .nav-button svg {
-    width: 20px;
-    height: 20px;
-  }
-
-  #current-guard-app .nav-button[aria-selected=&quot;true&quot;] {
-    color: var(--primary);
-  }
-
-  #current-guard-app .toast {
-    display: flex;
-    align-items: center;
-    gap: 9px;
-    position: absolute;
-    left: 50%;
-    bottom: 82px;
-    z-index: 5;
-    padding: 10px 14px;
-    border-radius: 999px;
-    color: var(--primary-foreground);
-    background: var(--primary);
-    box-shadow: 0 12px 28px color-mix(in srgb, var(--foreground) 18%, transparent);
-    transform: translate(-50%, 18px) scale(.94);
-    opacity: 0;
-    pointer-events: none;
-    transition:
-      transform 360ms cubic-bezier(.22, 1, .36, 1),
-      opacity 260ms ease;
-    white-space: nowrap;
-  }
-
-  #current-guard-app .toast.is-visible {
-    transform: translate(-50%, 0) scale(1);
-    opacity: 1;
-  }
-
-  #current-guard-app .app-frame {
-    position: relative;
-  }
-
-  #current-guard-app svg.icon {
-    width: 18px;
-    height: 18px;
-    fill: none;
-    stroke: currentColor;
-    stroke-width: 1.8;
-    stroke-linecap: round;
-    stroke-linejoin: round;
-  }
-
-  @keyframes app-screen-in {
-    from { opacity: 0; transform: translateY(10px); }
-    to { opacity: 1; transform: translateY(0); }
-  }
-
-  @keyframes panel-grow {
-    from { opacity: 0; transform: translateY(-8px) scale(.985); }
-    to { opacity: 1; transform: translateY(0) scale(1); }
-  }
-
-  @keyframes action-ripple {
-    0% { inset: 50%; opacity: .7; transform: scale(0); }
-    100% { inset: -45%; opacity: 0; transform: scale(1); }
-  }
-
-  @keyframes status-pulse {
-    0% { box-shadow: 0 0 0 0 var(--app-glow); }
-    70%, 100% { box-shadow: 0 0 0 10px transparent; }
-  }
-
-  @keyframes app-spin {
-    to { transform: rotate(360deg); }
-  }
-
-  @media (max-width: 380px) {
-    #current-guard-app .app-content {
-      padding-left: 12px;
-      padding-right: 12px;
-    }
-
-    #current-guard-app .reading-card {
-      padding: 18px;
-    }
-
-    #current-guard-app .reading-value {
-      font-size: calc(var(--font-size-base) * 3.2);
-    }
-
-    #current-guard-app .nav-button {
-      min-width: 72px;
+/* ══════════ 帧流：一直在到达，但不进显示 ══════════ */
+function tickSim(nowMs, dt) {
+  const elapsed = (nowMs - state.bootAt) / 1000;
+  for (const m of meters.values()) {
+    if (!m.present) continue;
+
+    const target = Math.sin(elapsed / 7.3 + m.addr) * 0.55 + Math.sin(elapsed / 3.1 + m.addr * 2) * 0.45;
+    m.walkV += ((target - m.walk) * 2.2 - m.walkV * 2.4) * dt;
+    m.walk += m.walkV * dt;
+
+    const down = m.outage && elapsed >= m.outage[0] && elapsed < m.outage[1];
+    if (down) continue;                 // 掉电：这一段根本不发帧
+
+    if (nowMs >= m.nextFrameAt) {
+      m.nextFrameAt = nowMs + FRAME_MS * (0.94 + Math.random() * 0.12);
+      const raw = m.base + m.walk * m.swing + (Math.random() - 0.5) * 0.004;
+      const amps = Math.max(0, Math.round(clamp(raw, 0, FULL_A * 1.6) * 1000) / 1000);
+      m.frame = { amps, ts: Date.now() };
+      m.lastAt = nowMs;
+      m.flash = 1;
     }
   }
-
-  @media (prefers-reduced-motion: reduce) {
-    #current-guard-app *,
-    #current-guard-app *::before,
-    #current-guard-app *::after {
-      animation-duration: 1ms !important;
-      transition-duration: 1ms !important;
-    }
+  for (const m of meters.values()) {
+    m.silent = !m.frame || nowMs - m.lastAt > SILENT_MS;
+    m.flash = Math.max(0, m.flash - dt * 4.5);
   }
+}
 
-  /* Finite motion is driven by a sampled quintic smoothstep in JavaScript.
-     It has zero velocity and zero acceleration at both ends. */
-  #current-guard-app *,
-  #current-guard-app *::before,
-  #current-guard-app *::after {
-    animation: none !important;
-    transition: none !important;
+/* ══════════ 测量：按下才收下一帧 ══════════ */
+function measure(addr, source) {
+  if (state.pending) return;
+  const m = meters.get(addr);
+  if (!m || !m.present) {               // 这个地址上没有表，直接落离线
+    commit(addr, null, source);
+    return;
   }
+  state.pending = { addr, from: performance.now(), deadline: performance.now() + READ_WAIT, source };
+}
 
-  #current-guard-app .app-content {
-    position: relative;
-    height: 760px;
-    min-height: 0;
+function tickPending(nowMs) {
+  const p = state.pending;
+  if (!p) return;
+  const m = meters.get(p.addr);
+  if (m && m.lastAt > p.from) {          // 等到了下一帧
+    state.pending = null;
+    commit(p.addr, m.frame, p.source);
+  } else if (nowMs > p.deadline) {       // 超时：表已经不报数了
+    state.pending = null;
+    commit(p.addr, null, p.source);
   }
+}
 
-  #current-guard-app .screen,
-  #current-guard-app .screen.is-active {
-    display: block;
-    position: absolute;
-    inset: 4px 18px 18px;
-    opacity: 0;
-    visibility: hidden;
-    pointer-events: none;
+function commit(addr, frame, source) {
+  const m = meters.get(addr);
+  const status = frame ? classify(frame.amps) : "off";
+  if (m) {
+    if (m.status !== status) m.alertUntil = performance.now() + ALERT_MS;  // 只有变了才提示
+    m.shown = { amps: frame ? frame.amps : null, ts: frame ? frame.ts : Date.now() };
+    m.status = status;
   }
+  const rec = { addr: addr, amps: frame ? frame.amps : null, status: status };
+  const manual = source === "manual";
+  archive([rec], source, manual);        // 手动：先别播「长出来」，等飞过去落地再播
+  if (manual) flyToRecord(rec);
+}
 
-  #current-guard-app .screen.is-active {
-    opacity: 1;
-    visibility: visible;
-    pointer-events: auto;
-  }
-
-  #current-guard-app .mode-switch,
-  #current-guard-app .period-controls,
-  #current-guard-app .bottom-nav {
-    position: relative;
-  }
-
-  #current-guard-app .mode-switch .btn,
-  #current-guard-app .period-controls .btn,
-  #current-guard-app .bottom-nav .btn {
-    position: relative;
-    z-index: 1;
-    color: var(--foreground) !important;
-    background: transparent !important;
-    border-color: transparent !important;
-    box-shadow: none !important;
-  }
-
-  #current-guard-app .mode-indicator,
-  #current-guard-app .period-indicator {
-    position: absolute;
-    z-index: 0;
-    top: 4px;
-    bottom: 4px;
-    border-radius: 10px;
-    background: var(--accent);
-    pointer-events: none;
-  }
-
-  #current-guard-app .mode-indicator {
-    left: 4px;
-    width: calc(50% - 6px);
-  }
-
-  #current-guard-app .period-indicator {
-    left: 0;
-    width: calc(33.333% - 3px);
-  }
-
-  #current-guard-app .nav-indicator {
-    position: absolute;
-    z-index: 0;
-    bottom: 7px;
-    width: 22px;
-    height: 3px;
-    border-radius: 999px;
-    background: var(--primary);
-    pointer-events: none;
-  }
-
-  #current-guard-app .nav-button[aria-selected=&quot;true&quot;] {
-    color: var(--foreground) !important;
-    background: transparent !important;
-    border-color: transparent !important;
-  }
-
-  #current-guard-app .motion-ghost {
-    position: absolute;
-    z-index: 8;
-    margin: 0;
-    color: inherit;
-    pointer-events: none;
-    white-space: nowrap;
-  }
-
-  #current-guard-app .action-ripple,
-  #current-guard-app .reading-glow,
-  #current-guard-app .scan-sweep {
-    position: absolute;
-    pointer-events: none;
-  }
-
-  #current-guard-app .action-ripple {
-    z-index: 0;
-    width: 20px;
-    height: 20px;
-    left: calc(50% - 10px);
-    top: calc(50% - 10px);
-    border-radius: 50%;
-    opacity: 0;
-    background: color-mix(in srgb, var(--primary-foreground) 22%, transparent);
-  }
-
-  #current-guard-app .button-copy {
-    position: relative;
-    z-index: 1;
-  }
-
-  #current-guard-app .primary-action::after {
-    display: none;
-  }
-
-  #current-guard-app .reading-glow {
-    z-index: -1;
-    width: 180px;
-    height: 180px;
-    right: -60px;
-    top: -74px;
-    border-radius: 50%;
-    opacity: 0;
-    background: var(--app-glow);
-  }
-
-  #current-guard-app .reading-card::before {
-    display: none;
-  }
-
-  #current-guard-app .scan-sweep {
-    inset: 0;
-    border-radius: 50%;
-    opacity: 0;
-    background: conic-gradient(from 0deg, transparent 0 75%, var(--app-glow));
-  }
-
-  #current-guard-app .scan-orbit::before {
-    display: none;
-  }
-
-  @media (max-width: 380px) {
-    #current-guard-app .screen,
-    #current-guard-app .screen.is-active {
-      left: 12px;
-      right: 12px;
-    }
-  }
-&lt;/style&gt;
-
-&lt;div id=&quot;current-guard-app&quot;&gt;
-  &lt;div class=&quot;app-frame&quot;&gt;
-    &lt;svg aria-hidden=&quot;true&quot; style=&quot;position:absolute;width:0;height:0;overflow:hidden&quot;&gt;
-      &lt;symbol id=&quot;i-wave&quot; viewBox=&quot;0 0 24 24&quot;&gt;
-        &lt;path d=&quot;M3 12h3l2.1-6 3.5 12 2.8-8 2 5H21&quot;&gt;&lt;/path&gt;
-      &lt;/symbol&gt;
-      &lt;symbol id=&quot;i-home&quot; viewBox=&quot;0 0 24 24&quot;&gt;
-        &lt;path d=&quot;M3 11.5 12 4l9 7.5&quot;&gt;&lt;/path&gt;&lt;path d=&quot;M5.5 10v10h13V10&quot;&gt;&lt;/path&gt;&lt;path d=&quot;M9.5 20v-6h5v6&quot;&gt;&lt;/path&gt;
-      &lt;/symbol&gt;
-      &lt;symbol id=&quot;i-chart&quot; viewBox=&quot;0 0 24 24&quot;&gt;
-        &lt;path d=&quot;M4 19V5&quot;&gt;&lt;/path&gt;&lt;path d=&quot;M4 19h16&quot;&gt;&lt;/path&gt;&lt;path d=&quot;m7 15 3-4 3 2 4-6&quot;&gt;&lt;/path&gt;
-      &lt;/symbol&gt;
-      &lt;symbol id=&quot;i-meter&quot; viewBox=&quot;0 0 24 24&quot;&gt;
-        &lt;rect x=&quot;4&quot; y=&quot;3&quot; width=&quot;16&quot; height=&quot;18&quot; rx=&quot;4&quot;&gt;&lt;/rect&gt;&lt;path d=&quot;M8 8h8&quot;&gt;&lt;/path&gt;&lt;path d=&quot;m12 14 3-2&quot;&gt;&lt;/path&gt;&lt;path d=&quot;M8 17h8&quot;&gt;&lt;/path&gt;
-      &lt;/symbol&gt;
-      &lt;symbol id=&quot;i-bluetooth&quot; viewBox=&quot;0 0 24 24&quot;&gt;
-        &lt;path d=&quot;m7 7 10 10-5 4V3l5 4L7 17&quot;&gt;&lt;/path&gt;
-      &lt;/symbol&gt;
-      &lt;symbol id=&quot;i-check&quot; viewBox=&quot;0 0 24 24&quot;&gt;
-        &lt;path d=&quot;m5 12 4 4L19 6&quot;&gt;&lt;/path&gt;
-      &lt;/symbol&gt;
-      &lt;symbol id=&quot;i-bolt&quot; viewBox=&quot;0 0 24 24&quot;&gt;
-        &lt;path d=&quot;m13 2-8 12h7l-1 8 8-12h-7z&quot;&gt;&lt;/path&gt;
-      &lt;/symbol&gt;
-      &lt;symbol id=&quot;i-search&quot; viewBox=&quot;0 0 24 24&quot;&gt;
-        &lt;circle cx=&quot;11&quot; cy=&quot;11&quot; r=&quot;6&quot;&gt;&lt;/circle&gt;&lt;path d=&quot;m16 16 4 4&quot;&gt;&lt;/path&gt;
-      &lt;/symbol&gt;
-    &lt;/svg&gt;
-
-    &lt;div class=&quot;status-bar text-small&quot;&gt;
-      &lt;span id=&quot;clock&quot;&gt;10:24&lt;/span&gt;
-      &lt;div class=&quot;status-icons&quot; aria-label=&quot;手机信号和电量良好&quot;&gt;
-        &lt;span class=&quot;signal&quot; aria-hidden=&quot;true&quot;&gt;&lt;i&gt;&lt;/i&gt;&lt;i&gt;&lt;/i&gt;&lt;i&gt;&lt;/i&gt;&lt;/span&gt;
-        &lt;span&gt;4G&lt;/span&gt;
-        &lt;span class=&quot;battery&quot; aria-hidden=&quot;true&quot;&gt;&lt;span class=&quot;battery-fill&quot;&gt;&lt;/span&gt;&lt;/span&gt;
-      &lt;/div&gt;
-    &lt;/div&gt;
-
-    &lt;header class=&quot;topbar&quot;&gt;
-      &lt;div class=&quot;brand&quot;&gt;
-        &lt;span class=&quot;brand-mark&quot;&gt;&lt;svg class=&quot;icon&quot; aria-hidden=&quot;true&quot;&gt;&lt;use href=&quot;#i-wave&quot;&gt;&lt;/use&gt;&lt;/svg&gt;&lt;/span&gt;
-        &lt;div&gt;
-          &lt;h2&gt;流安&lt;/h2&gt;
-          &lt;p class=&quot;text-small&quot;&gt;无线电流巡检&lt;/p&gt;
-        &lt;/div&gt;
-      &lt;/div&gt;
-      &lt;span class=&quot;connection-pill text-small&quot;&gt;
-        &lt;span class=&quot;status-dot&quot;&gt;&lt;/span&gt;
-        HC-42 已连接
-      &lt;/span&gt;
-    &lt;/header&gt;
-
-    &lt;main class=&quot;app-content&quot;&gt;
-      &lt;section class=&quot;screen is-active&quot; data-screen=&quot;home&quot; aria-label=&quot;实时读数&quot;&gt;
-        &lt;div class=&quot;connection-line text-small&quot;&gt;
-          &lt;span class=&quot;connection-copy&quot;&gt;
-            &lt;svg class=&quot;icon&quot; aria-hidden=&quot;true&quot;&gt;&lt;use href=&quot;#i-bluetooth&quot;&gt;&lt;/use&gt;&lt;/svg&gt;
-            读表器 A1 · 信号良好
-          &lt;/span&gt;
-          &lt;span&gt;约 3.2 m&lt;/span&gt;
-        &lt;/div&gt;
-
-        &lt;section class=&quot;card reading-card&quot; id=&quot;reading-card&quot;&gt;
-          &lt;span class=&quot;reading-glow&quot; id=&quot;reading-glow&quot; aria-hidden=&quot;true&quot;&gt;&lt;/span&gt;
-          &lt;div class=&quot;reading-meta&quot;&gt;
-            &lt;span class=&quot;reading-label&quot;&gt;电流表 01 · 实时电流&lt;/span&gt;
-            &lt;span class=&quot;state-pill text-small&quot; id=&quot;reading-state&quot;&gt;
-              &lt;span class=&quot;status-dot&quot;&gt;&lt;/span&gt;
-              正常
-            &lt;/span&gt;
-          &lt;/div&gt;
-          &lt;div class=&quot;reading-line&quot; aria-live=&quot;polite&quot;&gt;
-            &lt;p class=&quot;reading-value&quot; id=&quot;reading-value&quot;&gt;1.27&lt;/p&gt;
-            &lt;p class=&quot;reading-unit&quot;&gt;A&lt;/p&gt;
-          &lt;/div&gt;
-          &lt;p class=&quot;muted text-small&quot; id=&quot;reading-time&quot;&gt;刚刚更新 · 10:24:18&lt;/p&gt;
-
-          &lt;svg class=&quot;mini-trend&quot; viewBox=&quot;0 0 330 92&quot; role=&quot;img&quot; aria-label=&quot;最近六次电流读数在正常范围内小幅波动&quot;&gt;
-            &lt;defs&gt;
-              &lt;linearGradient id=&quot;home-area-fill&quot; x1=&quot;0&quot; y1=&quot;0&quot; x2=&quot;0&quot; y2=&quot;1&quot;&gt;
-                &lt;stop offset=&quot;0%&quot; stop-color=&quot;var(--viz-series-1)&quot; stop-opacity=&quot;.22&quot;&gt;&lt;/stop&gt;
-                &lt;stop offset=&quot;100%&quot; stop-color=&quot;var(--viz-series-1)&quot; stop-opacity=&quot;0&quot;&gt;&lt;/stop&gt;
-              &lt;/linearGradient&gt;
-            &lt;/defs&gt;
-            &lt;line class=&quot;grid-line&quot; x1=&quot;0&quot; y1=&quot;75&quot; x2=&quot;330&quot; y2=&quot;75&quot;&gt;&lt;/line&gt;
-            &lt;line class=&quot;limit-line&quot; x1=&quot;0&quot; y1=&quot;18&quot; x2=&quot;330&quot; y2=&quot;18&quot;&gt;&lt;/line&gt;
-            &lt;path class=&quot;trend-fill&quot; id=&quot;home-area&quot; d=&quot;M0 68 C35 66 42 56 73 58 S112 50 145 54 S185 47 220 49 S270 43 330 45 L330 75 L0 75 Z&quot;&gt;&lt;/path&gt;
-            &lt;path class=&quot;trend-line&quot; id=&quot;home-line&quot; d=&quot;M0 68 C35 66 42 56 73 58 S112 50 145 54 S185 47 220 49 S270 43 330 45&quot;&gt;&lt;/path&gt;
-            &lt;circle class=&quot;trend-dot&quot; id=&quot;home-dot&quot; cx=&quot;330&quot; cy=&quot;45&quot; r=&quot;5&quot;&gt;&lt;/circle&gt;
-          &lt;/svg&gt;
-          &lt;div class=&quot;trend-labels text-small&quot;&gt;
-            &lt;span&gt;10 分钟前&lt;/span&gt;
-            &lt;span&gt;上限 2.00 A&lt;/span&gt;
-            &lt;span&gt;现在&lt;/span&gt;
-          &lt;/div&gt;
-        &lt;/section&gt;
-
-        &lt;div class=&quot;mode-switch&quot; role=&quot;group&quot; aria-label=&quot;采集模式&quot;&gt;
-          &lt;span class=&quot;mode-indicator&quot; id=&quot;mode-indicator&quot; aria-hidden=&quot;true&quot;&gt;&lt;/span&gt;
-          &lt;button type=&quot;button&quot; class=&quot;btn mode-button&quot; data-mode=&quot;manual&quot; aria-pressed=&quot;true&quot;&gt;手动读取&lt;/button&gt;
-          &lt;button type=&quot;button&quot; class=&quot;btn mode-button&quot; data-mode=&quot;auto&quot; aria-pressed=&quot;false&quot;&gt;自动巡检&lt;/button&gt;
-        &lt;/div&gt;
-
-        &lt;button type=&quot;button&quot; class=&quot;btn btn-primary btn-block primary-action&quot; id=&quot;collect-button&quot;&gt;
-          &lt;span class=&quot;action-ripple&quot; id=&quot;action-ripple&quot; aria-hidden=&quot;true&quot;&gt;&lt;/span&gt;
-          &lt;span class=&quot;button-copy&quot;&gt;
-            &lt;span class=&quot;spinner&quot; aria-hidden=&quot;true&quot;&gt;&lt;/span&gt;
-            &lt;svg class=&quot;icon action-icon&quot; aria-hidden=&quot;true&quot;&gt;&lt;use href=&quot;#i-bolt&quot;&gt;&lt;/use&gt;&lt;/svg&gt;
-            &lt;span id=&quot;collect-label&quot;&gt;立即采集&lt;/span&gt;
-          &lt;/span&gt;
-        &lt;/button&gt;
-
-        &lt;div class=&quot;auto-panel&quot; id=&quot;auto-panel&quot;&gt;
-          &lt;div class=&quot;auto-status&quot;&gt;
-            &lt;div class=&quot;auto-left&quot;&gt;
-              &lt;span class=&quot;pulse-mark&quot; aria-hidden=&quot;true&quot;&gt;&lt;/span&gt;
-              &lt;div&gt;
-                &lt;p id=&quot;auto-state-copy&quot;&gt;自动巡检运行中&lt;/p&gt;
-                &lt;p class=&quot;muted text-small&quot;&gt;每 2 分钟采集 · 3 台设备&lt;/p&gt;
-              &lt;/div&gt;
-            &lt;/div&gt;
-            &lt;span class=&quot;text-small&quot; id=&quot;countdown&quot;&gt;01:42&lt;/span&gt;
-          &lt;/div&gt;
-          &lt;div class=&quot;meter-list&quot;&gt;
-            &lt;button type=&quot;button&quot; class=&quot;meter-row&quot; data-meter=&quot;01&quot; data-value=&quot;1.27&quot;&gt;
-              &lt;span class=&quot;row-lead&quot;&gt;
-                &lt;span class=&quot;meter-icon&quot;&gt;&lt;svg class=&quot;icon&quot; aria-hidden=&quot;true&quot;&gt;&lt;use href=&quot;#i-meter&quot;&gt;&lt;/use&gt;&lt;/svg&gt;&lt;/span&gt;
-                &lt;span&gt;&lt;p&gt;电流表 01&lt;/p&gt;&lt;span class=&quot;row-subtitle text-small&quot;&gt;刚刚 · 信号强&lt;/span&gt;&lt;/span&gt;
-              &lt;/span&gt;
-              &lt;span class=&quot;row-value&quot;&gt;&lt;strong&gt;1.27 A&lt;/strong&gt;&lt;span class=&quot;tag text-small&quot;&gt;正常&lt;/span&gt;&lt;/span&gt;
-            &lt;/button&gt;
-            &lt;button type=&quot;button&quot; class=&quot;meter-row&quot; data-meter=&quot;02&quot; data-value=&quot;0.84&quot;&gt;
-              &lt;span class=&quot;row-lead&quot;&gt;
-                &lt;span class=&quot;meter-icon&quot;&gt;&lt;svg class=&quot;icon&quot; aria-hidden=&quot;true&quot;&gt;&lt;use href=&quot;#i-meter&quot;&gt;&lt;/use&gt;&lt;/svg&gt;&lt;/span&gt;
-                &lt;span&gt;&lt;p&gt;电流表 02&lt;/p&gt;&lt;span class=&quot;row-subtitle text-small&quot;&gt;1 分钟前 · 信号良好&lt;/span&gt;&lt;/span&gt;
-              &lt;/span&gt;
-              &lt;span class=&quot;row-value&quot;&gt;&lt;strong&gt;0.84 A&lt;/strong&gt;&lt;span class=&quot;tag text-small&quot;&gt;正常&lt;/span&gt;&lt;/span&gt;
-            &lt;/button&gt;
-            &lt;button type=&quot;button&quot; class=&quot;meter-row&quot; data-meter=&quot;03&quot; data-value=&quot;2.18&quot; data-alert=&quot;true&quot;&gt;
-              &lt;span class=&quot;row-lead&quot;&gt;
-                &lt;span class=&quot;meter-icon is-alert&quot;&gt;&lt;svg class=&quot;icon&quot; aria-hidden=&quot;true&quot;&gt;&lt;use href=&quot;#i-bolt&quot;&gt;&lt;/use&gt;&lt;/svg&gt;&lt;/span&gt;
-                &lt;span&gt;&lt;p&gt;电流表 03&lt;/p&gt;&lt;span class=&quot;row-subtitle text-small&quot;&gt;1 分钟前 · 需处理&lt;/span&gt;&lt;/span&gt;
-              &lt;/span&gt;
-              &lt;span class=&quot;row-value&quot;&gt;&lt;strong&gt;2.18 A&lt;/strong&gt;&lt;span class=&quot;tag is-alert text-small&quot;&gt;超限&lt;/span&gt;&lt;/span&gt;
-            &lt;/button&gt;
-          &lt;/div&gt;
-        &lt;/div&gt;
-      &lt;/section&gt;
-
-      &lt;section class=&quot;screen&quot; data-screen=&quot;history&quot; aria-label=&quot;历史趋势&quot;&gt;
-        &lt;div class=&quot;section-heading&quot;&gt;
-          &lt;div&gt;
-            &lt;h3&gt;电流趋势&lt;/h3&gt;
-            &lt;span class=&quot;muted text-small&quot;&gt;电流表 01 · 最近 24 小时&lt;/span&gt;
-          &lt;/div&gt;
-          &lt;span class=&quot;viz-badge&quot;&gt;42 条&lt;/span&gt;
-        &lt;/div&gt;
-
-        &lt;div class=&quot;viz-controls period-controls&quot; role=&quot;group&quot; aria-label=&quot;趋势时间范围&quot;&gt;
-          &lt;span class=&quot;period-indicator&quot; id=&quot;period-indicator&quot; aria-hidden=&quot;true&quot;&gt;&lt;/span&gt;
-          &lt;button type=&quot;button&quot; class=&quot;btn period-button&quot; data-period=&quot;day&quot; aria-pressed=&quot;true&quot;&gt;24 小时&lt;/button&gt;
-          &lt;button type=&quot;button&quot; class=&quot;btn period-button&quot; data-period=&quot;week&quot; aria-pressed=&quot;false&quot;&gt;7 天&lt;/button&gt;
-          &lt;button type=&quot;button&quot; class=&quot;btn period-button&quot; data-period=&quot;month&quot; aria-pressed=&quot;false&quot;&gt;30 天&lt;/button&gt;
-        &lt;/div&gt;
-
-        &lt;section class=&quot;card history-chart&quot;&gt;
-          &lt;div class=&quot;history-head&quot;&gt;
-            &lt;span class=&quot;muted text-small&quot;&gt;平均电流&lt;/span&gt;
-            &lt;strong id=&quot;history-average&quot;&gt;1.18 A&lt;/strong&gt;
-          &lt;/div&gt;
-          &lt;svg class=&quot;history-plot&quot; viewBox=&quot;0 0 330 190&quot; role=&quot;img&quot; aria-label=&quot;24小时电流变化趋势，17点出现一次超限&quot;&gt;
-            &lt;defs&gt;
-              &lt;linearGradient id=&quot;history-area-fill&quot; x1=&quot;0&quot; y1=&quot;0&quot; x2=&quot;0&quot; y2=&quot;1&quot;&gt;
-                &lt;stop offset=&quot;0%&quot; stop-color=&quot;var(--viz-series-1)&quot; stop-opacity=&quot;.2&quot;&gt;&lt;/stop&gt;
-                &lt;stop offset=&quot;100%&quot; stop-color=&quot;var(--viz-series-1)&quot; stop-opacity=&quot;0&quot;&gt;&lt;/stop&gt;
-              &lt;/linearGradient&gt;
-            &lt;/defs&gt;
-            &lt;line class=&quot;grid-line&quot; x1=&quot;0&quot; y1=&quot;150&quot; x2=&quot;330&quot; y2=&quot;150&quot;&gt;&lt;/line&gt;
-            &lt;line class=&quot;grid-line&quot; x1=&quot;0&quot; y1=&quot;98&quot; x2=&quot;330&quot; y2=&quot;98&quot;&gt;&lt;/line&gt;
-            &lt;line class=&quot;limit-line&quot; x1=&quot;0&quot; y1=&quot;45&quot; x2=&quot;330&quot; y2=&quot;45&quot;&gt;&lt;/line&gt;
-            &lt;text x=&quot;3&quot; y=&quot;39&quot; fill=&quot;var(--app-ink-soft)&quot;&gt;2.0 A 上限&lt;/text&gt;
-            &lt;path class=&quot;history-area&quot; id=&quot;history-area&quot; d=&quot;M0 142 C25 138 35 120 60 125 S95 113 120 118 S150 102 177 107 S210 78 235 38 S275 106 300 96 S318 88 330 92 L330 150 L0 150 Z&quot;&gt;&lt;/path&gt;
-            &lt;path class=&quot;history-line&quot; id=&quot;history-line&quot; d=&quot;M0 142 C25 138 35 120 60 125 S95 113 120 118 S150 102 177 107 S210 78 235 38 S275 106 300 96 S318 88 330 92&quot;&gt;&lt;/path&gt;
-            &lt;circle class=&quot;alert-dot&quot; id=&quot;history-alert&quot; cx=&quot;235&quot; cy=&quot;38&quot; r=&quot;6&quot;&gt;&lt;/circle&gt;
-            &lt;text x=&quot;0&quot; y=&quot;176&quot; fill=&quot;var(--app-ink-soft)&quot;&gt;00:00&lt;/text&gt;
-            &lt;text x=&quot;144&quot; y=&quot;176&quot; fill=&quot;var(--app-ink-soft)&quot;&gt;12:00&lt;/text&gt;
-            &lt;text x=&quot;292&quot; y=&quot;176&quot; fill=&quot;var(--app-ink-soft)&quot;&gt;现在&lt;/text&gt;
-          &lt;/svg&gt;
-          &lt;div class=&quot;chart-legend text-small&quot;&gt;
-            &lt;span class=&quot;legend-item&quot;&gt;&lt;i class=&quot;legend-swatch&quot;&gt;&lt;/i&gt;电流&lt;/span&gt;
-            &lt;span class=&quot;legend-item&quot;&gt;&lt;i class=&quot;legend-swatch alert&quot;&gt;&lt;/i&gt;超限记录&lt;/span&gt;
-          &lt;/div&gt;
-        &lt;/section&gt;
-
-        &lt;div class=&quot;section-heading&quot;&gt;
-          &lt;h3&gt;最近记录&lt;/h3&gt;
-          &lt;span class=&quot;muted text-small&quot;&gt;本机保存&lt;/span&gt;
-        &lt;/div&gt;
-        &lt;div class=&quot;record-list&quot;&gt;
-          &lt;div class=&quot;record-row&quot;&gt;
-            &lt;span&gt;&lt;p&gt;今天 10:24&lt;/p&gt;&lt;span class=&quot;row-subtitle text-small&quot;&gt;电流表 01 · 自动采集&lt;/span&gt;&lt;/span&gt;
-            &lt;span class=&quot;row-value&quot;&gt;&lt;strong&gt;1.27 A&lt;/strong&gt;&lt;span class=&quot;tag text-small&quot;&gt;正常&lt;/span&gt;&lt;/span&gt;
-          &lt;/div&gt;
-          &lt;div class=&quot;record-row&quot;&gt;
-            &lt;span&gt;&lt;p&gt;今天 10:22&lt;/p&gt;&lt;span class=&quot;row-subtitle text-small&quot;&gt;电流表 03 · 自动采集&lt;/span&gt;&lt;/span&gt;
-            &lt;span class=&quot;row-value&quot;&gt;&lt;strong&gt;2.18 A&lt;/strong&gt;&lt;span class=&quot;tag is-alert text-small&quot;&gt;超限&lt;/span&gt;&lt;/span&gt;
-          &lt;/div&gt;
-          &lt;div class=&quot;record-row&quot;&gt;
-            &lt;span&gt;&lt;p&gt;今天 10:20&lt;/p&gt;&lt;span class=&quot;row-subtitle text-small&quot;&gt;电流表 02 · 自动采集&lt;/span&gt;&lt;/span&gt;
-            &lt;span class=&quot;row-value&quot;&gt;&lt;strong&gt;0.84 A&lt;/strong&gt;&lt;span class=&quot;tag text-small&quot;&gt;正常&lt;/span&gt;&lt;/span&gt;
-          &lt;/div&gt;
-        &lt;/div&gt;
-      &lt;/section&gt;
-
-      &lt;section class=&quot;screen&quot; data-screen=&quot;devices&quot; aria-label=&quot;设备管理&quot;&gt;
-        &lt;div class=&quot;section-heading&quot;&gt;
-          &lt;div&gt;
-            &lt;h3&gt;附近电流表&lt;/h3&gt;
-            &lt;span class=&quot;muted text-small&quot;&gt;通过 HC-42 无线读表器发现&lt;/span&gt;
-          &lt;/div&gt;
-          &lt;span class=&quot;viz-badge&quot;&gt;3 台在线&lt;/span&gt;
-        &lt;/div&gt;
-
-        &lt;section class=&quot;card device-hero&quot;&gt;
-          &lt;div class=&quot;scan-orbit&quot; id=&quot;scan-orbit&quot;&gt;
-            &lt;span class=&quot;scan-sweep&quot; id=&quot;scan-sweep&quot; aria-hidden=&quot;true&quot;&gt;&lt;/span&gt;
-            &lt;span class=&quot;scan-center&quot;&gt;&lt;svg class=&quot;icon&quot; aria-hidden=&quot;true&quot;&gt;&lt;use href=&quot;#i-bluetooth&quot;&gt;&lt;/use&gt;&lt;/svg&gt;&lt;/span&gt;
-          &lt;/div&gt;
-          &lt;div class=&quot;scan-copy&quot;&gt;
-            &lt;h3 id=&quot;scan-title&quot;&gt;无线覆盖良好&lt;/h3&gt;
-            &lt;p class=&quot;muted text-small&quot; id=&quot;scan-subtitle&quot;&gt;最远设备约 5.4 m · 上次搜索刚刚&lt;/p&gt;
-          &lt;/div&gt;
-          &lt;button type=&quot;button&quot; class=&quot;btn btn-primary btn-block scan-action&quot; id=&quot;scan-button&quot;&gt;
-            &lt;span class=&quot;button-copy&quot;&gt;
-              &lt;svg class=&quot;icon&quot; aria-hidden=&quot;true&quot;&gt;&lt;use href=&quot;#i-search&quot;&gt;&lt;/use&gt;&lt;/svg&gt;
-              &lt;span id=&quot;scan-label&quot;&gt;重新搜索&lt;/span&gt;
-            &lt;/span&gt;
-          &lt;/button&gt;
-        &lt;/section&gt;
-
-        &lt;div class=&quot;device-list&quot;&gt;
-          &lt;div class=&quot;meter-row&quot;&gt;
-            &lt;span class=&quot;row-lead&quot;&gt;
-              &lt;span class=&quot;meter-icon&quot;&gt;&lt;svg class=&quot;icon&quot; aria-hidden=&quot;true&quot;&gt;&lt;use href=&quot;#i-meter&quot;&gt;&lt;/use&gt;&lt;/svg&gt;&lt;/span&gt;
-              &lt;span&gt;&lt;p&gt;电流表 01&lt;/p&gt;&lt;span class=&quot;row-subtitle text-small&quot;&gt;地址 0x01 · 3.2 m&lt;/span&gt;&lt;/span&gt;
-            &lt;/span&gt;
-            &lt;span class=&quot;tag text-small&quot;&gt;信号强&lt;/span&gt;
-          &lt;/div&gt;
-          &lt;div class=&quot;meter-row&quot;&gt;
-            &lt;span class=&quot;row-lead&quot;&gt;
-              &lt;span class=&quot;meter-icon&quot;&gt;&lt;svg class=&quot;icon&quot; aria-hidden=&quot;true&quot;&gt;&lt;use href=&quot;#i-meter&quot;&gt;&lt;/use&gt;&lt;/svg&gt;&lt;/span&gt;
-              &lt;span&gt;&lt;p&gt;电流表 02&lt;/p&gt;&lt;span class=&quot;row-subtitle text-small&quot;&gt;地址 0x02 · 4.1 m&lt;/span&gt;&lt;/span&gt;
-            &lt;/span&gt;
-            &lt;span class=&quot;tag text-small&quot;&gt;信号良好&lt;/span&gt;
-          &lt;/div&gt;
-          &lt;div class=&quot;meter-row&quot;&gt;
-            &lt;span class=&quot;row-lead&quot;&gt;
-              &lt;span class=&quot;meter-icon is-alert&quot;&gt;&lt;svg class=&quot;icon&quot; aria-hidden=&quot;true&quot;&gt;&lt;use href=&quot;#i-bolt&quot;&gt;&lt;/use&gt;&lt;/svg&gt;&lt;/span&gt;
-              &lt;span&gt;&lt;p&gt;电流表 03&lt;/p&gt;&lt;span class=&quot;row-subtitle text-small&quot;&gt;地址 0x03 · 5.4 m&lt;/span&gt;&lt;/span&gt;
-            &lt;/span&gt;
-            &lt;span class=&quot;tag is-alert text-small&quot;&gt;超限&lt;/span&gt;
-          &lt;/div&gt;
-        &lt;/div&gt;
-      &lt;/section&gt;
-    &lt;/main&gt;
-
-    &lt;nav class=&quot;bottom-nav&quot; aria-label=&quot;主要页面&quot;&gt;
-      &lt;span class=&quot;nav-indicator&quot; id=&quot;nav-indicator&quot; aria-hidden=&quot;true&quot;&gt;&lt;/span&gt;
-      &lt;button type=&quot;button&quot; class=&quot;btn btn-ghost nav-button&quot; data-target=&quot;home&quot; aria-selected=&quot;true&quot;&gt;
-        &lt;svg class=&quot;icon&quot; aria-hidden=&quot;true&quot;&gt;&lt;use href=&quot;#i-home&quot;&gt;&lt;/use&gt;&lt;/svg&gt;
-        &lt;span class=&quot;text-small&quot;&gt;读数&lt;/span&gt;
-      &lt;/button&gt;
-      &lt;button type=&quot;button&quot; class=&quot;btn btn-ghost nav-button&quot; data-target=&quot;history&quot; aria-selected=&quot;false&quot;&gt;
-        &lt;svg class=&quot;icon&quot; aria-hidden=&quot;true&quot;&gt;&lt;use href=&quot;#i-chart&quot;&gt;&lt;/use&gt;&lt;/svg&gt;
-        &lt;span class=&quot;text-small&quot;&gt;历史&lt;/span&gt;
-      &lt;/button&gt;
-      &lt;button type=&quot;button&quot; class=&quot;btn btn-ghost nav-button&quot; data-target=&quot;devices&quot; aria-selected=&quot;false&quot;&gt;
-        &lt;svg class=&quot;icon&quot; aria-hidden=&quot;true&quot;&gt;&lt;use href=&quot;#i-meter&quot;&gt;&lt;/use&gt;&lt;/svg&gt;
-        &lt;span class=&quot;text-small&quot;&gt;设备&lt;/span&gt;
-      &lt;/button&gt;
-    &lt;/nav&gt;
-
-    &lt;div class=&quot;toast text-small&quot; id=&quot;toast&quot; role=&quot;status&quot; aria-live=&quot;polite&quot;&gt;
-      &lt;svg class=&quot;icon&quot; aria-hidden=&quot;true&quot;&gt;&lt;use href=&quot;#i-check&quot;&gt;&lt;/use&gt;&lt;/svg&gt;
-      &lt;span id=&quot;toast-copy&quot;&gt;读数已保存&lt;/span&gt;
-    &lt;/div&gt;
-  &lt;/div&gt;
-&lt;/div&gt;
-
-&lt;script&gt;
-  if (false) {
-  (function () {
-    const root = document.getElementById(&#x27;current-guard-app&#x27;);
-    const navButtons = Array.from(root.querySelectorAll(&#x27;.nav-button&#x27;));
-    const screens = Array.from(root.querySelectorAll(&#x27;.screen&#x27;));
-    const modeButtons = Array.from(root.querySelectorAll(&#x27;.mode-button&#x27;));
-    const autoPanel = root.querySelector(&#x27;#auto-panel&#x27;);
-    const collectButton = root.querySelector(&#x27;#collect-button&#x27;);
-    const collectLabel = root.querySelector(&#x27;#collect-label&#x27;);
-    const readingCard = root.querySelector(&#x27;#reading-card&#x27;);
-    const readingValue = root.querySelector(&#x27;#reading-value&#x27;);
-    const readingState = root.querySelector(&#x27;#reading-state&#x27;);
-    const readingTime = root.querySelector(&#x27;#reading-time&#x27;);
-    const toast = root.querySelector(&#x27;#toast&#x27;);
-    const toastCopy = root.querySelector(&#x27;#toast-copy&#x27;);
-    const actionIcon = root.querySelector(&#x27;.action-icon&#x27;);
-    const meterButtons = Array.from(root.querySelectorAll(&#x27;button.meter-row&#x27;));
-    const periodButtons = Array.from(root.querySelectorAll(&#x27;.period-button&#x27;));
-    const historyLine = root.querySelector(&#x27;#history-line&#x27;);
-    const historyArea = root.querySelector(&#x27;#history-area&#x27;);
-    const historyAlert = root.querySelector(&#x27;#history-alert&#x27;);
-    const historyAverage = root.querySelector(&#x27;#history-average&#x27;);
-    const scanButton = root.querySelector(&#x27;#scan-button&#x27;);
-    const scanOrbit = root.querySelector(&#x27;#scan-orbit&#x27;);
-    const scanLabel = root.querySelector(&#x27;#scan-label&#x27;);
-    const scanTitle = root.querySelector(&#x27;#scan-title&#x27;);
-    const scanSubtitle = root.querySelector(&#x27;#scan-subtitle&#x27;);
-    const clock = root.querySelector(&#x27;#clock&#x27;);
-    let mode = &#x27;manual&#x27;;
-    let toastTimer;
-    let readingIndex = 0;
-    let countdown = 102;
-
-    const readings = [
-      { value: &#x27;1.31&#x27;, line: &#x27;M0 66 C38 64 42 58 76 59 S116 53 148 55 S191 49 224 51 S275 44 330 41&#x27;, area: &#x27;M0 66 C38 64 42 58 76 59 S116 53 148 55 S191 49 224 51 S275 44 330 41 L330 75 L0 75 Z&#x27; },
-      { value: &#x27;1.24&#x27;, line: &#x27;M0 62 C37 62 48 54 78 58 S117 51 149 54 S190 49 225 53 S278 50 330 48&#x27;, area: &#x27;M0 62 C37 62 48 54 78 58 S117 51 149 54 S190 49 225 53 S278 50 330 48 L330 75 L0 75 Z&#x27; },
-      { value: &#x27;1.29&#x27;, line: &#x27;M0 65 C34 62 48 57 78 60 S116 49 148 54 S189 46 223 50 S277 45 330 43&#x27;, area: &#x27;M0 65 C34 62 48 57 78 60 S116 49 148 54 S189 46 223 50 S277 45 330 43 L330 75 L0 75 Z&#x27; }
-    ];
-
-    const historySets = {
-      day: {
-        avg: &#x27;1.18 A&#x27;,
-        line: &#x27;M0 142 C25 138 35 120 60 125 S95 113 120 118 S150 102 177 107 S210 78 235 38 S275 106 300 96 S318 88 330 92&#x27;,
-        area: &#x27;M0 142 C25 138 35 120 60 125 S95 113 120 118 S150 102 177 107 S210 78 235 38 S275 106 300 96 S318 88 330 92 L330 150 L0 150 Z&#x27;,
-        alertX: 235,
-        alertY: 38
-      },
-      week: {
-        avg: &#x27;1.11 A&#x27;,
-        line: &#x27;M0 133 C28 126 48 108 72 114 S112 120 140 91 S179 106 205 98 S245 44 267 59 S298 96 330 84&#x27;,
-        area: &#x27;M0 133 C28 126 48 108 72 114 S112 120 140 91 S179 106 205 98 S245 44 267 59 S298 96 330 84 L330 150 L0 150 Z&#x27;,
-        alertX: 260,
-        alertY: 57
-      },
-      month: {
-        avg: &#x27;1.23 A&#x27;,
-        line: &#x27;M0 124 C26 99 48 112 75 96 S109 70 137 84 S173 126 202 104 S237 51 263 66 S304 76 330 58&#x27;,
-        area: &#x27;M0 124 C26 99 48 112 75 96 S109 70 137 84 S173 126 202 104 S237 51 263 66 S304 76 330 58 L330 150 L0 150 Z&#x27;,
-        alertX: 263,
-        alertY: 66
-      }
-    };
-
-    function showToast(message) {
-      toastCopy.textContent = message;
-      toast.classList.add(&#x27;is-visible&#x27;);
-      window.clearTimeout(toastTimer);
-      toastTimer = window.setTimeout(function () {
-        toast.classList.remove(&#x27;is-visible&#x27;);
-      }, 1900);
-    }
-
-    function setScreen(target) {
-      screens.forEach(function (screen) {
-        screen.classList.toggle(&#x27;is-active&#x27;, screen.dataset.screen === target);
-      });
-      navButtons.forEach(function (button) {
-        button.setAttribute(&#x27;aria-selected&#x27;, String(button.dataset.target === target));
-      });
-    }
-
-    navButtons.forEach(function (button) {
-      button.addEventListener(&#x27;click&#x27;, function () {
-        setScreen(button.dataset.target);
-      });
+function archive(list, source, holdFresh) {
+  const now = Date.now();
+  for (const rec of list) {
+    state.records.unshift({
+      ts: rec.ts || now, addr: rec.addr, amps: rec.amps,
+      status: rec.status || classify(rec.amps), source
     });
-
-    function setMode(nextMode) {
-      mode = nextMode;
-      modeButtons.forEach(function (button) {
-        const selected = button.dataset.mode === mode;
-        button.classList.toggle(&#x27;btn-primary&#x27;, selected);
-        button.setAttribute(&#x27;aria-pressed&#x27;, String(selected));
-      });
-      const auto = mode === &#x27;auto&#x27;;
-      autoPanel.classList.toggle(&#x27;is-visible&#x27;, auto);
-      collectLabel.textContent = auto ? &#x27;暂停自动巡检&#x27; : &#x27;立即采集&#x27;;
-      actionIcon.style.display = auto ? &#x27;none&#x27; : &#x27;&#x27;;
-      if (auto) showToast(&#x27;已发现 3 台电流表&#x27;);
-    }
-
-    modeButtons.forEach(function (button) {
-      button.addEventListener(&#x27;click&#x27;, function () {
-        setMode(button.dataset.mode);
-      });
-    });
-
-    collectButton.addEventListener(&#x27;click&#x27;, function () {
-      if (collectButton.classList.contains(&#x27;is-loading&#x27;)) return;
-
-      if (mode === &#x27;auto&#x27;) {
-        const paused = collectButton.dataset.paused === &#x27;true&#x27;;
-        collectButton.dataset.paused = String(!paused);
-        collectLabel.textContent = paused ? &#x27;暂停自动巡检&#x27; : &#x27;继续自动巡检&#x27;;
-        root.querySelector(&#x27;.pulse-mark&#x27;).style.animationPlayState = paused ? &#x27;running&#x27; : &#x27;paused&#x27;;
-        showToast(paused ? &#x27;自动巡检已继续&#x27; : &#x27;自动巡检已暂停&#x27;);
-        return;
-      }
-
-      collectButton.classList.add(&#x27;is-loading&#x27;);
-      readingCard.classList.add(&#x27;is-refreshing&#x27;);
-      collectLabel.textContent = &#x27;正在读取…&#x27;;
-
-      window.setTimeout(function () {
-        const next = readings[readingIndex % readings.length];
-        readingIndex += 1;
-        readingValue.textContent = next.value;
-        root.querySelector(&#x27;#home-line&#x27;).setAttribute(&#x27;d&#x27;, next.line);
-        root.querySelector(&#x27;#home-area&#x27;).setAttribute(&#x27;d&#x27;, next.area);
-        readingValue.classList.add(&#x27;is-bumping&#x27;);
-        readingTime.textContent = &#x27;刚刚更新 · &#x27; + new Date().toLocaleTimeString(&#x27;zh-CN&#x27;, { hour12: false });
-        collectButton.classList.remove(&#x27;is-loading&#x27;);
-        readingCard.classList.remove(&#x27;is-refreshing&#x27;);
-        collectLabel.textContent = &#x27;再次采集&#x27;;
-        showToast(&#x27;读数已保存到历史&#x27;);
-        window.setTimeout(function () {
-          readingValue.classList.remove(&#x27;is-bumping&#x27;);
-        }, 520);
-      }, 900);
-    });
-
-    meterButtons.forEach(function (button) {
-      button.addEventListener(&#x27;click&#x27;, function () {
-        const isAlert = button.dataset.alert === &#x27;true&#x27;;
-        root.querySelector(&#x27;.reading-label&#x27;).textContent = &#x27;电流表 &#x27; + button.dataset.meter + &#x27; · 实时电流&#x27;;
-        readingValue.textContent = button.dataset.value;
-        readingState.classList.toggle(&#x27;is-alert&#x27;, isAlert);
-        readingState.innerHTML = &#x27;&lt;span class=&quot;status-dot&quot;&gt;&lt;/span&gt;&#x27; + (isAlert ? &#x27;超限&#x27; : &#x27;正常&#x27;);
-        setMode(&#x27;manual&#x27;);
-        readingValue.classList.add(&#x27;is-bumping&#x27;);
-        window.setTimeout(function () {
-          readingValue.classList.remove(&#x27;is-bumping&#x27;);
-        }, 520);
-      });
-    });
-
-    periodButtons.forEach(function (button) {
-      button.addEventListener(&#x27;click&#x27;, function () {
-        const data = historySets[button.dataset.period];
-        periodButtons.forEach(function (peer) {
-          const selected = peer === button;
-          peer.classList.toggle(&#x27;btn-primary&#x27;, selected);
-          peer.setAttribute(&#x27;aria-pressed&#x27;, String(selected));
-        });
-        historyLine.setAttribute(&#x27;d&#x27;, data.line);
-        historyArea.setAttribute(&#x27;d&#x27;, data.area);
-        historyAlert.setAttribute(&#x27;cx&#x27;, data.alertX);
-        historyAlert.setAttribute(&#x27;cy&#x27;, data.alertY);
-        historyAverage.textContent = data.avg;
-      });
-    });
-
-    scanButton.addEventListener(&#x27;click&#x27;, function () {
-      if (scanOrbit.classList.contains(&#x27;is-scanning&#x27;)) return;
-      scanOrbit.classList.add(&#x27;is-scanning&#x27;);
-      scanLabel.textContent = &#x27;正在搜索…&#x27;;
-      scanTitle.textContent = &#x27;正在扫描无线覆盖范围&#x27;;
-      scanSubtitle.textContent = &#x27;保持读表器开启并靠近电流表&#x27;;
-      window.setTimeout(function () {
-        scanOrbit.classList.remove(&#x27;is-scanning&#x27;);
-        scanLabel.textContent = &#x27;重新搜索&#x27;;
-        scanTitle.textContent = &#x27;发现 3 台电流表&#x27;;
-        scanSubtitle.textContent = &#x27;最远设备约 5.4 m · 刚刚更新&#x27;;
-        showToast(&#x27;设备列表已更新&#x27;);
-      }, 1600);
-    });
-
-    window.setInterval(function () {
-      countdown = countdown &lt;= 0 ? 120 : countdown - 1;
-      const minutes = String(Math.floor(countdown / 60)).padStart(2, &#x27;0&#x27;);
-      const seconds = String(countdown % 60).padStart(2, &#x27;0&#x27;);
-      root.querySelector(&#x27;#countdown&#x27;).textContent = minutes + &#x27;:&#x27; + seconds;
-      clock.textContent = new Date().toLocaleTimeString(&#x27;zh-CN&#x27;, { hour: &#x27;2-digit&#x27;, minute: &#x27;2-digit&#x27;, hour12: false });
-    }, 1000);
-  })();
   }
-&lt;/script&gt;
-&lt;script&gt;
-  (function () {
-    const root = document.getElementById(&#x27;current-guard-app&#x27;);
-    const frame = root.querySelector(&#x27;.app-frame&#x27;);
-    const navButtons = Array.from(root.querySelectorAll(&#x27;.nav-button&#x27;));
-    const screens = Array.from(root.querySelectorAll(&#x27;.screen&#x27;));
-    const modeButtons = Array.from(root.querySelectorAll(&#x27;.mode-button&#x27;));
-    const periodButtons = Array.from(root.querySelectorAll(&#x27;.period-button&#x27;));
-    const meterButtons = Array.from(root.querySelectorAll(&#x27;button.meter-row&#x27;));
-    const autoPanel = root.querySelector(&#x27;#auto-panel&#x27;);
-    const collectButton = root.querySelector(&#x27;#collect-button&#x27;);
-    const collectLabel = root.querySelector(&#x27;#collect-label&#x27;);
-    const actionIcon = root.querySelector(&#x27;.action-icon&#x27;);
-    const spinner = root.querySelector(&#x27;.spinner&#x27;);
-    const actionRipple = root.querySelector(&#x27;#action-ripple&#x27;);
-    const readingGlow = root.querySelector(&#x27;#reading-glow&#x27;);
-    const readingValue = root.querySelector(&#x27;#reading-value&#x27;);
-    const readingState = root.querySelector(&#x27;#reading-state&#x27;);
-    const readingTime = root.querySelector(&#x27;#reading-time&#x27;);
-    const homeLine = root.querySelector(&#x27;#home-line&#x27;);
-    const homeArea = root.querySelector(&#x27;#home-area&#x27;);
-    const historyLine = root.querySelector(&#x27;#history-line&#x27;);
-    const historyArea = root.querySelector(&#x27;#history-area&#x27;);
-    const historyAlert = root.querySelector(&#x27;#history-alert&#x27;);
-    const historyAverage = root.querySelector(&#x27;#history-average&#x27;);
-    const modeIndicator = root.querySelector(&#x27;#mode-indicator&#x27;);
-    const periodIndicator = root.querySelector(&#x27;#period-indicator&#x27;);
-    const navIndicator = root.querySelector(&#x27;#nav-indicator&#x27;);
-    const pulseMark = root.querySelector(&#x27;.pulse-mark&#x27;);
-    const autoStateCopy = root.querySelector(&#x27;#auto-state-copy&#x27;);
-    const countdownCopy = root.querySelector(&#x27;#countdown&#x27;);
-    const toast = root.querySelector(&#x27;#toast&#x27;);
-    const toastCopy = root.querySelector(&#x27;#toast-copy&#x27;);
-    const scanButton = root.querySelector(&#x27;#scan-button&#x27;);
-    const scanSweep = root.querySelector(&#x27;#scan-sweep&#x27;);
-    const scanLabel = root.querySelector(&#x27;#scan-label&#x27;);
-    const scanTitle = root.querySelector(&#x27;#scan-title&#x27;);
-    const scanSubtitle = root.querySelector(&#x27;#scan-subtitle&#x27;);
-    const clock = root.querySelector(&#x27;#clock&#x27;);
+  if (state.records.length > CAP) state.records.length = CAP;
+  saveRecords();
+  const fresh = holdFresh ? 0 : (state.scope === "all"
+    ? list.length
+    : list.filter((r) => r.addr === panelAddr).length);
+  if (state.page !== 0) state.page = 0;
+  renderPanel(fresh);
+}
 
-    let activeScreen = &#x27;home&#x27;;
-    let pulseEnvelope = 0;
-    let readingIndex = 0;
-    let countdown = 102;
-    let toastSerial = 0;
-    let collectionSerial = 0;
-    let scanSerial = 0;
-    let collectionReturnState = &#x27;idle&#x27;;
-    let currentReadingTarget = &#x27;1.27&#x27;;
-    let readingColumns = [];
-    const appState = {
-      mode: &#x27;manual&#x27;,
-      auto: &#x27;idle&#x27;,
-      collection: &#x27;idle&#x27;,
-      scan: &#x27;idle&#x27;
-    };
+/* 因果：读数从中心飞到右侧，落地时 morph 成那条记录 */
+function flyToRecord(rec) {
+  const dev = document.querySelector(".device");
+  const hubEl = $("#odo");
+  if (!dev || !hubEl || typeof hubEl.animate !== "function") return;
 
-    const readings = [
-      {
-        value: &#x27;1.31&#x27;,
-        line: &#x27;M0 66 C38 64 42 58 76 59 S116 53 148 55 S191 49 224 51 S275 44 330 41&#x27;,
-        area: &#x27;M0 66 C38 64 42 58 76 59 S116 53 148 55 S191 49 224 51 S275 44 330 41 L330 75 L0 75 Z&#x27;
-      },
-      {
-        value: &#x27;1.24&#x27;,
-        line: &#x27;M0 62 C37 62 48 54 78 58 S117 51 149 54 S190 49 225 53 S278 50 330 48&#x27;,
-        area: &#x27;M0 62 C37 62 48 54 78 58 S117 51 149 54 S190 49 225 53 S278 50 330 48 L330 75 L0 75 Z&#x27;
-      },
-      {
-        value: &#x27;1.29&#x27;,
-        line: &#x27;M0 65 C34 62 48 57 78 60 S116 49 148 54 S189 46 223 50 S277 45 330 43&#x27;,
-        area: &#x27;M0 65 C34 62 48 57 78 60 S116 49 148 54 S189 46 223 50 S277 45 330 43 L330 75 L0 75 Z&#x27;
-      }
-    ];
+  const devRect = dev.getBoundingClientRect();
+  const s = devRect.width / 980 || 1;                   // 抵掉整体缩放
+  const toLocal = (r) => ({
+    left: (r.left - devRect.left) / s, top: (r.top - devRect.top) / s,
+    width: r.width / s, height: r.height / s
+  });
 
-    const historySets = {
-      day: {
-        avg: &#x27;1.18 A&#x27;,
-        line: &#x27;M0 142 C25 138 35 120 60 125 S95 113 120 118 S150 102 177 107 S210 78 235 38 S275 106 300 96 S318 88 330 92&#x27;,
-        area: &#x27;M0 142 C25 138 35 120 60 125 S95 113 120 118 S150 102 177 107 S210 78 235 38 S275 106 300 96 S318 88 330 92 L330 150 L0 150 Z&#x27;,
-        alertX: 235,
-        alertY: 38
-      },
-      week: {
-        avg: &#x27;1.11 A&#x27;,
-        line: &#x27;M0 133 C28 126 48 108 72 114 S112 120 140 91 S179 106 205 98 S245 44 267 59 S298 96 330 84&#x27;,
-        area: &#x27;M0 133 C28 126 48 108 72 114 S112 120 140 91 S179 106 205 98 S245 44 267 59 S298 96 330 84 L330 150 L0 150 Z&#x27;,
-        alertX: 260,
-        alertY: 57
-      },
-      month: {
-        avg: &#x27;1.23 A&#x27;,
-        line: &#x27;M0 124 C26 99 48 112 75 96 S109 70 137 84 S173 126 202 104 S237 51 263 66 S304 76 330 58&#x27;,
-        area: &#x27;M0 124 C26 99 48 112 75 96 S109 70 137 84 S173 126 202 104 S237 51 263 66 S304 76 330 58 L330 150 L0 150 Z&#x27;,
-        alertX: 263,
-        alertY: 66
-      }
-    };
+  const from = toLocal(hubEl.getBoundingClientRect());
+  const row = $("#log").firstElementChild;
+  const landed = row && row.classList.contains("rec");
+  const to = landed ? toLocal(row.getBoundingClientRect()) : toLocal($("#log").getBoundingClientRect());
+  if (landed) row.style.visibility = "hidden";
 
-    function smoother(t) {
-      const x = Math.max(0, Math.min(1, t));
-      return x * x * x * (x * (x * 6 - 15) + 10);
+  const color = statusColor(rec.status);
+  const f = document.createElement("div");
+  f.className = "flyer";
+  f.style.color = color;
+  f.innerHTML = (rec.amps === null ? "--" : fmtA(rec.amps)) + " A<i>" + LABEL[rec.status] + "</i>";
+  dev.appendChild(f);
+
+  const frames = [
+    { left: from.left + "px", top: from.top - 6 + "px",
+      width: from.width + 34 + "px", height: from.height + 16 + "px",
+      borderRadius: "12px", fontSize: "26px", opacity: 1 },
+    { left: to.left + "px", top: to.top + "px",
+      width: to.width + "px", height: Math.max(24, landed ? to.height : 30) + "px",
+      borderRadius: "4px", fontSize: "13px", opacity: 1 }
+  ];
+  const anim = f.animate(frames, { duration: 460, easing: "cubic-bezier(.34,.9,.3,1)", fill: "both" });
+  let settled = false;
+  const done = () => {
+    if (settled) return;
+    settled = true;
+    f.remove();
+    if (landed) {
+      row.style.visibility = "";
+      row.classList.remove("fresh");
+      void row.getBoundingClientRect();
+      row.classList.add("fresh");
     }
+  };
+  anim.onfinish = done;
+  setTimeout(done, 700);                                // 兜底：动画被节流也不会留下残影
+}
 
-    function motion(duration, draw) {
-      return new Promise(function (resolve) {
-        const start = performance.now();
-        function frameStep(now) {
-          const raw = Math.min(1, (now - start) / duration);
-          draw(smoother(raw), raw);
-          if (raw &lt; 1) {
-            requestAnimationFrame(frameStep);
-          } else {
-            resolve();
-          }
-        }
-        requestAnimationFrame(frameStep);
-      });
-    }
+/* 自动一轮：把每台表当前的最新帧收下来 */
+function autoRound() {
+  for (const m of meters.values()) {
+    if (!m.present) continue;
+    const frame = m.silent ? null : m.frame;
+    const status = frame ? classify(frame.amps) : "off";
+    if (m.status !== status) m.alertUntil = performance.now() + ALERT_MS;
+    m.shown = { amps: frame ? frame.amps : null, ts: frame ? frame.ts : Date.now() };
+    m.status = status;
+  }
+  const list = [];
+  for (const m of meters.values()) {
+    if (m.present) list.push({ addr: m.addr, amps: m.shown.amps, status: m.status, ts: m.shown.ts });
+  }
+  if (list.length) archive(list, "auto");
+  state.remain = PERIOD_S;
+}
 
-    function interpolate(from, to, amount) {
-      return from + (to - from) * amount;
-    }
-
-    const c2Motions = new Map();
-    const attributeMotionKeys = new WeakMap();
-
-    function attributeMotionKey(element, name) {
-      let keys = attributeMotionKeys.get(element);
-      if (!keys) {
-        keys = new Map();
-        attributeMotionKeys.set(element, keys);
-      }
-      if (!keys.has(name)) keys.set(name, {});
-      return keys.get(name);
-    }
-
-    function evaluateTrajectory(trajectory, now, shouldDraw) {
-      const elapsed = Math.max(0, now - trajectory.startedAt);
-      const raw = Math.min(1, elapsed / trajectory.duration);
-      const u = raw;
-      const u2 = u * u;
-      const u3 = u2 * u;
-      const u4 = u3 * u;
-      const u5 = u4 * u;
-      const durationSeconds = trajectory.duration / 1000;
-      const x = [];
-      const velocity = [];
-      const acceleration = [];
-
-      for (let index = 0; index &lt; trajectory.coefficients.length; index += 1) {
-        const c = trajectory.coefficients[index];
-        x[index] = c[0] + c[1] * u + c[2] * u2 + c[3] * u3 + c[4] * u4 + c[5] * u5;
-        velocity[index] = (c[1] + 2 * c[2] * u + 3 * c[3] * u2 + 4 * c[4] * u3 + 5 * c[5] * u4) / durationSeconds;
-        acceleration[index] = (2 * c[2] + 6 * c[3] * u + 12 * c[4] * u2 + 20 * c[5] * u3) / (durationSeconds * durationSeconds);
-      }
-
-      trajectory.x = x;
-      trajectory.velocity = velocity;
-      trajectory.acceleration = acceleration;
-      if (shouldDraw) trajectory.draw(x);
-      return raw;
-    }
-
-    function takeTrajectoryState(key, fallbackX, now) {
-      const existing = c2Motions.get(key);
-      if (!existing) {
-        return {
-          x: fallbackX.slice(),
-          velocity: fallbackX.map(function () { return 0; }),
-          acceleration: fallbackX.map(function () { return 0; })
-        };
-      }
-      evaluateTrajectory(existing, now || performance.now(), true);
-      c2Motions.delete(key);
-      return {
-        x: existing.x.slice(),
-        velocity: existing.velocity.slice(),
-        acceleration: existing.acceleration.slice()
-      };
-    }
-
-    function c2To(key, target, duration, draw, fallbackX, suppliedState) {
-      const now = performance.now();
-      const state = suppliedState || takeTrajectoryState(key, fallbackX, now);
-      const durationSeconds = duration / 1000;
-      const coefficients = target.map(function (destination, index) {
-        const b0 = state.x[index];
-        const b1 = state.velocity[index] * durationSeconds;
-        const b2 = state.acceleration[index] * durationSeconds * durationSeconds / 2;
-        const positionRemainder = destination - b0 - b1 - b2;
-        const velocityRemainder = -b1 - 2 * b2;
-        const accelerationRemainder = -2 * b2;
-        const b3 = 10 * positionRemainder - 4 * velocityRemainder + accelerationRemainder / 2;
-        const b4 = -15 * positionRemainder + 7 * velocityRemainder - accelerationRemainder;
-        const b5 = 6 * positionRemainder - 3 * velocityRemainder + accelerationRemainder / 2;
-        return [b0, b1, b2, b3, b4, b5];
-      });
-
-      return new Promise(function (resolve) {
-        const trajectory = {
-          key: key,
-          target: target.slice(),
-          duration: duration,
-          startedAt: now,
-          coefficients: coefficients,
-          draw: draw,
-          x: state.x.slice(),
-          velocity: state.velocity.slice(),
-          acceleration: state.acceleration.slice()
-        };
-        c2Motions.set(key, trajectory);
-
-        function step(timestamp) {
-          if (c2Motions.get(key) !== trajectory) return;
-          const raw = evaluateTrajectory(trajectory, timestamp, true);
-          if (raw &lt; 1) {
-            requestAnimationFrame(step);
-          } else {
-            c2Motions.delete(key);
-            resolve();
-          }
-        }
-        requestAnimationFrame(step);
-      });
-    }
-
-    function stopC2(key, fallbackX) {
-      return takeTrajectoryState(key, fallbackX, performance.now());
-    }
-
-    function positiveModulo(value, divisor) {
-      return ((value % divisor) + divisor) % divisor;
-    }
-
-    function makeDigitColumn(digit) {
-      const windowElement = document.createElement(&#x27;span&#x27;);
-      const track = document.createElement(&#x27;span&#x27;);
-      const initialPosition = 30 + Number(digit);
-      windowElement.className = &#x27;digit-window&#x27;;
-      windowElement.setAttribute(&#x27;aria-hidden&#x27;, &#x27;true&#x27;);
-      track.className = &#x27;digit-track&#x27;;
-
-      for (let index = 0; index &lt; 80; index += 1) {
-        const face = document.createElement(&#x27;span&#x27;);
-        face.className = &#x27;digit-face&#x27;;
-        face.textContent = String(index % 10);
+/* ══════════ 里程表数字：所有位同速 ══════════ */
+const odoState = [];                    // 每个数字轮 { pos, target }
+function buildOdo(el, shape) {
+  el.dataset.shape = shape;
+  el.textContent = "";
+  odoState.length = 0;
+  for (const ch of shape) {
+    if (ch === "#") {
+      const win = document.createElement("span");
+      win.className = "odo-win";
+      const track = document.createElement("span");
+      track.className = "odo-track";
+      for (let d = 0; d <= 10; d++) {   // 第 11 面是 0，跨越 9→0 无缝
+        const face = document.createElement("span");
+        face.className = "odo-face";
+        face.textContent = String(d % 10);
         track.appendChild(face);
       }
-
-      track.style.transform = &#x27;translateY(&#x27; + (-initialPosition) + &#x27;em)&#x27;;
-      windowElement.dataset.position = String(initialPosition);
-      windowElement.dataset.targetDigit = String(digit);
-      windowElement.appendChild(track);
-      return windowElement;
+      win.appendChild(track);
+      el.appendChild(win);
+      odoState.push({ pos: 0, target: 0, track });
+    } else {
+      const s = document.createElement("span");
+      s.className = ch === "." ? "odo-dot" : "odo-dash";
+      s.textContent = ch;
+      el.appendChild(s);
     }
+  }
+}
 
-    function initializeNumberRoller(value) {
-      readingValue.textContent = &#x27;&#x27;;
-      readingValue.classList.add(&#x27;number-roller&#x27;);
-      readingValue.setAttribute(&#x27;aria-label&#x27;, value + &#x27; 安培&#x27;);
-      readingColumns = [];
-
-      value.split(&#x27;&#x27;).forEach(function (character) {
-        if (/\d/.test(character)) {
-          const column = makeDigitColumn(character);
-          readingColumns.push(column);
-          readingValue.appendChild(column);
-        } else {
-          const separator = document.createElement(&#x27;span&#x27;);
-          separator.className = &#x27;decimal-glyph&#x27;;
-          separator.setAttribute(&#x27;aria-hidden&#x27;, &#x27;true&#x27;);
-          separator.textContent = character;
-          readingValue.appendChild(separator);
-        }
-      });
-      currentReadingTarget = value;
-    }
-
-    function rollingTarget(position, digit, direction) {
-      let target = direction &gt;= 0 ? Math.ceil(position) : Math.floor(position);
-      if (direction &gt;= 0) {
-        while (positiveModulo(target, 10) !== digit) target += 1;
-      } else {
-        while (positiveModulo(target, 10) !== digit) target -= 1;
-      }
-      return target;
-    }
-
-    function rollReading(nextValue, duration) {
-      const next = String(nextValue);
-      if (next === currentReadingTarget) return Promise.resolve();
-      const digits = next.match(/\d/g) || [];
-      if (digits.length !== readingColumns.length) {
-        initializeNumberRoller(next);
-        return Promise.resolve();
-      }
-
-      const direction = Number(next) &gt;= Number(currentReadingTarget) ? 1 : -1;
-      currentReadingTarget = next;
-      readingValue.setAttribute(&#x27;aria-label&#x27;, next + &#x27; 安培&#x27;);
-
-      const motions = readingColumns.map(function (column, index) {
-        const track = column.querySelector(&#x27;.digit-track&#x27;);
-        const fallbackPosition = Number(column.dataset.position);
-        const state = takeTrajectoryState(column, [fallbackPosition], performance.now());
-        const targetDigit = Number(digits[index]);
-        const targetPosition = rollingTarget(state.x[0], targetDigit, direction);
-        const distance = Math.abs(targetPosition - state.x[0]);
-        const travelTime = duration || Math.min(900, 520 + distance * 55);
-        column.dataset.targetDigit = String(targetDigit);
-
-        return c2To(column, [targetPosition], travelTime, function (value) {
-          track.style.transform = &#x27;translateY(&#x27; + (-value[0]) + &#x27;em)&#x27;;
-          column.dataset.position = String(value[0]);
-        }, state.x, state).then(function () {
-          if (column.dataset.targetDigit !== String(targetDigit)) return;
-          const normalized = 30 + targetDigit;
-          column.dataset.position = String(normalized);
-          track.style.transform = &#x27;translateY(&#x27; + (-normalized) + &#x27;em)&#x27;;
-        });
-      });
-
-      return Promise.all(motions);
-    }
-
-    function setIndicatorInstant(indicator, button, fixedWidth) {
-      stopC2(indicator, [indicator.offsetLeft, indicator.offsetWidth]);
-      const container = indicator.parentElement;
-      const parentRect = container.getBoundingClientRect();
-      const buttonRect = button.getBoundingClientRect();
-      const width = fixedWidth || buttonRect.width;
-      indicator.style.left = (buttonRect.left - parentRect.left + (buttonRect.width - width) / 2) + &#x27;px&#x27;;
-      indicator.style.width = width + &#x27;px&#x27;;
-    }
-
-    function moveIndicator(indicator, button, fixedWidth) {
-      const container = indicator.parentElement;
-      const parentRect = container.getBoundingClientRect();
-      const buttonRect = button.getBoundingClientRect();
-      const endWidth = fixedWidth || buttonRect.width;
-      const endLeft = buttonRect.left - parentRect.left + (buttonRect.width - endWidth) / 2;
-      const fallback = [
-        parseFloat(indicator.style.left) || indicator.offsetLeft,
-        parseFloat(indicator.style.width) || indicator.offsetWidth
-      ];
-      return c2To(indicator, [endLeft, endWidth], 520, function (value) {
-        indicator.style.left = value[0] + &#x27;px&#x27;;
-        indicator.style.width = value[1] + &#x27;px&#x27;;
-      }, fallback);
-    }
-
-    function morphText(element, nextText, duration) {
-      if (!element || element.textContent === nextText) return Promise.resolve();
-      const time = duration || 420;
-      const currentRect = element.getBoundingClientRect();
-      const frameRect = frame.getBoundingClientRect();
-      const computed = getComputedStyle(element);
-      const currentOpacity = Number(computed.opacity) || 0;
-      const currentWidth = currentRect.width;
-      const currentState = takeTrajectoryState(element, [currentOpacity, 0, currentWidth], performance.now());
-      const ghost = document.createElement(&#x27;span&#x27;);
-      ghost.className = &#x27;motion-ghost&#x27;;
-      ghost.textContent = element.textContent;
-      ghost.style.left = (currentRect.left - frameRect.left) + &#x27;px&#x27;;
-      ghost.style.top = (currentRect.top - frameRect.top) + &#x27;px&#x27;;
-      ghost.style.width = currentRect.width + &#x27;px&#x27;;
-      ghost.style.height = currentRect.height + &#x27;px&#x27;;
-      ghost.style.font = computed.font;
-      ghost.style.letterSpacing = computed.letterSpacing;
-      ghost.style.textAlign = computed.textAlign;
-      ghost.style.opacity = String(currentState.x[0]);
-      frame.appendChild(ghost);
-
-      const previousDisplay = element.style.display;
-      const previousWidth = element.style.width;
-      element.style.display = &#x27;inline-block&#x27;;
-      element.textContent = nextText;
-      element.style.width = &#x27;auto&#x27;;
-      const newWidth = element.getBoundingClientRect().width;
-      element.style.width = currentWidth + &#x27;px&#x27;;
-      element.style.opacity = &#x27;0&#x27;;
-      element.style.transform = &#x27;translateY(6px)&#x27;;
-
-      const ghostState = {
-        x: [currentState.x[0], 0],
-        velocity: [currentState.velocity[0], currentState.velocity[1]],
-        acceleration: [currentState.acceleration[0], currentState.acceleration[1]]
-      };
-
-      c2To(ghost, [0, -6], time, function (value) {
-        ghost.style.opacity = String(value[0]);
-        ghost.style.transform = &#x27;translateY(&#x27; + value[1] + &#x27;px)&#x27;;
-      }, ghostState.x, ghostState).then(function () {
-        ghost.remove();
-      });
-
-      return c2To(element, [1, 0, newWidth], time, function (value) {
-        element.style.opacity = String(value[0]);
-        element.style.transform = &#x27;translateY(&#x27; + value[1] + &#x27;px)&#x27;;
-        element.style.width = value[2] + &#x27;px&#x27;;
-      }, [0, 6, currentWidth], {
-        x: [0, 6, currentWidth],
-        velocity: [0, 0, currentState.velocity[2]],
-        acceleration: [0, 0, currentState.acceleration[2]]
-      }).then(function () {
-        element.style.opacity = &#x27;&#x27;;
-        element.style.transform = &#x27;&#x27;;
-        element.style.width = previousWidth;
-        element.style.display = previousDisplay;
-      });
-    }
-
-    function fadeMutate(element, mutate, duration) {
-      const time = duration || 520;
-      const computed = getComputedStyle(element);
-      const startOpacity = Number(computed.opacity) || 0;
-      return c2To(element, [0, 0.96], time / 2, function (value) {
-        element.style.opacity = String(value[0]);
-        element.style.transform = &#x27;scale(&#x27; + value[1] + &#x27;)&#x27;;
-      }, [startOpacity, 1]).then(function () {
-        mutate();
-        return c2To(element, [1, 1], time / 2, function (value) {
-          element.style.opacity = String(value[0]);
-          element.style.transform = &#x27;scale(&#x27; + value[1] + &#x27;)&#x27;;
-        }, [0, 0.96]);
-      }).then(function () {
-        element.style.opacity = &#x27;&#x27;;
-        element.style.transform = &#x27;&#x27;;
-      });
-    }
-
-    function pathNumbers(path) {
-      return (path.match(/-?\d*\.?\d+/g) || []).map(Number);
-    }
-
-    function morphPath(element, target, duration) {
-      const source = element.getAttribute(&#x27;d&#x27;);
-      const from = pathNumbers(source);
-      const to = pathNumbers(target);
-      if (from.length !== to.length) {
-        return fadeMutate(element, function () {
-          element.setAttribute(&#x27;d&#x27;, target);
-        }, duration);
-      }
-      return c2To(element, to, duration || 620, function (value) {
-        let index = 0;
-        const path = target.replace(/-?\d*\.?\d+/g, function () {
-          const number = value[index];
-          index += 1;
-          return number.toFixed(2);
-        });
-        element.setAttribute(&#x27;d&#x27;, path);
-      }, from);
-    }
-
-    function morphAttribute(element, name, target, duration) {
-      const start = Number(element.getAttribute(name));
-      const key = attributeMotionKey(element, name);
-      return c2To(key, [target], duration || 620, function (value) {
-        element.setAttribute(name, value[0].toFixed(2));
-      }, [start]);
-    }
-
-    function revealPanel(show) {
-      const target = show ? 1 : 0;
-      const wasVisible = autoPanel.classList.contains(&#x27;is-visible&#x27;);
-      const currentOpacity = wasVisible ? Number(getComputedStyle(autoPanel).opacity) || 0 : 0;
-      if (show) autoPanel.classList.add(&#x27;is-visible&#x27;);
-      if (!show) animatePulseEnvelope(0);
-      const fallback = [currentOpacity];
-      return c2To(autoPanel, [target], 620, function (value) {
-        const progress = value[0];
-        autoPanel.style.opacity = String(progress);
-        autoPanel.style.transform = &#x27;translateY(&#x27; + (-12 * (1 - progress)) + &#x27;px) scale(&#x27; + interpolate(0.98, 1, progress) + &#x27;)&#x27;;
-      }, fallback).then(function () {
-        if (show) {
-          autoPanel.style.opacity = &#x27;&#x27;;
-          autoPanel.style.transform = &#x27;&#x27;;
-          animatePulseEnvelope(appState.auto === &#x27;running&#x27; ? 1 : 0.18);
-        } else {
-          autoPanel.classList.remove(&#x27;is-visible&#x27;);
-          autoPanel.style.opacity = &#x27;&#x27;;
-          autoPanel.style.transform = &#x27;&#x27;;
-        }
-      });
-    }
-
-    function toggleActionIcon(show) {
-      if (show) actionIcon.style.display = &#x27;&#x27;;
-      actionIcon.style.overflow = &#x27;hidden&#x27;;
-      const computed = getComputedStyle(actionIcon);
-      const fallback = [
-        actionIcon.getBoundingClientRect().width || (show ? 0 : 18),
-        Number(computed.opacity) || (show ? 0 : 1),
-        show ? 0.7 : 1
-      ];
-      return c2To(actionIcon, show ? [18, 1, 1] : [0, 0, 0.7], 420, function (value) {
-        actionIcon.style.width = value[0] + &#x27;px&#x27;;
-        actionIcon.style.opacity = String(value[1]);
-        actionIcon.style.transform = &#x27;scale(&#x27; + value[2] + &#x27;)&#x27;;
-      }, fallback).then(function () {
-        if (!show) actionIcon.style.display = &#x27;none&#x27;;
-        actionIcon.style.width = &#x27;&#x27;;
-        actionIcon.style.opacity = &#x27;&#x27;;
-        actionIcon.style.transform = &#x27;&#x27;;
-        actionIcon.style.overflow = &#x27;&#x27;;
-      });
-    }
-
-    function animatePulseEnvelope(target) {
-      c2To(pulseMark, [target], 440, function (value) {
-        pulseEnvelope = value[0];
-      }, [pulseEnvelope]);
-    }
-
-    const ambientStart = performance.now();
-    function ambientPulse(now) {
-      const phase = ((now - ambientStart) / 1900) * Math.PI * 2;
-      const wave = (1 - Math.cos(phase)) / 2;
-      const amplitude = pulseEnvelope;
-      pulseMark.style.transform = &#x27;scale(&#x27; + (1 + 0.12 * wave * amplitude) + &#x27;)&#x27;;
-      pulseMark.style.boxShadow = &#x27;0 0 0 &#x27; + (10 * wave * amplitude) + &#x27;px color-mix(in srgb, var(--viz-series-1) &#x27; + (18 * (1 - wave) * amplitude) + &#x27;%, transparent)&#x27;;
-      requestAnimationFrame(ambientPulse);
-    }
-    requestAnimationFrame(ambientPulse);
-
-    function showToast(message) {
-      toastSerial += 1;
-      const serial = toastSerial;
-      if (toastCopy.textContent !== message) morphText(toastCopy, message, 360);
-      const fallback = [Number(getComputedStyle(toast).opacity) || 0, 16, 0.94];
-      c2To(toast, [1, 0, 1], 420, function (value) {
-        toast.style.opacity = String(value[0]);
-        toast.style.transform = &#x27;translate(-50%, &#x27; + value[1] + &#x27;px) scale(&#x27; + value[2] + &#x27;)&#x27;;
-      }, fallback).then(function () {
-        window.setTimeout(function () {
-          if (serial !== toastSerial) return;
-          c2To(toast, [0, -10, 0.97], 420, function (value) {
-            toast.style.opacity = String(value[0]);
-            toast.style.transform = &#x27;translate(-50%, &#x27; + value[1] + &#x27;px) scale(&#x27; + value[2] + &#x27;)&#x27;;
-          }, [1, 0, 1]);
-        }, 1300);
-      });
-    }
-
-    function switchScreen(target) {
-      if (target === activeScreen) return;
-      const navButton = root.querySelector(&#x27;[data-target=&quot;&#x27; + target + &#x27;&quot;]&#x27;);
-      moveIndicator(navIndicator, navButton, 22);
-      activeScreen = target;
-
-      screens.forEach(function (screen) {
-        const isTarget = screen.dataset.screen === target;
-        const computed = getComputedStyle(screen);
-        const fallbackOpacity = screen.classList.contains(&#x27;is-active&#x27;) ? 1 : Number(computed.opacity) || 0;
-        const fallback = [fallbackOpacity, isTarget ? 14 : 0, screen.classList.contains(&#x27;is-active&#x27;) ? 1 : 0.992];
-        screen.style.visibility = &#x27;visible&#x27;;
-        screen.style.pointerEvents = isTarget ? &#x27;auto&#x27; : &#x27;none&#x27;;
-        if (isTarget) {
-          screen.classList.add(&#x27;is-active&#x27;);
-        } else {
-          screen.classList.remove(&#x27;is-active&#x27;);
-        }
-
-        c2To(screen, isTarget ? [1, 0, 1] : [0, -10, 0.992], 620, function (value) {
-          screen.style.opacity = String(value[0]);
-          screen.style.transform = &#x27;translateY(&#x27; + value[1] + &#x27;px) scale(&#x27; + value[2] + &#x27;)&#x27;;
-        }, fallback).then(function () {
-          if (screen.dataset.screen === activeScreen) {
-            screen.classList.add(&#x27;is-active&#x27;);
-            screen.style.visibility = &#x27;&#x27;;
-            screen.style.pointerEvents = &#x27;&#x27;;
-          } else {
-            screen.classList.remove(&#x27;is-active&#x27;);
-            screen.style.visibility = &#x27;&#x27;;
-            screen.style.pointerEvents = &#x27;&#x27;;
-          }
-          screen.style.opacity = &#x27;&#x27;;
-          screen.style.transform = &#x27;&#x27;;
-        });
-      });
-      navButtons.forEach(function (button) {
-        button.setAttribute(&#x27;aria-selected&#x27;, String(button.dataset.target === target));
-      });
-    }
-
-    function primaryActionLabel() {
-      if (appState.mode === &#x27;auto&#x27;) {
-        return appState.auto === &#x27;running&#x27; ? &#x27;暂停自动巡检&#x27; : &#x27;继续自动巡检&#x27;;
-      }
-      if (appState.collection === &#x27;reading&#x27;) return &#x27;取消读取&#x27;;
-      if (appState.collection === &#x27;ready&#x27;) return &#x27;再次采集&#x27;;
-      return &#x27;立即采集&#x27;;
-    }
-
-    function automaticStateLabel() {
-      if (appState.auto === &#x27;running&#x27;) return &#x27;自动巡检运行中&#x27;;
-      if (appState.auto === &#x27;paused&#x27;) return &#x27;自动巡检已暂停&#x27;;
-      return &#x27;自动巡检尚未启动&#x27;;
-    }
-
-    function renderDerivedState(instant) {
-      const actionLabel = primaryActionLabel();
-      const statusLabel = automaticStateLabel();
-      if (instant) {
-        collectLabel.textContent = actionLabel;
-        autoStateCopy.textContent = statusLabel;
-      } else {
-        morphText(collectLabel, actionLabel, 420);
-        morphText(autoStateCopy, statusLabel, 420);
-      }
-      collectButton.setAttribute(&#x27;aria-label&#x27;, actionLabel);
-      autoPanel.dataset.state = appState.auto;
-
-      if (appState.mode === &#x27;auto&#x27;) {
-        animatePulseEnvelope(appState.auto === &#x27;running&#x27; ? 1 : 0.18);
-      } else {
-        animatePulseEnvelope(0);
-      }
-    }
-
-    function setMode(nextMode) {
-      if (appState.mode === nextMode) return;
-      const leavingAutomatic = appState.mode === &#x27;auto&#x27; &amp;&amp; nextMode === &#x27;manual&#x27;;
-      const enteringAutomatic = appState.mode === &#x27;manual&#x27; &amp;&amp; nextMode === &#x27;auto&#x27;;
-      appState.mode = nextMode;
-
-      if (leavingAutomatic &amp;&amp; appState.auto === &#x27;running&#x27;) {
-        appState.auto = &#x27;paused&#x27;;
-      }
-      if (enteringAutomatic &amp;&amp; appState.auto === &#x27;idle&#x27;) {
-        appState.auto = &#x27;running&#x27;;
-      }
-      if (enteringAutomatic &amp;&amp; appState.collection === &#x27;reading&#x27;) {
-        cancelAcquisition(true);
-      }
-
-      const auto = appState.mode === &#x27;auto&#x27;;
-      const selected = root.querySelector(&#x27;[data-mode=&quot;&#x27; + appState.mode + &#x27;&quot;]&#x27;);
-      moveIndicator(modeIndicator, selected);
-      modeButtons.forEach(function (button) {
-        button.setAttribute(&#x27;aria-pressed&#x27;, String(button.dataset.mode === appState.mode));
-      });
-      revealPanel(auto);
-      toggleActionIcon(!auto);
-      renderDerivedState();
-      if (auto) {
-        showToast(appState.auto === &#x27;running&#x27; ? &#x27;自动巡检已启动&#x27; : &#x27;自动巡检仍处于暂停&#x27;);
-      }
-    }
-
-    function drawCollectionVisual(value) {
-      spinner.style.opacity = String(value[0]);
-      spinner.style.transform = &#x27;rotate(&#x27; + value[1] + &#x27;deg)&#x27;;
-      actionRipple.style.opacity = String(value[2]);
-      actionRipple.style.transform = &#x27;scale(&#x27; + value[3] + &#x27;)&#x27;;
-      readingGlow.style.opacity = String(value[4]);
-      readingGlow.style.transform = &#x27;scale(&#x27; + value[5] + &#x27;)&#x27;;
-    }
-
-    function clearCollectionVisual() {
-      spinner.style.display = &#x27;none&#x27;;
-      spinner.style.opacity = &#x27;&#x27;;
-      spinner.style.transform = &#x27;&#x27;;
-      actionRipple.style.opacity = &#x27;&#x27;;
-      actionRipple.style.transform = &#x27;&#x27;;
-      readingGlow.style.opacity = &#x27;&#x27;;
-      readingGlow.style.transform = &#x27;&#x27;;
-    }
-
-    function cancelAcquisition(silent) {
-      if (appState.collection !== &#x27;reading&#x27;) return;
-      appState.collection = collectionReturnState;
-      collectionSerial += 1;
-      const serial = collectionSerial;
-      const state = takeTrajectoryState(collectButton, [0, 0, 0, 0, 0, 0.82], performance.now());
-      const target = [0, state.x[1] + 90, 0, state.x[3] + 3, 0, state.x[5]];
-      renderDerivedState();
-      c2To(collectButton, target, 380, drawCollectionVisual, state.x, state).then(function () {
-        if (serial !== collectionSerial) return;
-        clearCollectionVisual();
-        if (!silent) showToast(&#x27;已取消本次读取&#x27;);
-      });
-    }
-
-    function animateAcquisition() {
-      if (appState.collection === &#x27;reading&#x27;) {
-        cancelAcquisition();
-        return;
-      }
-      collectionReturnState = appState.collection === &#x27;ready&#x27; ? &#x27;ready&#x27; : &#x27;idle&#x27;;
-      appState.collection = &#x27;reading&#x27;;
-      collectionSerial += 1;
-      const serial = collectionSerial;
-      spinner.style.display = &#x27;inline-block&#x27;;
-      const state = takeTrajectoryState(collectButton, [0, 0, 0, 0, 0, 0.82], performance.now());
-      renderDerivedState();
-      const peak = [1, state.x[1] + 180, 0.8, 7, 1, 1.1];
-      c2To(collectButton, peak, 360, drawCollectionVisual, state.x, state).then(function () {
-        if (serial !== collectionSerial) return;
-        return c2To(collectButton, [0, peak[1] + 360, 0, 18, 0, 1.38], 540, drawCollectionVisual, peak);
-      }).then(function () {
-        if (serial !== collectionSerial || appState.collection !== &#x27;reading&#x27;) return;
-        const next = readings[readingIndex % readings.length];
-        readingIndex += 1;
-        clearCollectionVisual();
-        Promise.all([
-          rollReading(next.value),
-          morphText(readingTime, &#x27;刚刚更新 · &#x27; + new Date().toLocaleTimeString(&#x27;zh-CN&#x27;, { hour12: false }), 520),
-          morphPath(homeLine, next.line, 680),
-          morphPath(homeArea, next.area, 680)
-        ]).then(function () {
-          if (serial !== collectionSerial) return;
-          appState.collection = &#x27;ready&#x27;;
-          renderDerivedState();
-          showToast(&#x27;读数已保存到历史&#x27;);
-        });
-      });
-    }
-
-    navButtons.forEach(function (button) {
-      button.addEventListener(&#x27;click&#x27;, function () {
-        switchScreen(button.dataset.target);
-      });
-    });
-
-    modeButtons.forEach(function (button) {
-      button.addEventListener(&#x27;click&#x27;, function () {
-        setMode(button.dataset.mode);
-      });
-    });
-
-    collectButton.addEventListener(&#x27;click&#x27;, function () {
-      if (appState.mode === &#x27;manual&#x27;) {
-        animateAcquisition();
-        return;
-      }
-      appState.auto = appState.auto === &#x27;running&#x27; ? &#x27;paused&#x27; : &#x27;running&#x27;;
-      renderDerivedState();
-      showToast(appState.auto === &#x27;paused&#x27; ? &#x27;自动巡检已暂停&#x27; : &#x27;自动巡检已继续&#x27;);
-    });
-
-    meterButtons.forEach(function (button) {
-      button.addEventListener(&#x27;click&#x27;, function () {
-        const isAlert = button.dataset.alert === &#x27;true&#x27;;
-        const label = root.querySelector(&#x27;.reading-label&#x27;);
-        Promise.all([
-          morphText(label, &#x27;电流表 &#x27; + button.dataset.meter + &#x27; · 实时电流&#x27;),
-          rollReading(button.dataset.value)
-        ]);
-        fadeMutate(readingState, function () {
-          readingState.classList.toggle(&#x27;is-alert&#x27;, isAlert);
-          readingState.innerHTML = &#x27;&lt;span class=&quot;status-dot&quot;&gt;&lt;/span&gt;&#x27; + (isAlert ? &#x27;超限&#x27; : &#x27;正常&#x27;);
-        });
-        setMode(&#x27;manual&#x27;);
-      });
-    });
-
-    periodButtons.forEach(function (button) {
-      button.addEventListener(&#x27;click&#x27;, function () {
-        if (button.getAttribute(&#x27;aria-pressed&#x27;) === &#x27;true&#x27;) return;
-        const data = historySets[button.dataset.period];
-        moveIndicator(periodIndicator, button);
-        periodButtons.forEach(function (peer) {
-          peer.setAttribute(&#x27;aria-pressed&#x27;, String(peer === button));
-        });
-        morphText(historyAverage, data.avg, 520);
-        morphPath(historyLine, data.line, 680);
-        morphPath(historyArea, data.area, 680);
-        morphAttribute(historyAlert, &#x27;cx&#x27;, data.alertX, 680);
-        morphAttribute(historyAlert, &#x27;cy&#x27;, data.alertY, 680);
-      });
-    });
-
-    scanButton.addEventListener(&#x27;click&#x27;, function () {
-      if (appState.scan === &#x27;searching&#x27;) {
-        appState.scan = &#x27;idle&#x27;;
-        scanSerial += 1;
-        const cancelSerial = scanSerial;
-        const cancelState = takeTrajectoryState(scanSweep, [0, 0], performance.now());
-        Promise.all([
-          morphText(scanLabel, &#x27;重新搜索&#x27;),
-          morphText(scanTitle, &#x27;搜索已停止&#x27;),
-          morphText(scanSubtitle, &#x27;已发现的 3 台设备仍然保留&#x27;)
-        ]);
-        c2To(scanSweep, [0, cancelState.x[1] + 90], 420, function (value) {
-          scanSweep.style.opacity = String(value[0]);
-          scanSweep.style.transform = &#x27;rotate(&#x27; + value[1] + &#x27;deg)&#x27;;
-        }, cancelState.x, cancelState).then(function () {
-          if (cancelSerial !== scanSerial) return;
-          scanSweep.style.opacity = &#x27;&#x27;;
-          scanSweep.style.transform = &#x27;&#x27;;
-        });
-        return;
-      }
-
-      appState.scan = &#x27;searching&#x27;;
-      scanSerial += 1;
-      const serial = scanSerial;
-      const startState = takeTrajectoryState(scanSweep, [0, 0], performance.now());
-      Promise.all([
-        morphText(scanLabel, &#x27;停止搜索&#x27;),
-        morphText(scanTitle, &#x27;正在扫描无线覆盖范围&#x27;),
-        morphText(scanSubtitle, &#x27;保持读表器开启并靠近电流表&#x27;)
-      ]);
-      c2To(scanSweep, [1, startState.x[1] + 240], 520, function (value) {
-        scanSweep.style.opacity = String(value[0]);
-        scanSweep.style.transform = &#x27;rotate(&#x27; + value[1] + &#x27;deg)&#x27;;
-      }, startState.x, startState).then(function () {
-        if (serial !== scanSerial || appState.scan !== &#x27;searching&#x27;) return;
-        return c2To(scanSweep, [0, startState.x[1] + 720], 1080, function (value) {
-          scanSweep.style.opacity = String(value[0]);
-          scanSweep.style.transform = &#x27;rotate(&#x27; + value[1] + &#x27;deg)&#x27;;
-        }, [1, startState.x[1] + 240]);
-      }).then(function () {
-        if (serial !== scanSerial || appState.scan !== &#x27;searching&#x27;) return;
-        appState.scan = &#x27;idle&#x27;;
-        scanSweep.style.opacity = &#x27;&#x27;;
-        scanSweep.style.transform = &#x27;&#x27;;
-        Promise.all([
-          morphText(scanLabel, &#x27;重新搜索&#x27;),
-          morphText(scanTitle, &#x27;发现 3 台电流表&#x27;),
-          morphText(scanSubtitle, &#x27;最远设备约 5.4 m · 刚刚更新&#x27;)
-        ]).then(function () {
-          if (serial !== scanSerial) return;
-          showToast(&#x27;设备列表已更新&#x27;);
-        });
-      });
-    });
-
-    function updateTimedText() {
-      if (appState.mode === &#x27;auto&#x27; &amp;&amp; appState.auto === &#x27;running&#x27;) {
-        countdown = countdown &lt;= 0 ? 120 : countdown - 1;
-      }
-      const minutes = String(Math.floor(countdown / 60)).padStart(2, &#x27;0&#x27;);
-      const seconds = String(countdown % 60).padStart(2, &#x27;0&#x27;);
-      morphText(countdownCopy, minutes + &#x27;:&#x27; + seconds, 260);
-      const nextClock = new Date().toLocaleTimeString(&#x27;zh-CN&#x27;, { hour: &#x27;2-digit&#x27;, minute: &#x27;2-digit&#x27;, hour12: false });
-      if (clock.textContent !== nextClock) morphText(clock, nextClock, 420);
-    }
-
-    initializeNumberRoller(currentReadingTarget);
-    renderDerivedState(true);
-
-    requestAnimationFrame(function () {
-      setIndicatorInstant(modeIndicator, modeButtons[0]);
-      setIndicatorInstant(periodIndicator, periodButtons[0]);
-      setIndicatorInstant(navIndicator, navButtons[0], 22);
-    });
-
-    window.addEventListener(&#x27;resize&#x27;, function () {
-      const activeModeButton = root.querySelector(&#x27;[data-mode=&quot;&#x27; + appState.mode + &#x27;&quot;]&#x27;);
-      const activePeriodButton = root.querySelector(&#x27;.period-button[aria-pressed=&quot;true&quot;]&#x27;);
-      const activeNavButton = root.querySelector(&#x27;[data-target=&quot;&#x27; + activeScreen + &#x27;&quot;]&#x27;);
-      setIndicatorInstant(modeIndicator, activeModeButton);
-      setIndicatorInstant(periodIndicator, activePeriodButton);
-      setIndicatorInstant(navIndicator, activeNavButton, 22);
-    });
-
-    window.setInterval(updateTimedText, 1000);
-  })();
-&lt;/script&gt;
-
-&lt;script src=&quot;https://unpkg.com/@floating-ui/core@1.7.3/dist/floating-ui.core.umd.min.js&quot;&gt;&lt;/script&gt;
-&lt;script src=&quot;https://unpkg.com/@floating-ui/dom@1.7.4/dist/floating-ui.dom.umd.min.js&quot;&gt;&lt;/script&gt;
-&lt;script&gt;
-(() =&gt; {
-  if (window.FloatingUIDOM == null) {
+function odoTarget(value) {
+  const el = $("#odo");
+  if (value === null || value === undefined) {
+    if (el.dataset.shape !== "-.--") buildOdo(el, "-.--");
     return;
   }
-  const { autoUpdate, computePosition, flip, offset, shift, size } =
-    window.FloatingUIDOM;
-  const tooltipPlacements = new Set([&quot;top&quot;, &quot;right&quot;, &quot;bottom&quot;, &quot;left&quot;]);
-  const tooltipId = `codex-visualization-tooltip-${
-    window.crypto?.randomUUID?.() ?? Date.now().toString(36)
-  }`;
-  const tooltipGap = 5;
-  const hoverDelay = 700;
-  const skipDelay = 300;
-  let activeTrigger = null;
-  let pendingTrigger = null;
-  let tooltip = null;
-  let openTimeout = null;
-  let autoUpdateCleanup = null;
-  let positionRequest = 0;
-  let skipDelayUntil = 0;
+  if (el.dataset.shape !== "#.###") buildOdo(el, "#.###");
+  const v = clamp(value, 0, 9.999);
+  const digits = v.toFixed(3).replace(".", "");
+  for (let i = 0; i < odoState.length && i < digits.length; i++) {
+    odoState[i].target = Number(digits[i]);
+  }
+}
 
-  const getTrigger = (target) =&gt;
-    target?.nodeType === Node.ELEMENT_NODE
-      ? target.closest(&quot;[data-tooltip]&quot;)
-      : null;
-  const containsTarget = (trigger, target) =&gt;
-    target?.nodeType != null &amp;&amp; trigger.contains(target);
-  const getContent = (trigger) =&gt;
-    trigger.getAttribute(&quot;data-tooltip&quot;)?.trim() ?? &quot;&quot;;
-  const getPlacement = (trigger) =&gt; {
-    const placement = trigger.getAttribute(&quot;data-tooltip-placement&quot;);
-    return tooltipPlacements.has(placement) ? placement : &quot;top&quot;;
-  };
-  const getTooltip = () =&gt; {
-    if (tooltip == null) {
-      tooltip = document.createElement(&quot;div&quot;);
-      tooltip.id = tooltipId;
-      tooltip.className = &quot;tooltip&quot;;
-      tooltip.setAttribute(&quot;role&quot;, &quot;tooltip&quot;);
+function tickOdo(dt) {
+  const stepMax = ODO_SPEED * dt;
+  for (const w of odoState) {
+    const dist = ((w.target - w.pos) % 10 + 10) % 10;   // 始终正向滚
+    if (dist > 0.001) {
+      w.pos = (w.pos + Math.min(dist, stepMax)) % 10;
+      if (((w.target - w.pos) % 10 + 10) % 10 < 0.001) w.pos = w.target;
     }
-    return tooltip;
-  };
-  const setDescribedBy = (trigger, described) =&gt; {
-    const ids = new Set(
-      (trigger.getAttribute(&quot;aria-describedby&quot;) ?? &quot;&quot;)
-        .split(/\s+/)
-        .filter(Boolean),
-    );
-    if (described) {
-      ids.add(tooltipId);
+    w.track.style.transform = "translateY(" + (-w.pos).toFixed(4) + "em)";
+  }
+}
+
+/* ══════════ 转盘 ══════════ */
+const dial = $("#dial");
+const slotEls = [];
+(function buildSlots() {
+  const wrap = $("#slots");
+  for (let i = 0; i < SLOTS; i++) {
+    const el = document.createElement("button");
+    el.type = "button";
+    el.className = "slot";
+    el.innerHTML =
+      '<span class="slot-head"><span class="slot-dot"></span><span class="slot-id">' + hex1(i) + "</span></span>" +
+      '<span class="slot-bar"><i></i></span>';
+    // 点击不在这里处理：转盘 pointerdown 里做了 setPointerCapture，
+    // 之后的 click 会被重定向到捕获元素（转盘）而不是槽位，绑在这里永远不触发。
+    // 改由转盘的 pointerdown/pointerup 判定（见 pressSlot）。
+    wrap.appendChild(el);
+    slotEls.push({ el, dot: el.querySelector(".slot-dot"), bar: el.querySelector(".slot-bar i") });
+  }
+})();
+
+const R = 144;
+function layoutSlots(nowMs) {
+  for (let i = 0; i < SLOTS; i++) {
+    const a = i * STEP + state.angle;
+    const off = Math.abs(norm180(a)) / 180;
+    const m = meters.get(i);
+    const alarm = m.status === "low" || m.status === "high";
+    const alerting = nowMs < m.alertUntil;               // 只在刚变化时提示
+    const beat = alerting ? 1 + 0.045 * Math.sin(nowMs / 130) : 1;
+    const g = slotEls[i];
+    g.el.style.transform =
+      "translate(" + (R * Math.sin(rad(a))).toFixed(2) + "px," + (-R * Math.cos(rad(a))).toFixed(2) + "px)" +
+      " scale(" + (lerp(1.14, 0.82, off) * beat).toFixed(3) + ")";
+    // 报警状态保持清晰可读（不淡出），但不会一直动
+    g.el.style.opacity = (alarm || alerting ? Math.max(0.94, lerp(1, 0.55, off)) : lerp(1, 0.55, off)).toFixed(3);
+    g.el.style.zIndex = String(100 - Math.round(off * 100) + (alarm ? 40 : 0));
+  }
+}
+
+const selectedFromAngle = () => ((Math.round(-state.angle / STEP) % SLOTS) + SLOTS) % SLOTS;
+
+function snapTo(addr) {
+  const base = -addr * STEP;
+  state.snapTarget = base + Math.round((state.angle - base) / 360) * 360;  // 走最近的一圈
+}
+
+let pointerAngle = 0, pointerId = null, lastMoveAt = 0, dragDist = 0, pressSlot = -1;
+function angleOf(ev) {
+  const box = dial.getBoundingClientRect();
+  return Math.atan2(ev.clientY - (box.top + box.height / 2),
+                    ev.clientX - (box.left + box.width / 2)) * 180 / Math.PI;
+}
+dial.addEventListener("pointerdown", (ev) => {
+  if (ev.target.closest(".hub")) return;
+  const slot = ev.target.closest(".slot");
+  pressSlot = slot ? slotEls.findIndex((g) => g.el === slot) : -1;
+  pointerId = ev.pointerId;
+  dial.setPointerCapture(pointerId);
+  state.dragging = true;
+  state.snapTarget = null;
+  dial.classList.add("is-drag");
+  pointerAngle = angleOf(ev);
+  lastMoveAt = performance.now();
+  dragDist = 0;
+  state.vel = 0;
+});
+dial.addEventListener("pointermove", (ev) => {
+  if (!state.dragging || ev.pointerId !== pointerId) return;
+  const a = angleOf(ev);
+  const d = norm180(a - pointerAngle);
+  pointerAngle = a;
+  state.angle += d;
+  dragDist += Math.abs(d) * 2.5;
+  const now = performance.now();
+  const dt = Math.max(8, now - lastMoveAt) / 1000;
+  lastMoveAt = now;
+  state.vel = lerp(state.vel, d / dt, 0.45);
+});
+function endDrag(ev) {
+  if (!state.dragging || (ev && ev.pointerId !== pointerId)) return;
+  state.dragging = false;
+  dial.classList.remove("is-drag");
+  pointerId = null;
+  // 按在某个地址上又没拖动 → 安静地滚过去，并测一次
+  if (pressSlot >= 0 && dragDist < 6) {
+    const addr = pressSlot;
+    snapTo(addr);
+    measure(addr, "manual");
+  }
+  pressSlot = -1;
+}
+dial.addEventListener("pointerup", endDrag);
+dial.addEventListener("pointercancel", endDrag);
+
+dial.addEventListener("wheel", (ev) => {
+  ev.preventDefault();
+  state.snapTarget = null;
+  state.vel += (ev.deltaY > 0 ? -1 : 1) * 220;
+}, { passive: false });
+
+dial.addEventListener("keydown", (ev) => {
+  if (ev.key === "ArrowRight" || ev.key === "ArrowDown") { snapTo((state.sel + 1) % SLOTS); ev.preventDefault(); }
+  if (ev.key === "ArrowLeft" || ev.key === "ArrowUp")   { snapTo((state.sel + SLOTS - 1) % SLOTS); ev.preventDefault(); }
+  if (ev.key === "Enter") { measure(state.sel, "manual"); ev.preventDefault(); }
+});
+
+function tickDial(dt) {
+  if (!state.dragging) {
+    const snapping = state.snapTarget !== null;
+    const target = snapping ? state.snapTarget : Math.round(state.angle / STEP) * STEP;
+    const grip = snapping ? 1 : clamp(1 - Math.abs(state.vel) / 260, 0, 1);
+    const k = snapping ? 78 : 62, c = 2 * Math.sqrt(k) * 1.02;
+    const acc = grip * (-k * (state.angle - target) - c * state.vel) - (1 - grip) * 2.1 * state.vel;
+    state.vel += acc * dt;
+    state.angle += state.vel * dt;
+    if (Math.abs(state.vel) < 0.4 && Math.abs(state.angle - target) < 0.02) {
+      state.angle = target;
+      state.vel = 0;
+      state.snapTarget = null;
+    }
+  }
+  const sel = selectedFromAngle();
+  if (sel !== state.sel) {
+    state.sel = sel;
+    onSelectionChanged();
+    if (state.dragging && navigator.vibrate) { try { navigator.vibrate(8); } catch (e) {} }
+  }
+}
+
+/* ══════════ 自动存档 ══════════ */
+/* 中心 = 测一次（两种模式下都可用）；模式由下面的开关切换 */
+$("#hub").addEventListener("click", () => measure(state.sel, "manual"));
+
+function setMode(mode) {
+  const auto = mode === "auto";
+  if (state.archiving === auto) return;
+  state.archiving = auto;
+  $("#mode-ind").style.transform = auto ? "translateX(100%)" : "translateX(0)";
+  document.querySelectorAll(".mode-toggle button").forEach((b) =>
+    b.setAttribute("aria-pressed", String((b.dataset.mode === "auto") === auto)));
+  if (auto) {
+    state.remain = PERIOD_S;
+    autoRound();                        // 一键启动：立刻先测一轮
+  }
+}
+document.querySelectorAll(".mode-toggle button").forEach((b) =>
+  b.addEventListener("click", () => setMode(b.dataset.mode)));
+
+/* ══════════ 每帧渲染 ══════════ */
+const arcEl = $("#count-arc"), trackEl = $("#count-track"), sweepEl = $("#sweep-arc");
+function arcPath(cx, cy, r, p) {
+  const sweep = clamp(p, 0, 0.9999) * 360;
+  const a0 = -90 + (360 - sweep), a1 = 270;
+  return "M" + (cx + r * Math.cos(rad(a0))).toFixed(2) + " " + (cy + r * Math.sin(rad(a0))).toFixed(2) +
+         " A" + r + " " + r + " 0 " + (sweep > 180 ? 1 : 0) + " 1 " +
+         (cx + r * Math.cos(rad(a1))).toFixed(2) + " " + (cy + r * Math.sin(rad(a1))).toFixed(2);
+}
+function sweepPath(cx, cy, r, a0, span) {
+  const a1 = a0 + span;
+  return "M" + (cx + r * Math.cos(rad(a0))).toFixed(2) + " " + (cy + r * Math.sin(rad(a0))).toFixed(2) +
+         " A" + r + " " + r + " 0 0 1 " +
+         (cx + r * Math.cos(rad(a1))).toFixed(2) + " " + (cy + r * Math.sin(rad(a1))).toFixed(2);
+}
+
+function renderLive(nowMs, dt) {
+  // 槽位：小点是活的（帧在到达），条与颜色来自上次测量的值
+  for (let i = 0; i < SLOTS; i++) {
+    const m = meters.get(i);
+    const g = slotEls[i];
+    const cls = !m.present ? "is-empty" : (m.silent ? "is-off" : "is-live");
+    if (g.el.dataset.cls !== cls) {
+      g.el.dataset.cls = cls;
+      g.el.classList.remove("is-empty", "is-off", "is-live");
+      g.el.classList.add(cls);
+    }
+    g.el.classList.toggle("is-sel", i === state.sel);
+
+    const measured = m.shown && m.shown.amps !== null;
+    if (m.present && !m.silent && measured) {
+      // 编号与小点用离散判定色（是不是报警），条用连续变暖色（离阈值多近）
+      g.el.style.color = statusColor(m.status);
+      g.bar.style.width = (clamp(m.shown.amps / FULL_A, 0, 1) * 100).toFixed(1) + "%";
+      g.bar.style.background = warmCss(m.shown.amps);
     } else {
-      ids.delete(tooltipId);
+      g.el.style.color = "";
+      g.bar.style.width = measured && m.present ? g.bar.style.width : "0%";
     }
-    if (ids.size === 0) {
-      trigger.removeAttribute(&quot;aria-describedby&quot;);
+    if (m.present && !m.silent) {
+      g.dot.style.transform = "scale(" + (1 + m.flash * 0.9).toFixed(3) + ")";
+      g.dot.style.opacity = (0.42 + m.flash * 0.58).toFixed(3);
     } else {
-      trigger.setAttribute(&quot;aria-describedby&quot;, [...ids].join(&quot; &quot;));
+      g.dot.style.transform = "scale(1)";
+      g.dot.style.opacity = m.present ? "0.55" : "1";
     }
-  };
-  const clearOpenTimeout = () =&gt; {
-    if (openTimeout != null) {
-      window.clearTimeout(openTimeout);
-      openTimeout = null;
+  }
+
+  // 中心：显示上次测量的结果，不跟着帧跳
+  const m = meters.get(state.sel);
+  const live = m.present && !m.silent;
+  const measuring = state.pending && state.pending.addr === state.sel;
+  const shown = m.shown ? m.shown.amps : null;
+
+  state.activation += ((state.archiving ? 1 : 0) - state.activation) * clamp(dt * 4.2, 0, 1);
+  odoTarget(m.shown ? shown : null);
+
+  // 大数字：测过就用变暖色（离阈值多近），没测过或不再报数就是灰的
+  $("#odo").style.color = (m.shown && shown !== null && live) ? warmCss(shown) : statusColor("off");
+  $("#hub-addr").textContent = hex1(state.sel);
+
+  // 大数字用连续变暖色（离阈值多近），状态标签用离散判定色（到底是不是报警）
+  let label, labelCol;
+  if (!m.present)      { label = "无表";   labelCol = statusColor("off"); }
+  else if (!live)      { label = "离线";   labelCol = statusColor("off"); }
+  else if (!m.shown)   { label = "未测量"; labelCol = statusColor("off"); }
+  else                 { label = LABEL[m.status]; labelCol = statusColor(m.status); }
+  $("#hub-state").textContent = label;
+  $("#hub-state").style.color = labelCol;
+
+  if (measuring) {
+    $("#hub-sub").textContent = "等下一帧…";
+  } else if (state.archiving) {
+    const s = Math.max(0, Math.ceil(state.remain));
+    $("#hub-sub").textContent = pad2(Math.floor(s / 60)) + ":" + pad2(s % 60);
+  } else if (!m.present) {
+    $("#hub-sub").textContent = "此地址无表";
+  } else if (m.shown) {
+    $("#hub-sub").textContent = "测于 " + clockOf(m.shown.ts);
+  } else {
+    $("#hub-sub").textContent = "点一下测一次";
+  }
+
+  // 倒计时环 / 测量扫针
+  const vis = state.activation;
+  trackEl.style.opacity = (vis * 0.9).toFixed(3);
+  arcEl.style.opacity = (state.pending ? 0 : vis).toFixed(3);
+  arcEl.setAttribute("stroke", m.shown ? statusColor(m.status) : "var(--accent)");
+  arcEl.setAttribute("d", arcPath(183, 183, 104, state.archiving ? state.remain / PERIOD_S : 1));
+  if (state.pending) {
+    sweepEl.style.opacity = "1";
+    sweepEl.setAttribute("d", sweepPath(183, 183, 104, (nowMs / 2.2) % 360, 68));
+  } else {
+    sweepEl.style.opacity = "0";
+  }
+
+  if (state.archiving) {
+    state.remain -= dt;
+    if (state.remain <= 0) autoRound();
+    $("#foot-note").textContent = "每 2 分钟自动测一轮";
+  } else {
+    $("#foot-note").textContent = "点中心或地址测一次";
+  }
+
+  let alive = 0, known = 0;
+  for (const x of meters.values()) if (x.present) { known++; if (!x.silent) alive++; }
+  $("#link-text").textContent = "HC-42 透传 · " + alive + "/" + known + " 台在报数";
+  let anyFlash = 0;
+  for (const x of meters.values()) anyFlash = Math.max(anyFlash, x.flash);
+  $("#stream-dot").style.opacity = (0.3 + anyFlash * 0.7).toFixed(2);
+}
+
+/* ══════════ 右侧：曲线 ══════════ */
+const CH = { w: 520, h: 156, top: 12, bottom: 124, left: 30, right: 488 };
+/* 16 个地址 16 个色相，全落在 172°–320°（青→蓝→紫→洋红），避开绿/琥珀/红。
+   乘 5 与 16 互素，所以相邻地址拉得开、addr 与 addr+8 也不撞。 */
+const seriesColor = (addr) => "hsl(" + (172 + ((addr * 5) % 16) * 9.8).toFixed(0) + " 58% 46%)";
+
+let panelAddr = 1;
+const view = { u0: 0, u1: 1 };           // 时间轴视窗（占整个时间跨度的比例）
+let chartPts = [], chartDomain = null;
+
+function scopeRecords() {
+  return state.scope === "all" ? state.records : state.records.filter((r) => r.addr === panelAddr);
+}
+
+function groupsOf() {
+  const g = new Map();
+  for (const r of scopeRecords()) {
+    if (r.amps === null) continue;       // 离线记录不进曲线，留成缺口
+    if (!g.has(r.addr)) g.set(r.addr, []);
+    const arr = g.get(r.addr);
+    if (arr.length < 200) arr.push(r);
+  }
+  g.forEach((arr) => arr.reverse());     // 时间升序
+  return g;
+}
+
+function domainOf(groups) {
+  let tMin = Infinity, tMax = -Infinity, top = FULL_A, n = 0;
+  groups.forEach((arr) => arr.forEach((r) => {
+    tMin = Math.min(tMin, r.ts); tMax = Math.max(tMax, r.ts);
+    top = Math.max(top, Math.ceil(r.amps * 10) / 10);
+    n++;
+  }));
+  return { tMin, tMax, span: tMax - tMin, top, n };
+}
+
+const yOf = (a, top) => CH.bottom - (a / top) * (CH.bottom - CH.top);
+function xOf(t, d) {
+  const u = d.span > 0 ? (t - d.tMin) / d.span : 0.5;   // 只有一条记录时放在正中
+  return CH.left + ((u - view.u0) / (view.u1 - view.u0)) * (CH.right - CH.left);
+}
+const tOfX = (px, d) => d.tMin + (view.u0 + ((px - CH.left) / (CH.right - CH.left)) * (view.u1 - view.u0)) * d.span;
+
+function renderChart(fade) {
+  const groups = groupsOf();
+  const d = domainOf(groups);
+  chartDomain = d;
+  if (fade) {
+    const svg = $("#chart");
+    svg.classList.remove("fade");
+    void svg.getBoundingClientRect();
+    svg.classList.add("fade");
+  }
+  drawChart(groups, d);
+  $("#zoom-reset").classList.toggle("on", view.u0 > 0.001 || view.u1 < 0.999);
+}
+
+function drawChart(groups, d) {
+  const svg = $("#chart");
+  const top = d.top;
+  const y = (a) => yOf(a, top);
+  const parts = [];
+  chartPts = [];
+
+  parts.push('<defs><clipPath id="plot"><rect x="' + CH.left + '" y="' + (CH.top - 6) + '" width="' +
+             (CH.right - CH.left) + '" height="' + (CH.bottom - CH.top + 12) + '"></rect></clipPath></defs>');
+  parts.push('<rect class="c-band" x="' + CH.left + '" y="' + y(LOW_A) + '" width="' + (CH.right - CH.left) +
+             '" height="' + (CH.bottom - y(LOW_A)) + '" fill="rgb(200 124 0)"></rect>');
+  parts.push('<rect class="c-band" x="' + CH.left + '" y="' + CH.top + '" width="' + (CH.right - CH.left) +
+             '" height="' + (y(HIGH_A) - CH.top) + '" fill="rgb(220 38 38)"></rect>');
+  parts.push('<line class="c-grid" x1="' + CH.left + '" y1="' + CH.bottom + '" x2="' + CH.right + '" y2="' + CH.bottom + '"></line>');
+  parts.push('<line class="c-limit" stroke="rgb(220 38 38)" x1="' + CH.left + '" y1="' + y(HIGH_A) + '" x2="' + CH.right + '" y2="' + y(HIGH_A) + '"></line>');
+  parts.push('<line class="c-limit" stroke="rgb(200 124 0)" x1="' + CH.left + '" y1="' + y(LOW_A) + '" x2="' + CH.right + '" y2="' + y(LOW_A) + '"></line>');
+  parts.push('<text class="c-txt" x="0" y="' + (y(HIGH_A) + 3) + '">2.0</text>');
+  parts.push('<text class="c-txt" x="0" y="' + (y(LOW_A) + 3) + '">0.2</text>');
+  if (top > FULL_A + 0.05) parts.push('<text class="c-txt" x="0" y="' + (CH.top + 3) + '">' + top.toFixed(1) + "</text>");
+
+  if (d.n < 1) {
+    parts.push('<text class="c-hint" x="' + ((CH.left + CH.right) / 2) + '" y="68" text-anchor="middle">还没有存档记录</text>');
+  } else {
+    if (d.n === 1) {                                    // 只有一个点：照样画出来，提示放在底部避开它
+      parts.push('<text class="c-hint" x="' + ((CH.left + CH.right) / 2) + '" y="' + (CH.bottom - 8) +
+                 '" text-anchor="middle">再测一次就有曲线</text>');
     }
-    pendingTrigger = null;
-  };
-  const closeTooltip = (activateSkipDelay = true) =&gt; {
-    clearOpenTimeout();
-    positionRequest += 1;
-    autoUpdateCleanup?.();
-    autoUpdateCleanup = null;
-    if (activeTrigger == null) {
-      return;
-    }
-    setDescribedBy(activeTrigger, false);
-    activeTrigger = null;
-    tooltip?.remove();
-    if (activateSkipDelay) {
-      skipDelayUntil = Date.now() + skipDelay;
-    }
-  };
-  const updatePosition = (trigger, floating) =&gt; {
-    const request = ++positionRequest;
-    void computePosition(trigger, floating, {
-      middleware: [
-        offset(tooltipGap),
-        flip({ padding: tooltipGap }),
-        shift({ padding: tooltipGap }),
-        size({
-          padding: tooltipGap,
-          apply({ availableHeight, availableWidth, elements }) {
-            elements.floating.style.setProperty(
-              &quot;--tooltip-available-width&quot;,
-              `${Math.max(0, availableWidth)}px`,
-            );
-            elements.floating.style.setProperty(
-              &quot;--tooltip-available-height&quot;,
-              `${Math.max(0, availableHeight)}px`,
-            );
-          },
-        }),
-      ],
-      placement: getPlacement(trigger),
-      strategy: &quot;fixed&quot;,
-    })
-      .then(({ x, y }) =&gt; {
-        if (activeTrigger !== trigger || request !== positionRequest) {
-          return;
-        }
-        const scale = window.devicePixelRatio || 1;
-        floating.style.transform = `translate(${Math.round(x * scale) / scale}px, ${Math.round(y * scale) / scale}px)`;
-        floating.style.visibility = &quot;visible&quot;;
-      })
-      .catch(() =&gt; {
-        if (activeTrigger === trigger &amp;&amp; request === positionRequest) {
-          closeTooltip(false);
+    const labels = [];
+    const body = [];
+    Array.from(groups.keys()).sort((a, b) => a - b).forEach((addr) => {
+      const arr = groups.get(addr);
+      const color = seriesColor(addr);
+      if (arr.length > 1) {
+        let path = "";
+        arr.forEach((r, i) => { path += (i ? "L" : "M") + xOf(r.ts, d).toFixed(1) + " " + y(r.amps).toFixed(1); });
+        body.push('<path class="c-line" style="stroke:' + color + '" d="' + path + '"></path>');
+      }
+      arr.forEach((r) => {
+        const px = xOf(r.ts, d), py = y(r.amps);
+        chartPts.push({ x: px, y: py, r: r });
+        const alarm = r.status === "low" || r.status === "high";
+        if (alarm) {
+          body.push('<circle class="c-dot" cx="' + px.toFixed(1) + '" cy="' + py.toFixed(1) +
+                    '" r="4" fill="var(--surface)" style="stroke:' + statusColor(r.status) + '"></circle>');
         }
       });
-  };
-  const openTooltip = (trigger) =&gt; {
-    const content = getContent(trigger);
-    if (!trigger.isConnected || content.length === 0) {
-      return;
-    }
-    clearOpenTimeout();
-    if (activeTrigger === trigger) {
-      return;
-    }
-    closeTooltip();
-    const floating = getTooltip();
-    floating.textContent = content;
-    floating.style.visibility = &quot;hidden&quot;;
-    floating.style.transform = &quot;translate(0, 0)&quot;;
-    document.body.appendChild(floating);
-    activeTrigger = trigger;
-    setDescribedBy(trigger, true);
-    autoUpdateCleanup = autoUpdate(trigger, floating, () =&gt; {
-      updatePosition(trigger, floating);
+      const last = arr[arr.length - 1];
+      const lx = xOf(last.ts, d), ly = y(last.amps);
+      body.push('<circle class="c-dot" cx="' + lx.toFixed(1) + '" cy="' + ly.toFixed(1) +
+                '" r="2.6" fill="var(--surface)" style="stroke:' + color + '"></circle>');
+      if (lx <= CH.right + 2) labels.push({ addr, x: lx + 6, y: ly, color });
     });
-  };
-  const requestOpen = (trigger, immediate = false) =&gt; {
-    if (
-      getContent(trigger).length === 0 ||
-      activeTrigger === trigger ||
-      pendingTrigger === trigger
-    ) {
-      return;
+    parts.push('<g clip-path="url(#plot)">' + body.join("") + "</g>");
+
+    // 标签贴在各条线真正结束的地方，横向挨得近的才纵向避让
+    labels.sort((a, b) => a.y - b.y);
+    for (let i = 1; i < labels.length; i++) {
+      const prev = labels[i - 1];
+      if (Math.abs(labels[i].x - prev.x) < 24 && labels[i].y - prev.y < 11) labels[i].y = prev.y + 11;
     }
-    clearOpenTimeout();
-    pendingTrigger = trigger;
-    const delay =
-      immediate || activeTrigger != null || Date.now() &lt; skipDelayUntil
-        ? 0
-        : hoverDelay;
-    if (delay === 0) {
-      openTooltip(trigger);
-      return;
+    labels.forEach((l) => {
+      parts.push('<text class="c-txt" x="' + Math.min(l.x, CH.right + 6).toFixed(1) + '" y="' +
+                 (clamp(l.y, CH.top + 4, CH.bottom) + 3).toFixed(1) +
+                 '" style="fill:' + l.color + '">' + hex1(l.addr) + "</text>");
+    });
+
+    parts.push('<line class="c-cursor" id="cursor" x1="0" y1="' + CH.top + '" x2="0" y2="' + CH.bottom + '" style="opacity:0"></line>');
+    if (d.span > 0) {
+      parts.push('<text class="c-txt" x="' + CH.left + '" y="' + (CH.bottom + 15) + '">' + clockOf(tOfX(CH.left, d)) + "</text>");
+      parts.push('<text class="c-txt" x="' + CH.right + '" y="' + (CH.bottom + 15) + '" text-anchor="end">' +
+                 clockOf(tOfX(CH.right, d)) + "</text>");
     }
-    openTimeout = window.setTimeout(() =&gt; {
-      openTimeout = null;
-      pendingTrigger = null;
-      openTooltip(trigger);
-    }, delay);
-  };
-  const handlePointerOpen = (event) =&gt; {
-    if (event.pointerType === &quot;touch&quot;) {
-      return;
-    }
-    const trigger = getTrigger(event.target);
-    if (trigger == null || containsTarget(trigger, event.relatedTarget)) {
-      return;
-    }
-    requestOpen(trigger);
-  };
-  const handleLeave = (event) =&gt; {
-    const trigger = getTrigger(event.target);
-    if (trigger == null || containsTarget(trigger, event.relatedTarget)) {
-      return;
-    }
-    if (activeTrigger === trigger || pendingTrigger === trigger) {
-      closeTooltip();
-    }
-  };
-  const handleFocusIn = (event) =&gt; {
-    const trigger = getTrigger(event.target);
-    if (trigger?.matches(&quot;:focus-visible&quot;)) {
-      requestOpen(trigger, true);
-    }
-  };
-  const handleKeyDown = (event) =&gt; {
-    if (event.key === &quot;Escape&quot;) {
-      closeTooltip();
-    }
-  };
-  const handleContextMenu = (event) =&gt; {
-    const trigger = getTrigger(event.target);
-    if (activeTrigger === trigger || pendingTrigger === trigger) {
-      closeTooltip();
-    }
-  };
-  const destroy = () =&gt; {
-    closeTooltip(false);
-    document.removeEventListener(&quot;pointerover&quot;, handlePointerOpen);
-    document.removeEventListener(&quot;pointerout&quot;, handleLeave);
-    document.removeEventListener(&quot;focusin&quot;, handleFocusIn);
-    document.removeEventListener(&quot;focusout&quot;, handleLeave);
-    document.removeEventListener(&quot;keydown&quot;, handleKeyDown);
-    document.removeEventListener(&quot;contextmenu&quot;, handleContextMenu);
-    tooltip = null;
+  }
+  svg.innerHTML = parts.join("");
+}
+
+/* ── 图表交互：移动看读数、拖动平移、滚轮缩放、双击复位、点击跳转 ── */
+(function bindChart() {
+  const wrap = $("#chart-wrap"), out = $("#readout");
+  let panning = false, panStart = 0, panU0 = 0, panU1 = 0, moved = 0;
+
+  const toView = (ev) => {
+    const box = wrap.getBoundingClientRect();
+    return {
+      x: ((ev.clientX - box.left) / box.width) * CH.w,
+      y: ((ev.clientY - box.top) / box.height) * CH.h,
+      box: box
+    };
   };
 
-  document.addEventListener(&quot;pointerover&quot;, handlePointerOpen);
-  document.addEventListener(&quot;pointerout&quot;, handleLeave);
-  document.addEventListener(&quot;focusin&quot;, handleFocusIn);
-  document.addEventListener(&quot;focusout&quot;, handleLeave);
-  document.addEventListener(&quot;keydown&quot;, handleKeyDown);
-  document.addEventListener(&quot;contextmenu&quot;, handleContextMenu);
-  window.addEventListener(&quot;pagehide&quot;, destroy, { once: true });
+  function nearest(v) {
+    let best = null, bd = Infinity;
+    for (const p of chartPts) {
+      if (p.x < CH.left - 4 || p.x > CH.right + 4) continue;
+      const dd = (p.x - v.x) * (p.x - v.x) + (p.y - v.y) * (p.y - v.y) * 0.55;
+      if (dd < bd) { bd = dd; best = p; }
+    }
+    return bd < 1600 ? best : null;
+  }
+
+  function showReadout(p, box) {
+    const cursor = document.getElementById("cursor");
+    if (cursor) { cursor.setAttribute("x1", p.x); cursor.setAttribute("x2", p.x); cursor.style.opacity = "1"; }
+    out.classList.add("on");
+    out.style.left = ((p.x / CH.w) * box.width).toFixed(1) + "px";
+    out.style.top = ((p.y / CH.h) * box.height - 8).toFixed(1) + "px";
+    out.textContent = clockOf(p.r.ts) + " · 地址 " + hex1(p.r.addr) + " · " +
+                      fmtA(p.r.amps) + " A · " + LABEL[p.r.status];
+  }
+  function hideReadout() {
+    out.classList.remove("on");
+    const cursor = document.getElementById("cursor");
+    if (cursor) cursor.style.opacity = "0";
+  }
+
+  wrap.addEventListener("pointerdown", (ev) => {
+    if (!chartDomain || chartDomain.span <= 0) return;
+    panning = true; moved = 0;
+    panStart = ev.clientX; panU0 = view.u0; panU1 = view.u1;
+    wrap.setPointerCapture(ev.pointerId);
+    wrap.classList.add("is-pan");
+  });
+  wrap.addEventListener("pointermove", (ev) => {
+    const v = toView(ev);
+    if (panning) {
+      const box = v.box;
+      const du = ((ev.clientX - panStart) / box.width) * (panU1 - panU0);
+      moved = Math.max(moved, Math.abs(ev.clientX - panStart));
+      const span = panU1 - panU0;
+      let u0 = clamp(panU0 - du, 0, 1 - span);
+      view.u0 = u0; view.u1 = u0 + span;
+      renderChart();
+      return;
+    }
+    const p = nearest(v);
+    if (p) showReadout(p, v.box); else hideReadout();
+  });
+  wrap.addEventListener("pointerup", (ev) => {
+    if (panning && moved < 5) {                      // 没拖动 → 当成点击
+      const v = toView(ev);
+      const p = nearest(v);
+      if (p) { snapTo(p.r.addr); if (state.scope === "one") { panelAddr = p.r.addr; } }
+    }
+    panning = false;
+    wrap.classList.remove("is-pan");
+  });
+  wrap.addEventListener("pointerleave", () => { hideReadout(); });
+  wrap.addEventListener("pointercancel", () => { panning = false; wrap.classList.remove("is-pan"); });
+
+  wrap.addEventListener("wheel", (ev) => {
+    if (!chartDomain || chartDomain.span <= 0) return;
+    ev.preventDefault();
+    const v = toView(ev);
+    const uAt = view.u0 + clamp((v.x - CH.left) / (CH.right - CH.left), 0, 1) * (view.u1 - view.u0);
+    const span = clamp((view.u1 - view.u0) * (ev.deltaY > 0 ? 1.18 : 1 / 1.18), 0.02, 1);
+    let u0 = clamp(uAt - (uAt - view.u0) * (span / (view.u1 - view.u0)), 0, 1 - span);
+    view.u0 = u0; view.u1 = u0 + span;
+    renderChart();
+  }, { passive: false });
+
+  wrap.addEventListener("dblclick", () => { view.u0 = 0; view.u1 = 1; renderChart(); });
+  $("#zoom-reset").addEventListener("click", () => { view.u0 = 0; view.u1 = 1; renderChart(); });
 })();
-&lt;/script&gt;
-&lt;script id=&quot;codex-visualization-lucide&quot; async src=&quot;https://unpkg.com/lucide@1.17.0/dist/umd/lucide.js&quot;&gt;&lt;/script&gt;
-&lt;script&gt;
-(() =&gt; {
-  const initialize = () =&gt; {
-    globalThis.lucide?.createIcons({ attrs: { width: 16, height: 16 } });
-  };
-  if (globalThis.lucide != null) {
-    initialize();
+
+/* ══════════ 右侧：分页记录 ══════════ */
+function pageCount() {
+  return Math.max(1, Math.ceil(scopeRecords().length / PAGE_SIZE));
+}
+
+function recRow(r) {
+  const c = statusColor(r.status);       // 记录是已落下的事实，用离散判定色
+  const row = document.createElement("div");
+  row.className = "rec";
+  row.innerHTML =
+    '<span class="rec-t">' + clockOf(r.ts) + "</span>" +
+    '<span class="rec-a">' + hex1(r.addr) + "</span>" +
+    '<span class="rec-src">' + (r.source === "auto" ? "自动" : "手动") + "</span>" +
+    '<span class="rec-v" style="color:' + c + '">' + (r.amps === null ? "--" : fmtA(r.amps)) + " A</span>" +
+    '<span class="rec-s" style="color:' + c + '">' + LABEL[r.status] + "</span>";
+  row.addEventListener("click", () => snapTo(r.addr));
+  return row;
+}
+
+function renderLog(freshCount, swap) {
+  const wrap = $("#log");
+  const all = scopeRecords();
+  const pages = pageCount();
+  state.page = clamp(state.page, 0, pages - 1);
+  const from = state.page * PAGE_SIZE;
+  const list = all.slice(from, from + PAGE_SIZE);
+
+  wrap.textContent = "";
+  if (!list.length) {
+    wrap.innerHTML = '<p class="log-empty">' +
+      (state.scope === "one" ? "地址 " + hex1(panelAddr) + " 还没有记录" : "还没有记录") + "</p>";
+  } else {
+    list.forEach((r, i) => {
+      const row = recRow(r);
+      if (freshCount && state.page === 0 && i < freshCount) {
+        row.classList.add("fresh"); row.style.animationDelay = (i * 40) + "ms";
+      } else if (swap) {
+        row.classList.add("swap"); row.style.animationDelay = (i * 22) + "ms";
+      }
+      wrap.appendChild(row);
+    });
+  }
+
+  $("#page-info").textContent = (all.length ? state.page + 1 : 0) + " / " + (all.length ? pages : 0);
+  $("#prev").disabled = state.page <= 0;
+  $("#next").disabled = state.page >= pages - 1 || !all.length;
+}
+
+function renderCounts() {
+  const total = state.records.length;
+  const mine = state.records.filter((r) => r.addr === panelAddr).length;
+  $("#log-count").textContent = state.scope === "one"
+    ? "地址 " + hex1(panelAddr) + " " + mine + " 条 · 全部 " + total
+    : "共 " + total + " 条（上限 " + CAP + "）";
+}
+
+/* 标题、条数、曲线、记录说的是同一件事，必须一起刷新 */
+function renderPanel(freshCount, swap, fade) {
+  $("#right-name").textContent = state.scope === "all" ? "全部电流表" : "地址 " + hex1(panelAddr);
+  $("#right-sub").textContent = state.scope === "all" ? "最近记录" : "电流趋势";
+  renderCounts();
+  renderChart(fade);
+  renderLog(freshCount, swap);
+}
+
+let panelTimer = 0;
+function onSelectionChanged() {
+  dial.setAttribute("aria-valuenow", String(state.sel));
+  clearTimeout(panelTimer);
+  panelTimer = setTimeout(() => {
+    panelAddr = state.sel;
+    state.page = 0;
+    view.u0 = 0; view.u1 = 1;
+    renderPanel(0, true, true);
+  }, 90);
+}
+
+$("#prev").addEventListener("click", () => { state.page--; renderLog(0, true); });
+$("#next").addEventListener("click", () => { state.page++; renderLog(0, true); });
+
+document.querySelectorAll(".chips button").forEach((b) => {
+  b.addEventListener("click", () => {
+    if (state.scope === b.dataset.scope) return;
+    state.scope = b.dataset.scope;
+    state.page = 0;
+    view.u0 = 0; view.u1 = 1;
+    document.querySelectorAll(".chips button").forEach((x) =>
+      x.setAttribute("aria-pressed", String(x.dataset.scope === state.scope)));
+    renderPanel(0, true, true);
+  });
+});
+
+let clearArmed = false, clearTimer = 0;
+$("#clear").addEventListener("click", () => {
+  const btn = $("#clear");
+  if (clearArmed) {
+    clearArmed = false; clearTimeout(clearTimer);
+    btn.classList.remove("armed"); btn.textContent = "清空";
+    state.records = []; state.page = 0; saveRecords();
+    renderPanel();
     return;
   }
-  document
-    .getElementById(&quot;codex-visualization-lucide&quot;)
-    ?.addEventListener(&quot;load&quot;, initialize, { once: true });
-})();
-&lt;/script&gt;
+  clearArmed = true;
+  btn.classList.add("armed"); btn.textContent = "确认清空";
+  clearTimer = setTimeout(() => {
+    clearArmed = false; btn.classList.remove("armed"); btn.textContent = "清空";
+  }, 3000);
+});
 
-&lt;/body&gt;
-&lt;/html&gt;
-"></iframe>
+/* ══════════ 主循环 ══════════ */
+let prev = performance.now();
+function loop(now) {
+  const dt = Math.min(0.05, (now - prev) / 1000);
+  prev = now;
+  tickSim(now, dt);
+  tickPending(now);
+  tickDial(dt);
+  tickOdo(dt);
+  layoutSlots(now);
+  renderLive(now, dt);
+  requestAnimationFrame(loop);
+}
+
+/* ══════════ 适配窗口宽度 ══════════ */
+function fit() {
+  const scale = Math.min(1, (window.innerWidth - 32) / 980);
+  const f = $("#fitter");
+  f.style.transform = "scale(" + scale.toFixed(4) + ")";
+  f.style.marginBottom = (-(1 - scale) * 462) + "px";
+}
+window.addEventListener("resize", fit);
+
+/* ══════════ 启动 ══════════ */
+setInterval(() => {
+  const d = new Date();
+  $("#clock").textContent = pad2(d.getHours()) + ":" + pad2(d.getMinutes());
+}, 1000);
+
+state.records = loadRecords();
+state.angle = -1 * STEP;                 // 开机停在 01 号表
+state.sel = 1;
+panelAddr = 1;
+buildOdo($("#odo"), "-.--");
+layoutSlots(performance.now());
+renderPanel();
+dial.setAttribute("aria-valuenow", "1");
+fit();
+requestAnimationFrame(loop);
+</script>
 </body>
 </html>
