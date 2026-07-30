@@ -28,23 +28,26 @@ import android.os.Looper;
 import android.os.SystemClock;
 import android.util.Log;
 
-import java.util.ArrayDeque;
-import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.HashMap;
-import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Queue;
-import java.util.Set;
+import java.util.TreeSet;
 import java.util.UUID;
 
+/**
+ * 链路自治的帧流服务:发现覆盖范围内的所有 HC-42 就全部接入,断了退避重连,
+ * 每一帧都广播给界面。前端的任何操作都不影响通信 —— 手动/自动只决定存不存库:
+ * 手动存档在界面侧完成;自动模式在这里按周期把各表「此刻的最新帧」快照落库
+ * (1.5 秒内有帧存值,否则存离线),语义与界面原型的 autoRound 一致。
+ *
+ * 并发模型:回调驱动 + 每台表一个链路状态机。已建立的连接并行收数,
+ * 但同一时刻只发起一条新链(多数机型的协议栈按序建链,并发发起容易 133)。
+ */
 public final class MeterPollingService extends Service {
     public static final String ACTION_CONNECT_BASIC =
-            "com.jun.nuedc.reader.action.CONNECT_BASIC";
-    public static final String ACTION_MANUAL_READ =
-            "com.jun.nuedc.reader.action.MANUAL_READ";
+            "com.jun.nuedc.reader.action.CONNECT_BASIC";       // 兼容旧名:启动链路管理
     public static final String ACTION_START_AUTO =
             "com.jun.nuedc.reader.action.START_AUTO";
     public static final String ACTION_STOP_AUTO =
@@ -55,6 +58,9 @@ public final class MeterPollingService extends Service {
             "com.jun.nuedc.reader.event.READING";
     public static final String ACTION_STATE =
             "com.jun.nuedc.reader.event.STATE";
+    /** 实时帧:帧一直在流,只进界面不落库。 */
+    public static final String ACTION_FRAME =
+            "com.jun.nuedc.reader.event.FRAME";
 
     public static final String EXTRA_ADDRESS = "address";
     public static final String EXTRA_CURRENT_MA = "current_ma";
@@ -63,11 +69,27 @@ public final class MeterPollingService extends Service {
     public static final String EXTRA_STATE = "state";
     public static final String EXTRA_DETAIL = "detail";
     public static final String EXTRA_AUTO = "auto";
+    public static final String EXTRA_MAC = "mac";
+    public static final String EXTRA_NAME = "name";
+    public static final String EXTRA_RSSI = "rssi";
 
     private static final String TAG = "MeterPollingService";
     private static final String NOTIFICATION_CHANNEL = "meter_reader_service";
     private static final int NOTIFICATION_ID = 100;
-    private static final long BASIC_RECONNECT_DELAY_MS = 1_500L;
+
+    private static final long SCAN_ON_MS = 8_000L;             // 扫 8 秒歇 12 秒,避开系统节流
+    private static final long SCAN_OFF_MS = 12_000L;
+    private static final long PUMP_MS = 1_000L;
+    private static final long FRESH_MS = 1_500L;               // 与界面的静默判定一致
+    private static final long RETRY_MS = 1_500L;
+    private static final long RETRY_SLOW_MS = 10_000L;         // 连败三次后放慢,别拖累别的链
+    private static final int RETRY_SLOW_AFTER = 3;
+    /* 表数超过手机控制器的并发上限时轮流连:满员后把驻留最久的一台轮出去,
+       让排队的接入。多数手机支持 ~7 条并发 GATT,取保守值。 */
+    private static final int MAX_ACTIVE_LINKS = 7;
+    private static final long ROTATE_DWELL_MS = 4_000L;        // 每台至少驻留这么久且拿到帧才轮出
+    private static final long PARKED_FRESH_MS = 120_000L;      // 轮歇中的表:上一帧在此窗口内即算在场
+                                                               // (16 台满轮转最坏 ~60-80 s,留余量)
 
     private static final UUID SERVICE_UUID =
             UUID.fromString("0000ffe0-0000-1000-8000-00805f9b34fb");
@@ -76,60 +98,82 @@ public final class MeterPollingService extends Service {
     private static final UUID CLIENT_CONFIG_UUID =
             UUID.fromString("00002902-0000-1000-8000-00805f9b34fb");
 
+    private static final int LINK_IDLE = 0;
+    private static final int LINK_CONNECTING = 1;
+    private static final int LINK_SUBSCRIBED = 2;
+
+    /** 一台 HC-42 一条链:独立解析缓冲、独立重试节奏。 */
+    private static final class MeterLink {
+        BluetoothDevice device;
+        String name;
+        final String mac;
+        int rssi;
+        BluetoothGatt gatt;
+        final MeterFrameParser parser = new MeterFrameParser();
+        int state = LINK_IDLE;
+        long lastDataAt;                                       // elapsedRealtime,任意通知都算
+        int address = -1;                                      // 帧里报出来的编码开关地址
+        int lastMa = -1;
+        long lastFrameAt;                                      // elapsedRealtime
+        long subscribedAt;                                     // elapsedRealtime,本次会话订阅时刻
+        boolean parked;                                        // 健康,只是被轮出去让位
+        int failures;
+        long nextAttemptAt;
+
+        MeterLink(BluetoothDevice device, String name, String mac, int rssi) {
+            this.device = device;
+            this.name = name;
+            this.mac = mac;
+            this.rssi = rssi;
+        }
+    }
+
     private final Handler handler = new Handler(Looper.getMainLooper());
-    private final Map<String, ScanTarget> scannedTargets = new HashMap<>();
-    private final Queue<ScanTarget> readQueue = new ArrayDeque<>();
-    private final Set<String> successfulMacs = new HashSet<>();
-    private final MeterFrameParser parser = new MeterFrameParser();
+    private final Map<String, MeterLink> links = new LinkedHashMap<>();
 
     private BluetoothAdapter adapter;
     private BluetoothLeScanner scanner;
-    private BluetoothGatt currentGatt;
-    private BluetoothGattCharacteristic meterCharacteristic;
-    private ScanTarget currentTarget;
     private MeterDatabase database;
     private ReaderPreferences preferences;
     private NotificationManager notificationManager;
 
-    private boolean autoMode;
-    private boolean basicMode;
-    private boolean operationActive;
+    private boolean running;
     private boolean scanning;
-    private boolean manualReadRequested;
-    private String currentSource = "BASIC";
-    private long cycleStartedAt;
+    private boolean autoMode;
+    private MeterLink connectingLink;
     private long nextCycleAtElapsedMs;
+    private int lastSubscribedCount = -1;
+    private String lastNotificationText = "";
 
-    private final Runnable scanTimeout = this::finishScan;
-    private final Runnable connectionTimeout = () -> failCurrent("连接超时");
-    private final Runnable frameTimeout = this::handleFrameTimeout;
-    private final Runnable nextCycle = this::beginAutoCycle;
-    private final Runnable countdownTick = this::updateCountdownNotification;
-    private final Runnable reconnectBasic = () -> {
-        if (basicMode && !autoMode && !operationActive) {
-            beginScan("BASIC");
+    private final Runnable scanOn = this::startScanWindow;
+    private final Runnable scanOff = this::stopScanWindow;
+    private final Runnable pump = this::pumpLinks;
+    private final Runnable connectTimeout = () -> {
+        if (connectingLink != null) {
+            linkDown(connectingLink, "连接超时");
         }
     };
+    private final Runnable autoRoundRunnable = this::autoRound;
+    private final Runnable countdownTick = this::updateCountdownNotification;
 
     private final ScanCallback scanCallback = new ScanCallback() {
         @Override
         public void onScanResult(int callbackType, ScanResult result) {
-            handleScanResult(result);
+            handler.post(() -> handleScanResult(result));
         }
 
         @Override
         public void onBatchScanResults(List<ScanResult> results) {
-            for (ScanResult result : results) {
-                handleScanResult(result);
-            }
+            handler.post(() -> {
+                for (ScanResult result : results) {
+                    handleScanResult(result);
+                }
+            });
         }
 
         @Override
         public void onScanFailed(int errorCode) {
-            handler.post(() -> {
-                broadcastState("ERROR", "蓝牙扫描失败：" + errorCode);
-                finishScan();
-            });
+            handler.post(() -> broadcastState("ERROR", "蓝牙扫描失败：" + errorCode));
         }
     };
 
@@ -141,7 +185,13 @@ public final class MeterPollingService extends Service {
 
         @Override
         public void onServicesDiscovered(BluetoothGatt gatt, int status) {
-            handler.post(() -> enableMeterNotifications(gatt, status));
+            handler.post(() -> handleServicesDiscovered(gatt, status));
+        }
+
+        @Override
+        public void onDescriptorWrite(BluetoothGatt gatt, BluetoothGattDescriptor descriptor,
+                                      int status) {
+            handler.post(() -> handleDescriptorWrite(gatt, status));
         }
 
         @Override
@@ -151,7 +201,7 @@ public final class MeterPollingService extends Service {
                 BluetoothGattCharacteristic characteristic
         ) {
             byte[] value = characteristic.getValue();
-            handler.post(() -> handleCharacteristic(gatt, characteristic, value));
+            handler.post(() -> handleData(gatt, characteristic, value));
         }
 
         @Override
@@ -161,7 +211,7 @@ public final class MeterPollingService extends Service {
                 byte[] value
         ) {
             byte[] copy = value == null ? null : value.clone();
-            handler.post(() -> handleCharacteristic(gatt, characteristic, copy));
+            handler.post(() -> handleData(gatt, characteristic, copy));
         }
     };
 
@@ -194,15 +244,31 @@ public final class MeterPollingService extends Service {
 
         String action = intent.getAction();
         if (ACTION_CONNECT_BASIC.equals(action)) {
-            ensureBasicConnection();
-        } else if (ACTION_MANUAL_READ.equals(action)) {
-            requestManualRead();
+            startLinks();
         } else if (ACTION_START_AUTO.equals(action)) {
-            startAutoMode();
+            startLinks();
+            autoMode = true;
+            autoRound();                                       // 一键启动:立刻先存一轮
         } else if (ACTION_STOP_AUTO.equals(action)) {
-            switchToBasicMode();
+            autoMode = false;
+            handler.removeCallbacks(autoRoundRunnable);
+            handler.removeCallbacks(countdownTick);
+            nextCycleAtElapsedMs = 0L;
+            startLinks();                                      // 链路照常在线,只是不再定时落库
+            broadcastState("CONNECTED", "自动存档已停止，帧流保持在线");
+            updateNotification(streamingText());
         } else if (ACTION_UPDATE_INTERVAL.equals(action)) {
-            rescheduleAutoCycle();
+            if (autoMode) {
+                broadcastState(
+                        "AUTO_WAIT",
+                        String.format(
+                                Locale.CHINA,
+                                "采集间隔已设为%s，重新计时",
+                                preferences.pollingIntervalText()
+                        )
+                );
+                scheduleRound(preferences.pollingIntervalMs());
+            }
         }
         return START_NOT_STICKY;
     }
@@ -214,116 +280,77 @@ public final class MeterPollingService extends Service {
 
     @Override
     public void onDestroy() {
-        cancelOperation();
+        running = false;
+        handler.removeCallbacksAndMessages(null);
+        stopScanQuietly();
+        for (MeterLink link : links.values()) {
+            closeGatt(link);
+        }
+        links.clear();
         database.close();
         super.onDestroy();
     }
 
-    private void ensureBasicConnection() {
-        if (autoMode) {
-            broadcastState(
-                    "AUTO_WAIT",
-                    String.format(
-                            Locale.CHINA,
-                            "自动模式运行中，每%s采集一次",
-                            preferences.pollingIntervalText()
-                    )
-            );
+    /* ══════════ 链路管理:与采集模式无关,常驻 ══════════ */
+    private void startLinks() {
+        if (running) {
             return;
         }
-        if (basicMode && currentGatt != null && meterCharacteristic != null) {
-            broadcastState("CONNECTED", "基本模式已连接 " + displayName(currentTarget));
+        running = true;
+        broadcastState("SCANNING", "正在搜索覆盖范围内的电流表");
+        updateNotification("正在搜索电流表");
+        handler.removeCallbacks(scanOn);
+        handler.removeCallbacks(scanOff);
+        handler.removeCallbacks(pump);
+        handler.post(scanOn);
+        handler.postDelayed(pump, PUMP_MS);
+    }
+
+    private void startScanWindow() {
+        if (!running || adapter == null) {
             return;
         }
-        basicMode = true;
-        manualReadRequested = false;
-        cancelOperation();
-        beginScan("BASIC");
-    }
-
-    private void requestManualRead() {
-        if (basicMode && !autoMode && currentGatt != null && meterCharacteristic != null) {
-            manualReadRequested = true;
-            parser.reset();
-            handler.removeCallbacks(frameTimeout);
-            handler.postDelayed(frameTimeout, ReaderPreferences.FRAME_TIMEOUT_MS);
-            broadcastState("WAITING", "基本模式：等待下一帧电流数据");
-            updateNotification("基本模式：正在读取");
-            return;
-        }
-
-        autoMode = false;
-        basicMode = true;
-        manualReadRequested = true;
-        cancelOperation();
-        beginScan("BASIC");
-    }
-
-    private void startAutoMode() {
-        autoMode = true;
-        basicMode = false;
-        manualReadRequested = false;
-        cancelOperation();
-        beginAutoCycle();
-    }
-
-    private void switchToBasicMode() {
-        autoMode = false;
-        basicMode = true;
-        manualReadRequested = false;
-        cancelOperation();
-        beginScan("BASIC");
-    }
-
-    private void beginAutoCycle() {
-        if (!autoMode) {
-            return;
-        }
-        handler.removeCallbacks(countdownTick);
-        nextCycleAtElapsedMs = 0L;
-        cycleStartedAt = System.currentTimeMillis();
-        beginScan("AUTO");
-    }
-
-    private void beginScan(String source) {
-        if (operationActive) {
-            return;
-        }
-        currentSource = source;
-        operationActive = true;
-        scanning = true;
-        scannedTargets.clear();
-        readQueue.clear();
-        successfulMacs.clear();
-        parser.reset();
-
         scanner = adapter.getBluetoothLeScanner();
         if (scanner == null) {
             broadcastState("ERROR", "无法取得BLE扫描器");
-            handleNoTargets();
+            handler.postDelayed(scanOn, SCAN_OFF_MS);
             return;
         }
-
         ScanSettings settings = new ScanSettings.Builder()
-                .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
+                .setScanMode(ScanSettings.SCAN_MODE_BALANCED)
                 .build();
         try {
             scanner.startScan(null, settings, scanCallback);
-            String detail = "AUTO".equals(source)
-                    ? "自动模式：正在搜索覆盖范围内的电流表"
-                    : "基本模式：正在自动连接HC-42";
-            broadcastState("SCANNING", detail);
-            updateNotification(detail);
-            handler.postDelayed(scanTimeout, ReaderPreferences.SCAN_DURATION_MS);
+            scanning = true;
         } catch (SecurityException | IllegalStateException exception) {
-            Log.e(TAG, "Unable to start BLE scan", exception);
-            broadcastState("ERROR", "无法开始扫描：" + exception.getMessage());
-            handleNoTargets();
+            Log.w(TAG, "Unable to start BLE scan", exception);
+        }
+        handler.postDelayed(scanOff, SCAN_ON_MS);
+    }
+
+    private void stopScanWindow() {
+        stopScanQuietly();
+        if (running) {
+            handler.postDelayed(scanOn, SCAN_OFF_MS);
+        }
+    }
+
+    private void stopScanQuietly() {
+        if (!scanning) {
+            return;
+        }
+        scanning = false;
+        try {
+            if (scanner != null && hasBlePermissions()) {
+                scanner.stopScan(scanCallback);
+            }
+        } catch (SecurityException | IllegalStateException exception) {
+            Log.w(TAG, "Unable to stop scan", exception);
         }
     }
 
     private void handleScanResult(ScanResult result) {
-        if (!scanning || result == null || result.getDevice() == null) {
+        if (!running || result == null || result.getDevice() == null) {
             return;
         }
         BluetoothDevice device = result.getDevice();
@@ -333,380 +360,227 @@ public final class MeterPollingService extends Service {
                 && result.getScanRecord().getDeviceName() != null) {
             name = result.getScanRecord().getDeviceName();
         }
-        scannedTargets.put(
-                device.getAddress(),
-                new ScanTarget(device, name, device.getAddress(), result.getRssi())
-        );
-        if ("BASIC".equals(currentSource) && isMeterCandidate(name)) {
-            // Basic mode is one-to-one: connect as soon as the first HC-42 is found.
-            finishScan();
+        if (!isMeterCandidate(name)) {
+            return;
+        }
+        String mac = device.getAddress();
+        MeterLink link = links.get(mac);
+        if (link == null) {
+            link = new MeterLink(device, name, mac, result.getRssi());
+            links.put(mac, link);
+            broadcastState("CONNECTING", "发现 " + name + "，接入帧流");
+        } else {
+            link.device = device;
+            link.name = name;
+            link.rssi = result.getRssi();
         }
     }
 
-    private void finishScan() {
-        if (!scanning) {
+    /** 每秒一拍:看门狗 + 建链队列(同一时刻只发起一条)+ 满员轮歇。 */
+    private void pumpLinks() {
+        if (!running) {
             return;
         }
-        scanning = false;
-        handler.removeCallbacks(scanTimeout);
-        try {
-            if (scanner != null) {
-                scanner.stopScan(scanCallback);
-            }
-        } catch (SecurityException exception) {
-            Log.w(TAG, "Unable to stop scan", exception);
-        }
-
-        List<ScanTarget> targets = new ArrayList<>();
-        for (ScanTarget target : scannedTargets.values()) {
-            if (isMeterCandidate(target.name)) {
-                targets.add(target);
+        long now = SystemClock.elapsedRealtime();
+        for (MeterLink link : links.values()) {
+            if (link.state == LINK_SUBSCRIBED
+                    && now - link.lastDataAt > ReaderPreferences.FRAME_TIMEOUT_MS) {
+                linkDown(link, "数据超时");
             }
         }
-        targets.sort(Comparator.comparingInt((ScanTarget target) -> target.rssi).reversed());
-        if ("BASIC".equals(currentSource) && !targets.isEmpty()) {
-            readQueue.add(targets.get(0));
-        } else {
-            readQueue.addAll(targets);
+        if (connectingLink == null) {
+            // 排队最久的先上(nextAttemptAt 最小的到期链路)
+            MeterLink waiting = null;
+            for (MeterLink link : links.values()) {
+                if (link.state == LINK_IDLE && link.nextAttemptAt <= now
+                        && (waiting == null || link.nextAttemptAt < waiting.nextAttemptAt)) {
+                    waiting = link;
+                }
+            }
+            if (waiting != null) {
+                if (subscribedCount() < MAX_ACTIVE_LINKS) {
+                    connect(waiting);
+                } else {
+                    parkOldest(now);                           // 满员:轮出驻留最久的,下一拍连它
+                }
+            }
         }
-
-        if (readQueue.isEmpty()) {
-            handleNoTargets();
-            return;
+        int count = subscribedCount();
+        if (count != lastSubscribedCount) {
+            lastSubscribedCount = count;
+            broadcastState(count > 0 ? "CONNECTED" : "SCANNING", streamingText());
+            if (!autoMode) {
+                updateNotification(streamingText());
+            }
         }
-
-        broadcastState(
-                "CONNECTING",
-                "AUTO".equals(currentSource)
-                        ? String.format(Locale.CHINA, "发现%d台电流表，开始自动采集", readQueue.size())
-                        : "发现HC-42，正在自动连接"
-        );
-        connectNext();
+        handler.postDelayed(pump, PUMP_MS);
     }
 
-    private void handleNoTargets() {
-        operationActive = false;
-        scanning = false;
-        if (basicMode && !autoMode) {
-            broadcastState("RECONNECTING", "未发现HC-42，稍后自动重试");
-            updateNotification("未发现HC-42，正在重试");
-            handler.removeCallbacks(reconnectBasic);
-            handler.postDelayed(reconnectBasic, BASIC_RECONNECT_DELAY_MS);
-        } else {
-            finishAutoCycle();
-        }
-    }
-
-    private void connectNext() {
-        handler.removeCallbacks(connectionTimeout);
-        handler.removeCallbacks(frameTimeout);
-        closeCurrentGatt();
-        parser.reset();
-        currentTarget = readQueue.poll();
-        if (currentTarget == null) {
-            finishAutoCycle();
-            return;
-        }
-
-        broadcastState("CONNECTING", "正在连接 " + displayName(currentTarget));
-        updateNotification("正在连接 " + displayName(currentTarget));
+    private void connect(MeterLink link) {
+        link.state = LINK_CONNECTING;
+        link.parser.reset();
+        connectingLink = link;
         try {
-            currentGatt = currentTarget.device.connectGatt(
+            link.gatt = link.device.connectGatt(
                     this,
                     false,
                     gattCallback,
                     BluetoothDevice.TRANSPORT_LE
             );
-            if (currentGatt == null) {
-                failCurrent("无法创建GATT连接");
-                return;
-            }
-            handler.postDelayed(connectionTimeout, ReaderPreferences.CONNECTION_TIMEOUT_MS);
         } catch (SecurityException exception) {
-            failCurrent("连接权限错误");
+            link.gatt = null;
         }
+        if (link.gatt == null) {
+            linkDown(link, "无法创建GATT连接");
+            return;
+        }
+        handler.removeCallbacks(connectTimeout);
+        handler.postDelayed(connectTimeout, ReaderPreferences.CONNECTION_TIMEOUT_MS);
+    }
+
+    private MeterLink findLink(BluetoothGatt gatt) {
+        for (MeterLink link : links.values()) {
+            if (link.gatt == gatt) {
+                return link;
+            }
+        }
+        return null;
     }
 
     private void handleConnectionState(BluetoothGatt gatt, int status, int newState) {
-        if (gatt != currentGatt) {
+        MeterLink link = findLink(gatt);
+        if (link == null) {
             safeClose(gatt);
             return;
         }
         if (newState == BluetoothProfile.STATE_CONNECTED
                 && status == BluetoothGatt.GATT_SUCCESS) {
-            handler.removeCallbacks(connectionTimeout);
             try {
-                gatt.requestConnectionPriority(BluetoothGatt.CONNECTION_PRIORITY_HIGH);
                 if (!gatt.discoverServices()) {
-                    failCurrent("无法发现GATT服务");
-                } else {
-                    handler.postDelayed(
-                            connectionTimeout,
-                            ReaderPreferences.CONNECTION_TIMEOUT_MS
-                    );
+                    linkDown(link, "无法发现GATT服务");
                 }
             } catch (SecurityException exception) {
-                failCurrent("服务发现权限错误");
+                linkDown(link, "服务发现权限错误");
             }
         } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
-            handler.removeCallbacks(connectionTimeout);
-            handler.removeCallbacks(frameTimeout);
-            failCurrent("设备已断开");
+            linkDown(link, "连接断开");
         }
     }
 
-    @SuppressWarnings("deprecation")
-    private void enableMeterNotifications(BluetoothGatt gatt, int status) {
-        if (gatt != currentGatt) {
+    private void handleServicesDiscovered(BluetoothGatt gatt, int status) {
+        MeterLink link = findLink(gatt);
+        if (link == null) {
             return;
         }
-        handler.removeCallbacks(connectionTimeout);
         if (status != BluetoothGatt.GATT_SUCCESS) {
-            failCurrent("服务发现失败");
+            linkDown(link, "服务发现失败");
             return;
         }
-
         BluetoothGattService service = gatt.getService(SERVICE_UUID);
         BluetoothGattCharacteristic characteristic =
                 service == null ? null : service.getCharacteristic(CHARACTERISTIC_UUID);
         if (characteristic == null) {
-            failCurrent("未找到HC-42的FFE0/FFE1服务");
+            linkDown(link, "未找到HC-42的FFE0/FFE1服务");
             return;
         }
-
         try {
-            meterCharacteristic = characteristic;
             if (!gatt.setCharacteristicNotification(characteristic, true)) {
-                failCurrent("无法启用FFE1通知");
+                linkDown(link, "无法启用FFE1通知");
                 return;
             }
-            BluetoothGattDescriptor descriptor = characteristic.getDescriptor(CLIENT_CONFIG_UUID);
+            BluetoothGattDescriptor descriptor =
+                    characteristic.getDescriptor(CLIENT_CONFIG_UUID);
             if (descriptor == null) {
-                failCurrent("FFE1缺少通知描述符");
+                linkDown(link, "FFE1缺少通知描述符");
                 return;
             }
             descriptor.setValue(BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE);
             if (!gatt.writeDescriptor(descriptor)) {
-                failCurrent("启用FFE1通知失败");
-                return;
-            }
-
-            if (basicMode && !autoMode) {
-                operationActive = true;
-                broadcastState("CONNECTED", "基本模式已连接 " + displayName(currentTarget));
-                updateNotification("基本模式已连接，等待手动读取");
-                if (manualReadRequested) {
-                    handler.postDelayed(frameTimeout, ReaderPreferences.FRAME_TIMEOUT_MS);
-                    broadcastState("WAITING", "基本模式：等待下一帧电流数据");
-                }
-            } else {
-                broadcastState("WAITING", "自动模式：等待电流数据");
-                handler.postDelayed(frameTimeout, ReaderPreferences.FRAME_TIMEOUT_MS);
+                linkDown(link, "启用FFE1通知失败");
             }
         } catch (SecurityException exception) {
-            failCurrent("启用通知权限错误");
+            linkDown(link, "启用通知权限错误");
         }
     }
 
-    private void handleCharacteristic(
-            BluetoothGatt gatt,
-            BluetoothGattCharacteristic characteristic,
-            byte[] value
-    ) {
-        if (gatt != currentGatt || !CHARACTERISTIC_UUID.equals(characteristic.getUuid())) {
+    private void handleDescriptorWrite(BluetoothGatt gatt, int status) {
+        MeterLink link = findLink(gatt);
+        if (link == null) {
             return;
         }
-        List<MeterFrameParser.ParsedFrame> frames = parser.feed(value);
+        if (status != BluetoothGatt.GATT_SUCCESS) {
+            linkDown(link, "通知描述符写入失败");
+            return;
+        }
+        link.state = LINK_SUBSCRIBED;
+        link.failures = 0;
+        link.parked = false;
+        link.subscribedAt = SystemClock.elapsedRealtime();
+        link.lastDataAt = link.subscribedAt;
+        if (connectingLink == link) {
+            connectingLink = null;                             // 释放建链槽,轮到下一台
+            handler.removeCallbacks(connectTimeout);
+        }
+    }
+
+    /** 满员轮歇:把驻留最久、且这次会话已经拿到过帧的链轮出去,排到队尾。 */
+    private void parkOldest(long now) {
+        MeterLink oldest = null;
+        for (MeterLink link : links.values()) {
+            if (link.state != LINK_SUBSCRIBED
+                    || now - link.subscribedAt < ROTATE_DWELL_MS
+                    || link.lastFrameAt < link.subscribedAt) {
+                continue;                                      // 还没坐热或还没出数,先不动
+            }
+            if (oldest == null || link.subscribedAt < oldest.subscribedAt) {
+                oldest = link;
+            }
+        }
+        if (oldest == null) {
+            return;
+        }
+        closeGatt(oldest);
+        oldest.state = LINK_IDLE;
+        oldest.parked = true;
+        oldest.failures = 0;
+        oldest.nextAttemptAt = now;                            // 立即到期,但排在等更久的后面
+    }
+
+    private void handleData(BluetoothGatt gatt, BluetoothGattCharacteristic characteristic,
+                            byte[] value) {
+        MeterLink link = findLink(gatt);
+        if (link == null || !CHARACTERISTIC_UUID.equals(characteristic.getUuid())) {
+            return;
+        }
+        link.lastDataAt = SystemClock.elapsedRealtime();
+        List<MeterFrameParser.ParsedFrame> frames = link.parser.feed(value);
         if (frames.isEmpty()) {
             return;
         }
-        if (basicMode && !autoMode && !manualReadRequested) {
-            return;
-        }
-
         MeterFrameParser.ParsedFrame frame = frames.get(frames.size() - 1);
-        handler.removeCallbacks(frameTimeout);
-        ScanTarget target = currentTarget;
-        if (target == null) {
-            return;
-        }
-
-        String status = MeterReading.classify(
-                frame.currentMa,
-                ReaderPreferences.DEFAULT_LOW_THRESHOLD_MA,
-                ReaderPreferences.DEFAULT_HIGH_THRESHOLD_MA
-        );
-        MeterReading reading = database.insertReading(new MeterReading(
-                0,
-                System.currentTimeMillis(),
-                frame.address,
-                frame.currentMa,
-                status,
-                target.mac,
-                target.name,
-                target.rssi,
-                currentSource
-        ));
-        successfulMacs.add(target.mac);
-        broadcastReading(reading);
-
-        String result = String.format(
-                Locale.CHINA,
-                "%02d号表：%s",
-                reading.address,
-                reading.currentText()
-        );
-        if (basicMode && !autoMode) {
-            manualReadRequested = false;
-            broadcastState("CONNECTED", "基本模式读取完成：" + result);
-            updateNotification("基本模式已连接，等待手动读取");
-        } else {
-            broadcastState("READ_OK", "自动采集：" + result);
-            handler.postDelayed(this::connectNext, 250L);
-        }
+        link.address = frame.address;
+        link.lastMa = frame.currentMa;
+        link.lastFrameAt = link.lastDataAt;
+        broadcastFrame(frame, link);
     }
 
-    private void handleFrameTimeout() {
-        if (basicMode && !autoMode && currentGatt != null) {
-            manualReadRequested = false;
-            broadcastState("ERROR", "等待电流数据超时，请重新手动读取");
-            updateNotification("基本模式已连接，等待手动读取");
-        } else {
-            failCurrent("等待数据超时");
+    private void linkDown(MeterLink link, String reason) {
+        Log.w(TAG, link.mac + " " + reason);
+        if (connectingLink == link) {
+            connectingLink = null;
+            handler.removeCallbacks(connectTimeout);
         }
+        closeGatt(link);
+        link.state = LINK_IDLE;
+        link.parked = false;                                   // 真失败,不算轮歇
+        link.failures++;
+        link.nextAttemptAt = SystemClock.elapsedRealtime()
+                + (link.failures >= RETRY_SLOW_AFTER ? RETRY_SLOW_MS : RETRY_MS);
     }
 
-    private void failCurrent(String reason) {
-        Log.w(TAG, reason);
-        handler.removeCallbacks(connectionTimeout);
-        handler.removeCallbacks(frameTimeout);
-        closeCurrentGatt();
-        currentTarget = null;
-
-        if (basicMode && !autoMode) {
-            operationActive = false;
-            broadcastState("RECONNECTING", reason + "，正在自动重连");
-            updateNotification("基本模式：正在自动重连");
-            handler.removeCallbacks(reconnectBasic);
-            handler.postDelayed(reconnectBasic, BASIC_RECONNECT_DELAY_MS);
-        } else {
-            handler.postDelayed(this::connectNext, 250L);
-        }
-    }
-
-    private void finishAutoCycle() {
-        if (!autoMode) {
-            return;
-        }
-        List<MeterReading> offline =
-                database.markMissingMetersOffline(successfulMacs, System.currentTimeMillis());
-        for (MeterReading reading : offline) {
-            broadcastReading(reading);
-        }
-
-        int successCount = successfulMacs.size();
-        operationActive = false;
-        currentTarget = null;
-        closeCurrentGatt();
-        broadcastState(
-                "AUTO_WAIT",
-                String.format(
-                        Locale.CHINA,
-                        "本轮完成：成功%d台，%s后再次采集",
-                        successCount,
-                        preferences.pollingIntervalText()
-                )
-        );
-
-        long pollingIntervalMs = preferences.pollingIntervalMs();
-        long nextAt = Math.max(
-                System.currentTimeMillis() + 1_000L,
-                cycleStartedAt + pollingIntervalMs
-        );
-        long delay = nextAt - System.currentTimeMillis();
-        scheduleNextAutoCycle(delay);
-    }
-
-    private void rescheduleAutoCycle() {
-        if (!autoMode) {
-            return;
-        }
-        String interval = preferences.pollingIntervalText();
-        if (operationActive) {
-            broadcastState(
-                    "AUTO_ACTIVE",
-                    String.format(Locale.CHINA, "采集间隔已设为%s，下轮生效", interval)
-            );
-            return;
-        }
-        long delay = preferences.pollingIntervalMs();
-        handler.removeCallbacks(nextCycle);
-        broadcastState(
-                "AUTO_WAIT",
-                String.format(Locale.CHINA, "采集间隔已设为%s，重新计时", interval)
-        );
-        scheduleNextAutoCycle(delay);
-    }
-
-    private void scheduleNextAutoCycle(long delayMs) {
-        long safeDelayMs = Math.max(1_000L, delayMs);
-        handler.removeCallbacks(nextCycle);
-        handler.removeCallbacks(countdownTick);
-        nextCycleAtElapsedMs = SystemClock.elapsedRealtime() + safeDelayMs;
-        updateCountdownNotification();
-        handler.postDelayed(nextCycle, safeDelayMs);
-    }
-
-    private void updateCountdownNotification() {
-        if (!autoMode || operationActive || nextCycleAtElapsedMs <= 0L) {
-            return;
-        }
-
-        long remainingMs = nextCycleAtElapsedMs - SystemClock.elapsedRealtime();
-        if (remainingMs <= 0L) {
-            updateNotification("即将开始下一轮");
-            return;
-        }
-
-        long remainingSeconds = Math.max(1L, (remainingMs + 999L) / 1_000L);
-        updateNotification(String.format(
-                Locale.CHINA,
-                "%d秒后开始下一轮",
-                remainingSeconds
-        ));
-
-        long untilNextSecond = remainingMs - (remainingSeconds - 1L) * 1_000L;
-        handler.postDelayed(
-                countdownTick,
-                Math.max(50L, Math.min(1_000L, untilNextSecond))
-        );
-    }
-
-    private void cancelOperation() {
-        handler.removeCallbacks(nextCycle);
-        handler.removeCallbacks(countdownTick);
-        handler.removeCallbacks(reconnectBasic);
-        handler.removeCallbacks(scanTimeout);
-        handler.removeCallbacks(connectionTimeout);
-        handler.removeCallbacks(frameTimeout);
-        nextCycleAtElapsedMs = 0L;
-        scanning = false;
-        operationActive = false;
-        if (scanner != null && hasBlePermissions()) {
-            try {
-                scanner.stopScan(scanCallback);
-            } catch (SecurityException ignored) {
-                // Permission may be revoked while the service is running.
-            }
-        }
-        readQueue.clear();
-        closeCurrentGatt();
-    }
-
-    private void closeCurrentGatt() {
-        BluetoothGatt gatt = currentGatt;
-        currentGatt = null;
-        meterCharacteristic = null;
+    private void closeGatt(MeterLink link) {
+        BluetoothGatt gatt = link.gatt;
+        link.gatt = null;
         if (gatt == null) {
             return;
         }
@@ -715,7 +589,7 @@ public final class MeterPollingService extends Service {
                 gatt.disconnect();
             }
         } catch (SecurityException ignored) {
-            // Close is still attempted below.
+            // 下面仍然会 close
         }
         safeClose(gatt);
     }
@@ -725,9 +599,126 @@ public final class MeterPollingService extends Service {
             try {
                 gatt.close();
             } catch (RuntimeException ignored) {
-                // Some vendor Bluetooth stacks throw when already closed.
+                // 个别厂商栈在已关闭时会抛
             }
         }
+    }
+
+    /* ══════════ 自动存档:快照各表此刻的最新帧,与原型 autoRound 一致 ══════════ */
+    private void autoRound() {
+        if (!autoMode) {
+            return;
+        }
+        long nowUp = SystemClock.elapsedRealtime();
+        long wall = System.currentTimeMillis();
+
+        // 地址 → 新鲜帧的链路(同地址取最近报数的那条链)。
+        // 正在流的 1.5 s 内算新鲜;被轮歇让位的健康链放宽到一个轮转周期,
+        // 否则表比连接上限多时会把轮歇中的表误记成离线。
+        Map<Integer, MeterLink> fresh = new HashMap<>();
+        for (MeterLink link : links.values()) {
+            if (link.address < 0 || link.lastFrameAt <= 0) {
+                continue;
+            }
+            long age = nowUp - link.lastFrameAt;
+            boolean usable = age <= FRESH_MS || (link.parked && age <= PARKED_FRESH_MS);
+            if (!usable) {
+                continue;
+            }
+            MeterLink prev = fresh.get(link.address);
+            if (prev == null || link.lastFrameAt > prev.lastFrameAt) {
+                fresh.put(link.address, link);
+            }
+        }
+        // 已登记 ∪ 在报数:每轮一表一条,有帧存值,没帧存离线
+        Map<Integer, String[]> registered = database.registeredMeters();
+        TreeSet<Integer> addrs = new TreeSet<>(registered.keySet());
+        addrs.addAll(fresh.keySet());
+
+        int stored = 0;
+        for (int addr : addrs) {
+            MeterLink link = fresh.get(addr);
+            MeterReading reading;
+            if (link != null) {
+                reading = database.insertReading(new MeterReading(
+                        0, wall, addr, link.lastMa,
+                        MeterReading.classify(
+                                link.lastMa,
+                                ReaderPreferences.DEFAULT_LOW_THRESHOLD_MA,
+                                ReaderPreferences.DEFAULT_HIGH_THRESHOLD_MA
+                        ),
+                        link.mac, link.name, link.rssi, "AUTO"
+                ));
+            } else {
+                String[] meta = registered.get(addr);
+                reading = database.insertReading(new MeterReading(
+                        0, wall, addr, -1, MeterReading.OFFLINE,
+                        meta[0], meta[1], -127, "AUTO"
+                ));
+            }
+            broadcastReading(reading);
+            stored++;
+        }
+        broadcastState(
+                "AUTO_WAIT",
+                String.format(
+                        Locale.CHINA,
+                        "本轮存档%d台，%s后再存一轮",
+                        stored,
+                        preferences.pollingIntervalText()
+                )
+        );
+        scheduleRound(preferences.pollingIntervalMs());
+    }
+
+    private void scheduleRound(long delayMs) {
+        long safeDelayMs = Math.max(1_000L, delayMs);
+        handler.removeCallbacks(autoRoundRunnable);
+        handler.removeCallbacks(countdownTick);
+        nextCycleAtElapsedMs = SystemClock.elapsedRealtime() + safeDelayMs;
+        updateCountdownNotification();
+        handler.postDelayed(autoRoundRunnable, safeDelayMs);
+    }
+
+    private void updateCountdownNotification() {
+        if (!autoMode || nextCycleAtElapsedMs <= 0L) {
+            return;
+        }
+        long remainingMs = nextCycleAtElapsedMs - SystemClock.elapsedRealtime();
+        if (remainingMs <= 0L) {
+            updateNotification("即将存档下一轮");
+            return;
+        }
+        long remainingSeconds = Math.max(1L, (remainingMs + 999L) / 1_000L);
+        updateNotification(String.format(
+                Locale.CHINA,
+                "%s · %d秒后自动存档",
+                streamingText(),
+                remainingSeconds
+        ));
+        long untilNextSecond = remainingMs - (remainingSeconds - 1L) * 1_000L;
+        handler.postDelayed(
+                countdownTick,
+                Math.max(50L, Math.min(1_000L, untilNextSecond))
+        );
+    }
+
+    /* ══════════ 杂项 ══════════ */
+    private int subscribedCount() {
+        int count = 0;
+        for (MeterLink link : links.values()) {
+            if (link.state == LINK_SUBSCRIBED) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    private String streamingText() {
+        int count = subscribedCount();
+        return count > 0
+                ? String.format(Locale.CHINA, "%d台在报数", count)
+                : "正在搜索电流表";
     }
 
     private boolean isMeterCandidate(String name) {
@@ -748,13 +739,6 @@ public final class MeterPollingService extends Service {
         }
     }
 
-    private String displayName(ScanTarget target) {
-        if (target == null || target.name == null || target.name.isEmpty()) {
-            return "HC-42";
-        }
-        return target.name;
-    }
-
     private boolean hasBlePermissions() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
             return checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION)
@@ -764,6 +748,17 @@ public final class MeterPollingService extends Service {
                 == PackageManager.PERMISSION_GRANTED
                 && checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT)
                 == PackageManager.PERMISSION_GRANTED;
+    }
+
+    private void broadcastFrame(MeterFrameParser.ParsedFrame frame, MeterLink link) {
+        Intent intent = eventIntent(ACTION_FRAME);
+        intent.putExtra(EXTRA_ADDRESS, frame.address);
+        intent.putExtra(EXTRA_CURRENT_MA, frame.currentMa);
+        intent.putExtra(EXTRA_TIMESTAMP, System.currentTimeMillis());
+        intent.putExtra(EXTRA_MAC, link.mac);
+        intent.putExtra(EXTRA_NAME, link.name);
+        intent.putExtra(EXTRA_RSSI, link.rssi);
+        sendBroadcast(intent);
     }
 
     private void broadcastReading(MeterReading reading) {
@@ -819,20 +814,10 @@ public final class MeterPollingService extends Service {
     }
 
     private void updateNotification(String text) {
-        notificationManager.notify(NOTIFICATION_ID, buildNotification(text));
-    }
-
-    private static final class ScanTarget {
-        final BluetoothDevice device;
-        final String name;
-        final String mac;
-        final int rssi;
-
-        ScanTarget(BluetoothDevice device, String name, String mac, int rssi) {
-            this.device = device;
-            this.name = name;
-            this.mac = mac;
-            this.rssi = rssi;
+        if (text.equals(lastNotificationText)) {
+            return;
         }
+        lastNotificationText = text;
+        notificationManager.notify(NOTIFICATION_ID, buildNotification(text));
     }
 }

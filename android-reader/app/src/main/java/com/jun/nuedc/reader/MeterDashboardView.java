@@ -1,0 +1,1811 @@
+package com.jun.nuedc.reader;
+
+import android.content.Context;
+import android.graphics.Canvas;
+import android.graphics.Color;
+import android.graphics.DashPathEffect;
+import android.graphics.Paint;
+import android.graphics.Path;
+import android.graphics.RectF;
+import android.graphics.Typeface;
+import android.os.SystemClock;
+import android.os.VibrationEffect;
+import android.os.Vibrator;
+import android.view.MotionEvent;
+import android.view.View;
+import android.view.animation.PathInterpolator;
+
+import java.text.SimpleDateFormat;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Date;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Set;
+
+/**
+ * app-prototype.html 的移植:布局、交互与所有动画细节与原型逐项对应。
+ * 渲染循环对应原型的 requestAnimationFrame,60 ms 模型定时器对应原型的
+ * setInterval —— 读条落库、静默判定、自动倒计时不依赖是否在画。
+ */
+public final class MeterDashboardView extends View {
+    public interface Listener {
+        /** 读条走完,把这一帧落库(currentMa &lt; 0 表示离线记录)。调用方应同步刷新 setData。 */
+        void onCaptureRecord(int address, int currentMa, String status,
+                             String mac, String deviceName, int rssi);
+        void onAutoModeChanged(boolean enabled);
+        void onClearHistory();
+        void onIntervalRequested();
+    }
+
+    /* ══════════ 与原型对齐的常量 ══════════ */
+    private static final int SLOTS = 16;
+    private static final float STEP = 360f / SLOTS;          // 22.5°
+    private static final int LOW_MA = 200;
+    private static final int HIGH_MA = 2000;
+    private static final int FULL_MA = 2200;
+    private static final long SILENT_MS = 1500;               // 连续无帧判为不再报数
+    private static final long STORE_MS = 700;                 // 读条时长:一定走完
+    private static final long ALERT_MS = 2200;                // 状态变化后的短暂提示
+    private static final int PAGE_SIZE = 6;
+    private static final int CAP = MeterDatabase.MAX_STORED_READINGS;
+    private static final String BLANK = "-.---";
+
+    private static final PathInterpolator EASE = new PathInterpolator(0.22f, 1f, 0.36f, 1f);
+    private static final PathInterpolator FLY = new PathInterpolator(0.34f, 0.9f, 0.3f, 1f);
+
+    /* ══════════ 颜色(与原型 CSS 变量一致) ══════════ */
+    private static final int PAGE = 0xFFE8ECF2;
+    private static final int FRAME = 0xFFFFFFFF;
+    private static final int SUNKEN = 0xFFF1F4F9;
+    private static final int INK = 0xFF131922;
+    private static final int INK2 = 0x94131922;               // rgba(19,25,34,.58)
+    private static final int INK3 = 0x57131922;               // rgba(19,25,34,.34)
+    private static final int LINE = 0x1A131922;               // rgba(19,25,34,.10)
+    private static final int LINE2 = 0x29131922;              // rgba(19,25,34,.16)
+    private static final int ACCENT = 0xFF1F6FEB;
+    private static final int C_OK = 0xFF0D9464;
+    private static final int C_LOW = 0xFFC87C00;
+    private static final int C_HIGH = 0xFFDC2626;
+    private static final int C_OFF = 0xFF828C98;              // rgb(130,140,152)
+    private static final int SLOT_OFF = 0xFF8A94A3;           // .slot.is-off
+
+    /* ══════════ 设计坐标(980×462,对应原型 CSS 布局) ══════════ */
+    private static final float DESIGN_W = 980f;
+    private static final float DESIGN_H = 462f;
+    private static final float SB_CY = 17.6f;
+    private static final float DIAL_X = 33f, DIAL_Y = 31.25f, DIAL_C = 183f;
+    private static final float SLOT_R = 144f, RING_R = 168f, COUNT_R = 104f, HUB_R = 88f;
+    private static final float SLOT_HALF_W = 28f, SLOT_HALF_H = 14.5f;
+    private static final float HUB_ADDR_BASE = 148f, HUB_VALUE_BASE = 189f;
+    private static final float HUB_STATE_BASE = 209.5f, HUB_SUB_BASE = 225.5f;
+    private static final float LEFT_CENTER = 216f;
+    private static final float FOOT_CY = 422.6f;
+    private static final float TOGGLE_W = 122f, TOGGLE_H = 36.75f, TOGGLE_BTN_W = 58f;
+    private static final float RIGHT_X = 432f;
+    private static final float HEAD_BASE = 53f;
+    private static final RectF CHART_CARD = new RectF(432, 66.5f, 960, 222.5f);
+    private static final float PLOT_X = 442f, PLOT_Y = 74.5f, PLOT_W = 508f, PLOT_H = 144f;
+    private static final float CHW = 520f, CHH = 156f;
+    private static final float CH_L = 30f, CH_R = 488f, CH_T = 12f, CH_B = 124f;
+    private static final float LOGHEAD_CY = 239.1f;
+    private static final RectF LOG_RECT = new RectF(432, 255.75f, 960, 446);
+    private static final float ROW_H = 31.5f;
+    private static final float REC_T_X = 444f, REC_A_X = 514f, REC_SRC_X = 546f;
+    private static final float REC_V_RIGHT = 898f, REC_S_RIGHT = 948f;
+    private static final RectF DIAL_RECT = new RectF(33, 31.25f, 399, 397.25f);
+    private static final RectF CHART_WRAP = new RectF(442, 74.5f, 950, 218.5f);
+
+    /* ══════════ 补间:对应 CSS transition(改目标时从当前值重新过渡) ══════════ */
+    private static final class Tween {
+        float value, from, to;
+        long start;
+        int dur;
+
+        Tween(float v) { value = from = to = v; }
+
+        void retarget(float target, long now, int durMs) {
+            if (target == to) return;
+            from = value;
+            to = target;
+            start = now;
+            dur = durMs;
+        }
+
+        float get(long now) {
+            if (dur <= 0 || now >= start + dur) {
+                value = to;
+            } else {
+                float t = (now - start) / (float) dur;
+                value = from + (to - from) * EASE.getInterpolation(t);
+            }
+            return value;
+        }
+    }
+
+    /* 每个地址的实时帧流(帧一直在到达,但只有按下才收下一帧并存档) */
+    private static final class Live {
+        boolean everSeen;
+        int frameMa = -1;
+        long frameWallTs;
+        long lastAt = Long.MIN_VALUE / 4;                     // uptime 时刻,判静默只用这个钟
+        String mac = "", name = "";
+        int rssi = -127;
+        String status;                                        // 实时判定,跳变沿触发提示
+        long alertUntil;
+        boolean silent = true;
+        final Tween bar = new Tween(0);                       // 条宽 .32s ease
+    }
+
+    private static final class Row {
+        MeterReading rec;
+        int anim;                                             // 0 无 1 fresh(.5s) 2 swap(.3s)
+        long animStart;
+        boolean forming;                                      // 飞行落地前只留骨架
+        long formedAt;                                        // 落地后其余列 .26s 淡入
+    }
+
+    /* ══════════ 状态 ══════════ */
+    private final Paint fill = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint stroke = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint textPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Path workPath = new Path();
+    private final DashPathEffect limitDash = new DashPathEffect(new float[]{3, 4}, 0);
+    private final DashPathEffect cursorDash = new DashPathEffect(new float[]{2, 3}, 0);
+    private final Typeface sans = Typeface.create("sans-serif", Typeface.NORMAL);
+    private final Typeface sansMedium = Typeface.create("sans-serif-medium", Typeface.NORMAL);
+    private final Typeface mono = Typeface.MONOSPACE;
+    private final Typeface monoBold = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD);
+    private final SimpleDateFormat clockFormat = new SimpleDateFormat("HH:mm:ss", Locale.CHINA);
+    private final SimpleDateFormat minuteFormat = new SimpleDateFormat("HH:mm", Locale.CHINA);
+
+    private Listener listener;
+
+    // 转盘
+    private float angle = -STEP;                              // 开机停在 01 号表
+    private float vel;
+    private boolean dragging;
+    private boolean hasSnap;
+    private float snapTarget;
+    private int snapAddr = -1;
+    private int sel = 1;
+    private float pointerAngle;
+    private long lastDialMoveAt;
+    private float downX, downY, movePx, velAtDown;
+    private int pressSlot = -1;
+
+    // 中心
+    private boolean hubPressed;
+    private long bumpStart = -1;
+    private int pendingAddr = -1;
+    private long pendingFrom, pendingUntil;
+    private int holdAddr = -1;
+    private int holdMa;
+    private long holdUntil;
+
+    // 模式
+    private boolean autoMode;
+    private float activation;
+    private float remain;
+    private int intervalSeconds = 120;
+    private final Tween modeInd = new Tween(0);               // 滑块 .34s
+    private final Tween modeText = new Tween(0);              // 文字色 .26s
+
+    // 记录范围
+    private boolean allScope;
+    private final Tween chipAll = new Tween(0);               // .22s
+    private int panelAddr = 1;
+    private int page;
+
+    // 数据
+    private final Map<Integer, MeterReading> latest = new HashMap<>();
+    private final Set<Integer> registered = new HashSet<>();
+    private List<MeterReading> history = new ArrayList<>();
+    private long maxSeenId;
+    private boolean firstLoad = true;
+    private boolean expectCaptureRefresh;
+    private final Live[] live = new Live[SLOTS];
+    private final List<Row> rows = new ArrayList<>();
+    private boolean connectionError;
+    private String connectionDetail = "正在连接 HC-42…";
+
+    // 图表
+    private float viewU0 = 0f, viewU1 = 1f;
+    private long chartFadeStart = -1;
+    private final List<float[]> chartPtXY = new ArrayList<>();
+    private final List<MeterReading> chartPtRec = new ArrayList<>();
+    private long chartDomainSpan;
+    private int chartDomainN;
+    private final Tween resetAlpha = new Tween(0);            // .2s
+    private boolean readoutOn;
+    private final Tween readoutAlpha = new Tween(0);          // .14s
+    private String readoutText = "";
+    private float readoutX, readoutY, cursorX = -1;
+
+    // 图表手势
+    private static final int TOUCH_NONE = 0, TOUCH_DIAL = 1, TOUCH_CHART = 2, TOUCH_HUB = 3, TOUCH_UI = 4;
+    private int touchMode = TOUCH_NONE;
+    private boolean pinching;
+    private float panStartX, panU0, panU1, chartMoved, lastSpanX;
+    private long lastChartTapAt;
+    private float lastChartTapX, lastChartTapY;
+
+    // 清空的两段式确认
+    private boolean clearArmed;
+    private long clearDeadline;
+
+    // 飞行:测完的数从中心飞到右侧,落地正好成为那一行的数值
+    private boolean flyActive;
+    private long flyStart;
+    private Row flyRow;
+    private String flyNum = "";
+    private float flyFromRight, flyFromBase, flyToRight, flyToBase;
+    private int flyNumFrom, flyNumTo, flyUnitFrom, flyUnitTo;
+
+    // 命中区(绘制时更新)
+    private final float[] slotOx = new float[SLOTS];
+    private final float[] slotOy = new float[SLOTS];
+    private final float[] slotScale = new float[SLOTS];
+    private final float[] slotAlpha = new float[SLOTS];
+    private final int[] slotZ = new int[SLOTS];
+    private final RectF modeManualRect = new RectF();
+    private final RectF modeAutoRect = new RectF();
+    private final RectF footNoteRect = new RectF();
+    private final RectF chipOneRect = new RectF();
+    private final RectF chipAllRect = new RectF();
+    private final RectF resetRect = new RectF();
+    private final RectF prevRect = new RectF(649, 229.1f, 669, 249.1f);
+    private final RectF nextRect = new RectF(723, 229.1f, 743, 249.1f);
+    private final RectF clearRect = new RectF();
+
+    private float viewScale = 1f, viewOffX, viewOffY;
+    private long lastRenderAt, lastModelAt;
+
+    /* 模型(定时器)与视图(动画帧)分开:读条落库、静默判定、倒计时挂在定时器上 */
+    private final Runnable modelLoop = new Runnable() {
+        @Override
+        public void run() {
+            modelTick();
+            postDelayed(this, 60);
+        }
+    };
+    private final Runnable renderLoop = new Runnable() {
+        @Override
+        public void run() {
+            long now = SystemClock.uptimeMillis();
+            float dt = Math.min(0.05f, (now - lastRenderAt) / 1000f);
+            lastRenderAt = now;
+            tickDial(dt);
+            activation += ((autoMode ? 1f : 0f) - activation) * clamp(dt * 4.2f, 0f, 1f);
+            if (flyActive && now >= flyStart + 460) landFlyer(now);
+            invalidate();
+            postOnAnimation(this);
+        }
+    };
+    /* 标题、条数、曲线、记录说的是同一件事,必须一起刷新;90ms 防抖 */
+    private final Runnable panelSwitch = new Runnable() {
+        @Override
+        public void run() {
+            panelAddr = sel;
+            page = 0;
+            viewU0 = 0f;
+            viewU1 = 1f;
+            rebuildRows(0, true);
+            chartFadeStart = SystemClock.uptimeMillis();
+        }
+    };
+
+    public MeterDashboardView(Context context) {
+        super(context);
+        for (int i = 0; i < SLOTS; i++) {
+            live[i] = new Live();
+        }
+        stroke.setStyle(Paint.Style.STROKE);
+        setFocusable(true);
+        setContentDescription("无线读表器横屏仪表盘");
+    }
+
+    /* ══════════ 对外 API ══════════ */
+    public void setListener(Listener listener) {
+        this.listener = listener;
+    }
+
+    public void setData(List<MeterReading> latestReadings, List<MeterReading> allHistory,
+                        Set<Integer> registeredAddresses) {
+        latest.clear();
+        for (MeterReading reading : latestReadings) {
+            latest.put(reading.address, reading);
+        }
+        registered.clear();
+        if (registeredAddresses != null) {
+            registered.addAll(registeredAddresses);
+        }
+        long prevMax = maxSeenId;
+        history = new ArrayList<>(allHistory);
+        int newTotal = 0, newInScope = 0;
+        boolean autoArrived = false;
+        for (MeterReading r : history) {
+            if (r.id > maxSeenId) maxSeenId = r.id;
+            if (r.id > prevMax) {
+                newTotal++;
+                if (allScope || r.address == panelAddr) newInScope++;
+                if ("AUTO".equalsIgnoreCase(r.source)) autoArrived = true;
+            }
+        }
+        if (autoArrived && autoMode) {
+            remain = intervalSeconds;                          // 一轮存下来了,重新计时
+        }
+        if (firstLoad) {
+            firstLoad = false;
+            rebuildRows(0, false);
+        } else if (expectCaptureRefresh) {
+            page = 0;                                          // 要飞:先别播「长出来」,等落地
+            rebuildRows(0, false);
+        } else if (newTotal > 0) {
+            page = 0;
+            rebuildRows(newInScope, false);
+        } else {
+            rebuildRows(0, false);
+        }
+        invalidate();
+    }
+
+    public void setConnectionState(String detail, boolean error) {
+        connectionDetail = detail;
+        connectionError = error;
+        invalidate();
+    }
+
+    public void setAutoMode(boolean enabled) {
+        applyMode(enabled);
+    }
+
+    public void setPollingIntervalSeconds(int seconds) {
+        intervalSeconds = Math.max(10, seconds);
+        if (autoMode) {
+            remain = intervalSeconds;
+        }
+        invalidate();
+    }
+
+    /** 实时帧:进圆盘不进记录 */
+    public void onLiveFrame(int address, int currentMa, long wallTs,
+                            String mac, String deviceName, int rssi) {
+        if (address < 0 || address >= SLOTS) {
+            return;
+        }
+        Live m = live[address];
+        m.everSeen = true;
+        m.frameMa = currentMa;
+        m.frameWallTs = wallTs;
+        m.lastAt = SystemClock.uptimeMillis();
+        if (mac != null && !mac.isEmpty()) m.mac = mac;
+        if (deviceName != null && !deviceName.isEmpty()) m.name = deviceName;
+        m.rssi = rssi;
+    }
+
+    /* ══════════ 生命周期 ══════════ */
+    @Override
+    protected void onAttachedToWindow() {
+        super.onAttachedToWindow();
+        long now = SystemClock.uptimeMillis();
+        lastRenderAt = now;
+        lastModelAt = now;
+        removeCallbacks(modelLoop);
+        removeCallbacks(renderLoop);
+        postDelayed(modelLoop, 60);
+        postOnAnimation(renderLoop);
+    }
+
+    @Override
+    protected void onDetachedFromWindow() {
+        removeCallbacks(modelLoop);
+        removeCallbacks(renderLoop);
+        removeCallbacks(panelSwitch);
+        super.onDetachedFromWindow();
+    }
+
+    /* ══════════ 模型 ══════════ */
+    private void modelTick() {
+        long now = SystemClock.uptimeMillis();
+        float dt = Math.min(0.5f, (now - lastModelAt) / 1000f);
+        lastModelAt = now;
+        for (int i = 0; i < SLOTS; i++) {
+            Live m = live[i];
+            m.silent = !m.everSeen || now - m.lastAt > SILENT_MS;
+            if (!present(i)) {
+                m.status = null;
+                continue;
+            }
+            String st = m.silent ? MeterReading.OFFLINE : classifyStatus(m.frameMa);
+            if (m.status != null && !m.status.equals(st)) {
+                m.alertUntil = now + ALERT_MS;                 // 只有变了才提示
+            }
+            m.status = st;
+        }
+        if (pendingAddr >= 0 && now >= pendingUntil) {
+            commitPending();                                   // 读条一定走完,不中途打断
+        }
+        if (autoMode) {
+            remain = Math.max(0f, remain - dt);
+        }
+        if (clearArmed && now >= clearDeadline) {
+            clearArmed = false;
+        }
+    }
+
+    /* ══════════ 转盘物理(常数与原型一致) ══════════ */
+    private void tickDial(float dt) {
+        if (!dragging) {
+            boolean snapping = hasSnap;
+            float target = snapping ? snapTarget : Math.round(angle / STEP) * STEP;
+            float grip = snapping ? 1f : clamp(1f - Math.abs(vel) / 260f, 0f, 1f);
+            float k = snapping ? 78f : 62f;
+            float c = (float) (2 * Math.sqrt(k)) * 1.02f;
+            float acc = grip * (-k * (angle - target) - c * vel) - (1 - grip) * 2.1f * vel;
+            vel += acc * dt;
+            angle += vel * dt;
+            if (Math.abs(vel) < 0.4f && Math.abs(angle - target) < 0.02f) {
+                angle = target;
+                vel = 0;
+                hasSnap = false;
+                snapAddr = -1;
+            }
+        }
+        int s = selectedFromAngle();
+        if (s != sel) {
+            sel = s;
+            onSelectionChanged();
+            if (dragging) {
+                vibrate();
+            }
+        }
+    }
+
+    private int selectedFromAngle() {
+        return ((Math.round(-angle / STEP) % SLOTS) + SLOTS) % SLOTS;
+    }
+
+    private void snapTo(int addr) {
+        float base = -addr * STEP;
+        snapTarget = base + Math.round((angle - base) / 360f) * 360f;   // 走最近的一圈
+        hasSnap = true;
+        snapAddr = addr;
+    }
+
+    private void onSelectionChanged() {
+        removeCallbacks(panelSwitch);
+        postDelayed(panelSwitch, 90);
+    }
+
+    /* 中心此刻显示的是哪台表:转盘还在滚过去的途中,中心显示的已经是目标地址 */
+    private int focusAddr(long now) {
+        if (pendingAddr >= 0) return pendingAddr;
+        if (holdAddr >= 0 && now < holdUntil) return holdAddr;
+        if (hasSnap && snapAddr >= 0) return snapAddr;
+        return sel;
+    }
+
+    /* ══════════ 存一帧 ══════════ */
+    private void capture(int addr) {
+        if (pendingAddr >= 0) {
+            return;
+        }
+        long now = SystemClock.uptimeMillis();
+        pendingAddr = addr;
+        pendingFrom = now;
+        pendingUntil = now + STORE_MS;
+    }
+
+    private void commitPending() {
+        int addr = pendingAddr;
+        pendingAddr = -1;
+        Live m = live[addr];
+        boolean hasFrame = present(addr) && m.everSeen && !m.silent;
+        int ma = hasFrame ? m.frameMa : -1;
+        String status = hasFrame ? classifyStatus(ma) : MeterReading.OFFLINE;
+        boolean willFly = allScope || panelAddr == addr;       // 出现在当前筛选里,才有得飞
+        String mac = "", name = "";
+        int rssi = -127;
+        if (m.everSeen) {
+            mac = m.mac;
+            name = m.name;
+            rssi = m.rssi;
+        } else {
+            MeterReading last = latest.get(addr);
+            if (last != null) {
+                mac = last.mac;
+                name = last.deviceName;
+                rssi = last.rssi;
+            }
+        }
+        if (listener != null) {
+            expectCaptureRefresh = true;
+            listener.onCaptureRecord(addr, ma, status, mac, name, rssi);
+            expectCaptureRefresh = false;
+        }
+        if (willFly) {
+            flyToRecord(addr, ma, status);
+        }
+    }
+
+    /* 因果:起点逐项等于中心的数值行,终点逐项等于行里的数值单元格,两端没有接缝 */
+    private void flyToRecord(int addr, int ma, String status) {
+        long now = SystemClock.uptimeMillis();
+        // 飞行途中把被抓走的这个值冻住,否则下一帧一到起点就对不上了
+        holdAddr = addr;
+        holdMa = ma;
+        holdUntil = now + 480;
+        Row row = rows.isEmpty() ? null : rows.get(0);
+        if (row == null || row.rec.address != addr || page != 0) {
+            return;
+        }
+        flyNum = ma < 0 ? BLANK : fmtA(ma);
+        float numW = measure(flyNum, 40, sansMedium, 0);
+        float unitW = measure("A", 15, sansMedium, 0);
+        float total = numW + 4 + unitW;
+        flyFromRight = DIAL_X + DIAL_C + total / 2f;
+        flyFromBase = DIAL_Y + HUB_VALUE_BASE;
+        flyToRight = REC_V_RIGHT;
+        flyToBase = rowBaseline(0, 13);
+        flyNumFrom = ma < 0 ? C_OFF : warmColor(ma);
+        flyNumTo = statusColor(status);
+        flyUnitFrom = INK3;
+        flyUnitTo = statusColor(status);
+        row.forming = true;                                    // 目标行先只留骨架
+        row.formedAt = 0;
+        flyRow = row;
+        flyActive = true;
+        flyStart = now;
+    }
+
+    private void landFlyer(long now) {
+        flyActive = false;
+        if (flyRow != null) {
+            flyRow.forming = false;
+            flyRow.formedAt = now;                             // 其余列淡入,数值单元格接上
+            flyRow = null;
+        }
+    }
+
+    /* ══════════ 记录行 ══════════ */
+    private List<MeterReading> scopedRecords() {
+        if (allScope) {
+            return history;
+        }
+        List<MeterReading> result = new ArrayList<>();
+        for (MeterReading r : history) {
+            if (r.address == panelAddr) {
+                result.add(r);
+            }
+        }
+        return result;
+    }
+
+    private void rebuildRows(int freshCount, boolean swap) {
+        List<MeterReading> all = scopedRecords();
+        int pages = Math.max(1, (all.size() + PAGE_SIZE - 1) / PAGE_SIZE);
+        page = Math.max(0, Math.min(page, pages - 1));
+        rows.clear();
+        int from = page * PAGE_SIZE;
+        int to = Math.min(all.size(), from + PAGE_SIZE);
+        long now = SystemClock.uptimeMillis();
+        for (int i = from; i < to; i++) {
+            Row row = new Row();
+            row.rec = all.get(i);
+            int idx = i - from;
+            if (freshCount > 0 && page == 0 && idx < freshCount) {
+                row.anim = 1;
+                row.animStart = now + idx * 40L;
+            } else if (swap) {
+                row.anim = 2;
+                row.animStart = now + idx * 22L;
+            }
+            rows.add(row);
+        }
+    }
+
+    /* ══════════ 输入 ══════════ */
+    @Override
+    public boolean onTouchEvent(MotionEvent event) {
+        float dx = (event.getX() - viewOffX) / viewScale;
+        float dy = (event.getY() - viewOffY) / viewScale;
+        long now = SystemClock.uptimeMillis();
+        switch (event.getActionMasked()) {
+            case MotionEvent.ACTION_DOWN:
+                downX = dx;
+                downY = dy;
+                movePx = 0;
+                pinching = false;
+                if (dist(dx, dy, DIAL_X + DIAL_C, DIAL_Y + DIAL_C) <= HUB_R) {
+                    touchMode = TOUCH_HUB;
+                    hubPressed = true;                          // :active 按压反馈
+                } else if (DIAL_RECT.contains(dx, dy)) {
+                    touchMode = TOUCH_DIAL;
+                    pressSlot = hitSlot(dx, dy);
+                    dragging = true;
+                    hasSnap = false;
+                    snapAddr = -1;
+                    pointerAngle = angleAt(dx, dy);
+                    lastDialMoveAt = now;
+                    velAtDown = Math.abs(vel);                  // 按住正在滑行的盘 = 想让它停
+                    vel = 0;
+                } else if (resetAlpha.to > 0 && resetRect.contains(dx, dy)) {
+                    touchMode = TOUCH_UI;
+                } else if (CHART_WRAP.contains(dx, dy) && chartDomainSpan > 0) {
+                    touchMode = TOUCH_CHART;
+                    chartMoved = 0;
+                    panStartX = dx;
+                    panU0 = viewU0;
+                    panU1 = viewU1;
+                } else {
+                    touchMode = TOUCH_UI;
+                }
+                return true;
+            case MotionEvent.ACTION_POINTER_DOWN:
+                if (touchMode == TOUCH_CHART && event.getPointerCount() >= 2) {
+                    pinching = true;
+                    lastSpanX = pointerSpanX(event);
+                }
+                return true;
+            case MotionEvent.ACTION_MOVE:
+                movePx = Math.max(movePx, (float) Math.hypot(dx - downX, dy - downY));
+                if (touchMode == TOUCH_DIAL) {
+                    float a = angleAt(dx, dy);
+                    float d = norm180(a - pointerAngle);
+                    pointerAngle = a;
+                    angle += d;
+                    float mdt = Math.max(8, now - lastDialMoveAt) / 1000f;
+                    lastDialMoveAt = now;
+                    vel = lerp(vel, d / mdt, 0.45f);
+                } else if (touchMode == TOUCH_CHART) {
+                    if (pinching && event.getPointerCount() >= 2) {
+                        float span = pointerSpanX(event);
+                        if (lastSpanX > 8 && span > 8) {
+                            zoomSpanMul(lastSpanX / span, dx);
+                        }
+                        lastSpanX = span;
+                    } else {
+                        chartMoved = Math.max(chartMoved, Math.abs(dx - panStartX));
+                        float du = (dx - panStartX) / PLOT_W * (panU1 - panU0);
+                        float span = panU1 - panU0;
+                        float u0 = clamp(panU0 - du, 0f, 1f - span);
+                        viewU0 = u0;
+                        viewU1 = u0 + span;
+                    }
+                }
+                return true;
+            case MotionEvent.ACTION_UP:
+                if (touchMode == TOUCH_DIAL) {
+                    dragging = false;
+                    // 点地址只是选中并滚过去,不触发存档
+                    if (pressSlot >= 0 && movePx < 8 && velAtDown < 30) {
+                        snapTo(pressSlot);
+                    }
+                    pressSlot = -1;
+                } else if (touchMode == TOUCH_HUB) {
+                    hubPressed = false;
+                    if (movePx < 8 && dist(dx, dy, DIAL_X + DIAL_C, DIAL_Y + DIAL_C) <= HUB_R) {
+                        hubClick();
+                    }
+                } else if (touchMode == TOUCH_CHART) {
+                    if (!pinching && chartMoved < 5) {
+                        chartTap(dx, dy, now);
+                    }
+                } else if (touchMode == TOUCH_UI) {
+                    if (movePx < 8) {
+                        uiTap(dx, dy);
+                    }
+                }
+                touchMode = TOUCH_NONE;
+                pinching = false;
+                performClick();
+                return true;
+            case MotionEvent.ACTION_CANCEL:
+                dragging = false;
+                hubPressed = false;
+                pressSlot = -1;
+                touchMode = TOUCH_NONE;
+                pinching = false;
+                return true;
+            default:
+                return true;
+        }
+    }
+
+    @Override
+    public boolean performClick() {
+        super.performClick();
+        return true;
+    }
+
+    @Override
+    public boolean onGenericMotionEvent(MotionEvent event) {
+        if (event.getActionMasked() == MotionEvent.ACTION_SCROLL) {
+            float dx = (event.getX() - viewOffX) / viewScale;
+            float dy = (event.getY() - viewOffY) / viewScale;
+            float v = event.getAxisValue(MotionEvent.AXIS_VSCROLL);
+            if (v != 0 && DIAL_RECT.contains(dx, dy)) {
+                hasSnap = false;
+                snapAddr = -1;
+                vel += (v < 0 ? -1 : 1) * 220f;
+                return true;
+            }
+            if (v != 0 && CHART_WRAP.contains(dx, dy) && chartDomainSpan > 0) {
+                zoomSpanMul(v < 0 ? 1.18f : 1 / 1.18f, dx);
+                return true;
+            }
+        }
+        return super.onGenericMotionEvent(event);
+    }
+
+    @Override
+    public boolean onHoverEvent(MotionEvent event) {
+        int action = event.getActionMasked();
+        if (action == MotionEvent.ACTION_HOVER_MOVE) {
+            float dx = (event.getX() - viewOffX) / viewScale;
+            float dy = (event.getY() - viewOffY) / viewScale;
+            if (CHART_WRAP.contains(dx, dy)) {
+                int idx = nearestChartPoint(dx, dy);
+                if (idx >= 0) {
+                    showReadout(idx);
+                } else {
+                    hideReadout();
+                }
+            } else {
+                hideReadout();
+            }
+        } else if (action == MotionEvent.ACTION_HOVER_EXIT) {
+            hideReadout();
+        }
+        return super.onHoverEvent(event);
+    }
+
+    private void hubClick() {
+        if (pendingAddr >= 0) {
+            bumpStart = SystemClock.uptimeMillis();            // 已经在读:读条继续,但这一下也得有反应
+            return;
+        }
+        capture(focusAddr(SystemClock.uptimeMillis()));
+    }
+
+    private void uiTap(float x, float y) {
+        if (modeManualRect.contains(x, y)) {
+            if (autoMode) {
+                applyMode(false);
+                if (listener != null) listener.onAutoModeChanged(false);
+            }
+            return;
+        }
+        if (modeAutoRect.contains(x, y)) {
+            if (!autoMode) {
+                applyMode(true);
+                if (listener != null) listener.onAutoModeChanged(true);
+            }
+            return;
+        }
+        if (footNoteRect.contains(x, y)) {
+            if (listener != null) listener.onIntervalRequested();
+            return;
+        }
+        if (chipOneRect.contains(x, y)) {
+            setScope(false);
+            return;
+        }
+        if (chipAllRect.contains(x, y)) {
+            setScope(true);
+            return;
+        }
+        if (resetAlpha.to > 0 && resetRect.contains(x, y)) {
+            viewU0 = 0f;
+            viewU1 = 1f;
+            return;
+        }
+        List<MeterReading> all = scopedRecords();
+        int pages = all.isEmpty() ? 0 : (all.size() + PAGE_SIZE - 1) / PAGE_SIZE;
+        if (prevRect.contains(x, y)) {
+            if (page > 0) {
+                page--;
+                rebuildRows(0, true);
+            }
+            return;
+        }
+        if (nextRect.contains(x, y)) {
+            if (page + 1 < pages) {
+                page++;
+                rebuildRows(0, true);
+            }
+            return;
+        }
+        if (clearRect.contains(x, y)) {
+            if (clearArmed) {
+                clearArmed = false;
+                if (listener != null) listener.onClearHistory();
+            } else {
+                clearArmed = true;
+                clearDeadline = SystemClock.uptimeMillis() + 3000;
+            }
+            return;
+        }
+        if (LOG_RECT.contains(x, y) && !rows.isEmpty()) {
+            int index = (int) ((y - LOG_RECT.top) / ROW_H);
+            if (index >= 0 && index < rows.size()) {
+                snapTo(rows.get(index).rec.address);
+            }
+        }
+    }
+
+    private void setScope(boolean all) {
+        if (allScope == all) {
+            return;
+        }
+        allScope = all;
+        chipAll.retarget(all ? 1f : 0f, SystemClock.uptimeMillis(), 220);
+        page = 0;
+        viewU0 = 0f;
+        viewU1 = 1f;
+        rebuildRows(0, true);
+        chartFadeStart = SystemClock.uptimeMillis();
+    }
+
+    private void applyMode(boolean enabled) {
+        if (autoMode == enabled) {
+            return;
+        }
+        autoMode = enabled;
+        if (enabled) {
+            remain = intervalSeconds;
+        }
+        long now = SystemClock.uptimeMillis();
+        modeInd.retarget(enabled ? 1f : 0f, now, 340);
+        modeText.retarget(enabled ? 1f : 0f, now, 260);
+    }
+
+    private void chartTap(float x, float y, long now) {
+        int idx = nearestChartPoint(x, y);
+        if (idx >= 0) {
+            snapTo(chartPtRec.get(idx).address);               // 点曲线上的点把转盘转到那台表
+        }
+        boolean dbl = now - lastChartTapAt < 300
+                && Math.hypot(x - lastChartTapX, y - lastChartTapY) < 24;
+        if (dbl) {
+            viewU0 = 0f;
+            viewU1 = 1f;
+            lastChartTapAt = 0;
+        } else {
+            lastChartTapAt = now;
+            lastChartTapX = x;
+            lastChartTapY = y;
+        }
+    }
+
+    private void zoomSpanMul(float mul, float focusDesignX) {
+        float vx = (focusDesignX - PLOT_X) / PLOT_W * CHW;
+        float oldSpan = viewU1 - viewU0;
+        float uAt = viewU0 + clamp((vx - CH_L) / (CH_R - CH_L), 0f, 1f) * oldSpan;
+        float span = clamp(oldSpan * mul, 0.02f, 1f);
+        float u0 = clamp(uAt - (uAt - viewU0) * (span / oldSpan), 0f, 1f - span);
+        viewU0 = u0;
+        viewU1 = u0 + span;
+    }
+
+    private int nearestChartPoint(float designX, float designY) {
+        float vx = (designX - PLOT_X) / PLOT_W * CHW;
+        float vy = (designY - PLOT_Y) / PLOT_H * CHH;
+        int best = -1;
+        float bd = Float.MAX_VALUE;
+        for (int i = 0; i < chartPtXY.size(); i++) {
+            float[] p = chartPtXY.get(i);
+            if (p[0] < CH_L - 4 || p[0] > CH_R + 4) continue;
+            float dd = (p[0] - vx) * (p[0] - vx) + (p[1] - vy) * (p[1] - vy) * 0.55f;
+            if (dd < bd) {
+                bd = dd;
+                best = i;
+            }
+        }
+        return bd < 1600 ? best : -1;
+    }
+
+    private void showReadout(int idx) {
+        float[] p = chartPtXY.get(idx);
+        MeterReading r = chartPtRec.get(idx);
+        readoutOn = true;
+        readoutAlpha.retarget(1f, SystemClock.uptimeMillis(), 140);
+        readoutText = clockFormat.format(new Date(r.timestamp)) + " · 地址 " + hex1(r.address)
+                + " · " + fmtA(r.currentMa) + " A · " + statusLabel(r.status);
+        readoutX = PLOT_X + p[0] * (PLOT_W / CHW);
+        readoutY = PLOT_Y + p[1] * (PLOT_H / CHH) - 8;
+        cursorX = p[0];
+    }
+
+    private void hideReadout() {
+        readoutOn = false;
+        readoutAlpha.retarget(0f, SystemClock.uptimeMillis(), 140);
+    }
+
+    private int hitSlot(float x, float y) {
+        int best = -1, bestZ = Integer.MIN_VALUE;
+        for (int i = 0; i < SLOTS; i++) {
+            if (Math.abs(x - slotOx[i]) <= SLOT_HALF_W * slotScale[i]
+                    && Math.abs(y - slotOy[i]) <= SLOT_HALF_H * slotScale[i]
+                    && slotZ[i] > bestZ) {
+                bestZ = slotZ[i];
+                best = i;
+            }
+        }
+        return best;
+    }
+
+    private float pointerSpanX(MotionEvent event) {
+        return Math.abs(event.getX(1) - event.getX(0)) / viewScale;
+    }
+
+    private float angleAt(float x, float y) {
+        return (float) Math.toDegrees(Math.atan2(y - (DIAL_Y + DIAL_C), x - (DIAL_X + DIAL_C)));
+    }
+
+    private void vibrate() {
+        Vibrator v = (Vibrator) getContext().getSystemService(Context.VIBRATOR_SERVICE);
+        if (v == null) {
+            return;
+        }
+        try {
+            v.vibrate(VibrationEffect.createOneShot(8, VibrationEffect.DEFAULT_AMPLITUDE));
+        } catch (Exception ignored) {
+            // 没有振动权限或马达,静默跳过
+        }
+    }
+
+    /* ══════════ 绘制 ══════════ */
+    @Override
+    protected void onDraw(Canvas canvas) {
+        super.onDraw(canvas);
+        viewScale = Math.min(getWidth() / DESIGN_W, getHeight() / DESIGN_H);
+        viewOffX = (getWidth() - DESIGN_W * viewScale) / 2f;
+        viewOffY = (getHeight() - DESIGN_H * viewScale) / 2f;
+        canvas.drawColor(PAGE);
+        canvas.save();
+        canvas.translate(viewOffX, viewOffY);
+        canvas.scale(viewScale, viewScale);
+        long now = SystemClock.uptimeMillis();
+        drawDevice(canvas);
+        drawStatusBar(canvas);
+        drawDial(canvas, now);
+        drawFoot(canvas, now);
+        drawRightHead(canvas, now);
+        drawChart(canvas, now);
+        drawLogHead(canvas);
+        drawLog(canvas, now);
+        drawReadout(canvas, now);
+        drawFlyer(canvas, now);
+        canvas.restore();
+    }
+
+    private void drawDevice(Canvas canvas) {
+        fill.setColor(FRAME);
+        fill.setShadowLayer(30, 0, 16, 0x4D0A101A);
+        canvas.drawRoundRect(0, 0, DESIGN_W, DESIGN_H, 30, 30, fill);
+        fill.clearShadowLayer();
+        stroke.setColor(LINE2);
+        stroke.setStrokeWidth(1);
+        canvas.drawRoundRect(0.5f, 0.5f, DESIGN_W - 0.5f, DESIGN_H - 0.5f, 30, 30, stroke);
+    }
+
+    private void drawStatusBar(Canvas canvas) {
+        int known = 0, alive = 0;
+        for (int i = 0; i < SLOTS; i++) {
+            if (present(i)) {
+                known++;
+                if (!live[i].silent) alive++;
+            }
+        }
+        int dot = connectionError ? C_HIGH : (alive > 0 ? C_OK : C_HIGH);
+        fill.setColor(dot);
+        canvas.drawCircle(29, SB_CY, 3, fill);
+        String link = known > 0
+                ? "HC-42 透传 · " + alive + "/" + known + " 台在报数"
+                : connectionDetail;
+        text(canvas, link, 40, SB_CY + 4.1f, 11.5f, INK2, Paint.Align.LEFT, sans, 0, 1);
+        text(canvas, minuteFormat.format(new Date()), 924, SB_CY + 4.1f, 11.5f, INK2,
+                Paint.Align.RIGHT, sans, 0, 1);
+        stroke.setColor(INK2);
+        stroke.setStrokeWidth(1);
+        canvas.drawRoundRect(932, 13.1f, 951, 22.1f, 3, 3, stroke);
+        fill.setColor(INK2);
+        canvas.drawRoundRect(934.5f, 15.6f, 944.9f, 19.6f, 1, 1, fill);
+        canvas.drawRoundRect(951.5f, 15.6f, 953.5f, 19.6f, 0, 2, fill);
+    }
+
+    /* ── 转盘 ── */
+    private void drawDial(Canvas canvas, long now) {
+        float cx = DIAL_X + DIAL_C, cy = DIAL_Y + DIAL_C;
+        stroke.setColor(LINE);
+        stroke.setStrokeWidth(1);
+        canvas.drawCircle(cx, cy, RING_R, stroke);
+
+        boolean reading = pendingAddr >= 0;
+        int focus = focusAddr(now);
+        Live fm = live[focus];
+
+        // 倒计时环轨道
+        float trackAlpha = reading ? 0.9f : activation * 0.9f;
+        if (trackAlpha > 0.003f) {
+            stroke.setStrokeWidth(8);
+            stroke.setStrokeCap(Paint.Cap.BUTT);
+            stroke.setColor(mulAlpha(SUNKEN, trackAlpha));
+            canvas.drawCircle(cx, cy, COUNT_R, stroke);
+        }
+        // 倒计时环:从满环顺时针走完,终点固定在 12 点
+        float arcAlpha = reading ? 0f : activation;
+        if (arcAlpha > 0.003f) {
+            float p = autoMode && intervalSeconds > 0 ? remain / intervalSeconds : 1f;
+            float sweep = clamp(p, 0f, 0.9999f) * 360f;
+            int col = fm.status != null ? statusColor(fm.status) : ACCENT;
+            stroke.setColor(mulAlpha(col, arcAlpha));
+            stroke.setStrokeWidth(8);
+            stroke.setStrokeCap(Paint.Cap.BUTT);
+            canvas.drawArc(cx - COUNT_R, cy - COUNT_R, cx + COUNT_R, cy + COUNT_R,
+                    -90 + (360 - sweep), sweep, false, stroke);
+        }
+        // 读条:从 12 点起顺时针填充,一定走完整条
+        if (reading) {
+            float p = Math.max(0.012f, clamp((now - pendingFrom) / (float) STORE_MS, 0f, 1f));
+            stroke.setColor(ACCENT);
+            stroke.setStrokeWidth(8);
+            stroke.setStrokeCap(Paint.Cap.ROUND);
+            canvas.drawArc(cx - COUNT_R, cy - COUNT_R, cx + COUNT_R, cy + COUNT_R,
+                    -90, p * 360, false, stroke);
+        }
+        stroke.setStrokeCap(Paint.Cap.ROUND);
+        stroke.setColor(INK3);
+        stroke.setStrokeWidth(2);
+        canvas.drawLine(cx, DIAL_Y + 1, cx, DIAL_Y + 11, stroke);
+        stroke.setStrokeCap(Paint.Cap.BUTT);
+
+        layoutSlots(now);
+        Integer[] order = new Integer[SLOTS];
+        for (int i = 0; i < SLOTS; i++) order[i] = i;
+        java.util.Arrays.sort(order, (a, b) -> slotZ[a] - slotZ[b]);
+        for (int idx : order) {
+            drawSlot(canvas, idx, now);
+        }
+        drawHub(canvas, now, focus, fm, reading);
+    }
+
+    private void layoutSlots(long now) {
+        for (int i = 0; i < SLOTS; i++) {
+            float a = i * STEP + angle;
+            float off = Math.abs(norm180(a)) / 180f;
+            Live m = live[i];
+            boolean alarm = MeterReading.LOW.equals(m.status) || MeterReading.HIGH.equals(m.status);
+            boolean alerting = now < m.alertUntil;             // 只在刚变化时提示
+            float beat = alerting ? 1f + 0.045f * (float) Math.sin(now / 130.0) : 1f;
+            slotScale[i] = lerp(1.14f, 0.82f, off) * beat;
+            // 报警状态保持清晰可读(不淡出),但不会一直动
+            slotAlpha[i] = (alarm || alerting)
+                    ? Math.max(0.94f, lerp(1f, 0.55f, off))
+                    : lerp(1f, 0.55f, off);
+            slotZ[i] = 100 - Math.round(off * 100) + (alarm ? 40 : 0);
+            slotOx[i] = DIAL_X + DIAL_C + SLOT_R * (float) Math.sin(Math.toRadians(a));
+            slotOy[i] = DIAL_Y + DIAL_C - 18 + SLOT_HALF_H
+                    - SLOT_R * (float) Math.cos(Math.toRadians(a));
+        }
+    }
+
+    private void drawSlot(Canvas canvas, int i, long now) {
+        Live m = live[i];
+        float alpha = slotAlpha[i];
+        boolean isPresent = present(i);
+        boolean liveNow = isPresent && !m.silent;
+        canvas.save();
+        canvas.translate(slotOx[i], slotOy[i]);
+        canvas.scale(slotScale[i], slotScale[i]);
+        if (i == sel) {
+            fill.setColor(mulAlpha(SUNKEN, alpha));
+            canvas.drawRoundRect(-SLOT_HALF_W, -SLOT_HALF_H, SLOT_HALF_W, SLOT_HALF_H, 10, 10, fill);
+            stroke.setColor(mulAlpha(LINE2, alpha));
+            stroke.setStrokeWidth(1);
+            canvas.drawRoundRect(-SLOT_HALF_W, -SLOT_HALF_H, SLOT_HALF_W, SLOT_HALF_H, 10, 10, stroke);
+        }
+        // 编号用离散判定色;不在线灰,空地址浅
+        int color = liveNow ? statusColor(m.status) : (isPresent ? SLOT_OFF : INK3);
+        String id = hex1(i);
+        float idW = measure(id, 12, monoBold, 0.04f);
+        float contentW = 5 + 4 + idW;
+        float left = -contentW / 2f;
+        float headCy = -SLOT_HALF_H + 10.6f;
+        // 在线点:静态红绿,状态没变就不该动;空地址是空心圈
+        if (!isPresent) {
+            stroke.setColor(mulAlpha(INK3, alpha));
+            stroke.setStrokeWidth(1);
+            canvas.drawCircle(left + 2.5f, headCy, 2.5f, stroke);
+        } else {
+            fill.setColor(mulAlpha(m.silent ? C_HIGH : C_OK, alpha));
+            canvas.drawCircle(left + 2.5f, headCy, 2.5f, fill);
+        }
+        text(canvas, id, left + 5 + 4, headCy + 4.3f, 12, color, Paint.Align.LEFT, monoBold,
+                0.04f, alpha);
+        if (isPresent) {
+            // 圆盘是实时的:条子跟着帧走(宽度 .32s 过渡),条用连续变暖色
+            m.bar.retarget(liveNow ? clamp(m.frameMa / (float) FULL_MA, 0f, 1f) : 0f, now, 320);
+            float frac = m.bar.get(now);
+            fill.setColor(mulAlpha(LINE, alpha));
+            canvas.drawRoundRect(-22, 6.7f, 22, 9.7f, 2, 2, fill);
+            if (frac > 0.001f) {
+                fill.setColor(mulAlpha(warmColor(m.frameMa), alpha));
+                canvas.drawRoundRect(-22, 6.7f, -22 + 44 * frac, 9.7f, 2, 2, fill);
+            }
+        }
+        canvas.restore();
+    }
+
+    private void drawHub(Canvas canvas, long now, int focus, Live m, boolean measuring) {
+        float cx = DIAL_X + DIAL_C, cy = DIAL_Y + DIAL_C;
+        float scale = bumpScale(now);
+        if (hubPressed) {
+            scale *= 0.985f;
+        }
+        canvas.save();
+        if (scale != 1f) {
+            canvas.scale(scale, scale, cx, cy);
+        }
+        fill.setColor(FRAME);
+        fill.setShadowLayer(12, 0, 4, 0x4D0A101A);
+        canvas.drawCircle(cx, cy, HUB_R, fill);
+        fill.clearShadowLayer();
+        stroke.setColor(LINE);
+        stroke.setStrokeWidth(1);
+        canvas.drawCircle(cx, cy, HUB_R, stroke);
+
+        boolean holding = holdAddr >= 0 && now < holdUntil;
+        boolean isPresent = present(focus);
+        boolean liveNow = isPresent && m.everSeen && !m.silent;
+        boolean hasShown = holding ? holdMa >= 0 : liveNow;
+        int shownMa = holding ? holdMa : (liveNow ? m.frameMa : -1);
+
+        text(canvas, hex1(focus), cx, DIAL_Y + HUB_ADDR_BASE, 13, INK3, Paint.Align.CENTER,
+                monoBold, 0.1f, 1);
+
+        // 中心数值:直接跳变,不滚动;大数字用连续变暖色
+        String valText = hasShown ? fmtHub(shownMa) : BLANK;
+        int valColor = hasShown ? warmColor(shownMa) : C_OFF;
+        float numW = measure(valText, 40, sansMedium, 0);
+        float unitW = measure("A", 15, sansMedium, 0);
+        float groupLeft = cx - (numW + 4 + unitW) / 2f;
+        float vb = DIAL_Y + HUB_VALUE_BASE;
+        // 飞行途中中心继续显示冻住的值,flyer 的起点与它逐像素重合
+        text(canvas, valText, groupLeft, vb, 40, valColor, Paint.Align.LEFT, sansMedium, 0, 1);
+        text(canvas, "A", groupLeft + numW + 4, vb, 15, INK3, Paint.Align.LEFT, sansMedium, 0, 1);
+
+        // 状态标签用离散判定色
+        String label;
+        int labelCol;
+        if (measuring) {
+            label = "存档中";
+            labelCol = ACCENT;
+        } else if (!isPresent) {
+            label = "无表";
+            labelCol = C_OFF;
+        } else if (!liveNow) {
+            label = "离线";
+            labelCol = C_OFF;
+        } else {
+            label = statusLabel(m.status);
+            labelCol = statusColor(m.status);
+        }
+        text(canvas, label, cx, DIAL_Y + HUB_STATE_BASE, 12, labelCol, Paint.Align.CENTER,
+                sansMedium, 0, 1);
+
+        String sub;
+        if (measuring) {
+            sub = "抓这一帧";
+        } else if (autoMode) {
+            int s = Math.max(0, (int) Math.ceil(remain));
+            sub = String.format(Locale.CHINA, "%02d:%02d", s / 60, s % 60);
+        } else if (!isPresent) {
+            sub = "此地址无表";
+        } else if (!liveNow) {
+            long lastTs = m.everSeen ? m.frameWallTs
+                    : (latest.containsKey(focus) ? latest.get(focus).timestamp : 0);
+            sub = lastTs > 0 ? "最后一帧 " + clockFormat.format(new Date(lastTs)) : "没有帧";
+        } else {
+            MeterReading lastStored = firstRecordFor(focus);
+            sub = lastStored != null
+                    ? "上次存 " + clockFormat.format(new Date(lastStored.timestamp))
+                    : "点一下存一帧";
+        }
+        text(canvas, sub, cx, DIAL_Y + HUB_SUB_BASE, 10.5f, INK3, Paint.Align.CENTER, mono, 0, 1);
+        canvas.restore();
+    }
+
+    private float bumpScale(long now) {
+        if (bumpStart < 0) {
+            return 1f;
+        }
+        float t = (now - bumpStart) / 260f;
+        if (t >= 1f) {
+            bumpStart = -1;
+            return 1f;
+        }
+        if (t < 0.45f) {
+            return lerp(1f, 0.972f, EASE.getInterpolation(t / 0.45f));
+        }
+        return lerp(0.972f, 1f, EASE.getInterpolation((t - 0.45f) / 0.55f));
+    }
+
+    /* ── 采集模式开关 ── */
+    private void drawFoot(Canvas canvas, long now) {
+        String note = autoMode ? intervalNote() : "点中心存一帧";
+        float noteW = measure(note, 11.5f, sans, 0);
+        float groupW = TOGGLE_W + 12 + noteW;
+        float left = LEFT_CENTER - groupW / 2f;
+        float top = FOOT_CY - TOGGLE_H / 2f;
+        float bottom = FOOT_CY + TOGGLE_H / 2f;
+        float radius = TOGGLE_H / 2f;
+
+        fill.setColor(SUNKEN);
+        canvas.drawRoundRect(left, top, left + TOGGLE_W, bottom, radius, radius, fill);
+        float indX = left + 3 + modeInd.get(now) * TOGGLE_BTN_W;
+        fill.setColor(FRAME);
+        fill.setShadowLayer(3, 0, 1, 0x240A101A);
+        canvas.drawRoundRect(indX, top + 3, indX + TOGGLE_BTN_W, bottom - 3,
+                radius - 3, radius - 3, fill);
+        fill.clearShadowLayer();
+
+        float f = modeText.get(now);
+        int manualCol = mixColor(INK, INK3, f);
+        int autoCol = mixColor(INK3, INK, f);
+        text(canvas, "手动", left + 3 + TOGGLE_BTN_W / 2f, FOOT_CY + 4.5f, 12.5f, manualCol,
+                Paint.Align.CENTER, sansMedium, 0, 1);
+        text(canvas, "自动", left + 3 + TOGGLE_BTN_W * 1.5f, FOOT_CY + 4.5f, 12.5f, autoCol,
+                Paint.Align.CENTER, sansMedium, 0, 1);
+        text(canvas, note, left + TOGGLE_W + 12, FOOT_CY + 4.1f, 11.5f, INK3,
+                Paint.Align.LEFT, sans, 0, 1);
+
+        modeManualRect.set(left + 3, top, left + 3 + TOGGLE_BTN_W, bottom);
+        modeAutoRect.set(left + 3 + TOGGLE_BTN_W, top, left + 119, bottom);
+        footNoteRect.set(left + TOGGLE_W + 6, FOOT_CY - 14, left + TOGGLE_W + 18 + noteW,
+                FOOT_CY + 14);
+    }
+
+    private String intervalNote() {
+        if (intervalSeconds % 60 == 0) {
+            return "每 " + (intervalSeconds / 60) + " 分钟自动测一轮";
+        }
+        return "每 " + intervalSeconds + " 秒自动测一轮";
+    }
+
+    /* ── 右侧标题与筛选 ── */
+    private void drawRightHead(Canvas canvas, long now) {
+        String title = allScope ? "全部电流表" : "地址 " + hex1(panelAddr);
+        String sub = allScope ? "最近记录" : "电流趋势";
+        float titleW = measure(title, 15, sansMedium, 0);
+        text(canvas, title, RIGHT_X, HEAD_BASE, 15, INK, Paint.Align.LEFT, sansMedium, 0, 1);
+        text(canvas, sub, RIGHT_X + titleW + 6, HEAD_BASE, 12, INK3, Paint.Align.LEFT, sans, 0, 1);
+
+        float wOne = measure("本表", 11.5f, sans, 0) + 24;
+        float wAll = measure("全部", 11.5f, sans, 0) + 24;
+        chipAllRect.set(960 - wAll, 31.25f, 960, 58.5f);
+        chipOneRect.set(960 - wAll - 5 - wOne, 31.25f, 960 - wAll - 5, 58.5f);
+        float f = chipAll.get(now);
+        drawChip(canvas, chipOneRect, "本表", 1 - f);
+        drawChip(canvas, chipAllRect, "全部", f);
+    }
+
+    private void drawChip(Canvas canvas, RectF rect, String label, float active) {
+        float r = rect.height() / 2f;
+        int bg = mixColor(FRAME, INK, active);
+        int border = mixColor(LINE2, INK, active);
+        int col = mixColor(INK2, FRAME, active);
+        fill.setColor(bg);
+        canvas.drawRoundRect(rect, r, r, fill);
+        stroke.setColor(border);
+        stroke.setStrokeWidth(1);
+        canvas.drawRoundRect(rect, r, r, stroke);
+        text(canvas, label, rect.centerX(), rect.centerY() + 4.1f, 11.5f, col,
+                Paint.Align.CENTER, sans, 0, 1);
+    }
+
+    /* ── 曲线 ── */
+    private void drawChart(Canvas canvas, long now) {
+        fill.setColor(FRAME);
+        canvas.drawRoundRect(CHART_CARD, 16, 16, fill);
+        stroke.setColor(LINE);
+        stroke.setStrokeWidth(1);
+        canvas.drawRoundRect(CHART_CARD, 16, 16, stroke);
+
+        float fade = chartFadeStart < 0 ? 1f
+                : EASE.getInterpolation(clamp((now - chartFadeStart) / 260f, 0f, 1f));
+
+        Map<Integer, List<MeterReading>> groups = chartGroups();
+        long tMin = Long.MAX_VALUE, tMax = Long.MIN_VALUE;
+        float top = FULL_MA / 1000f;
+        int n = 0;
+        for (List<MeterReading> arr : groups.values()) {
+            for (MeterReading r : arr) {
+                tMin = Math.min(tMin, r.timestamp);
+                tMax = Math.max(tMax, r.timestamp);
+                top = Math.max(top, (float) Math.ceil(r.currentMa / 100f) / 10f);
+                n++;
+            }
+        }
+        chartDomainSpan = n > 0 ? tMax - tMin : 0;
+        chartDomainN = n;
+        chartPtXY.clear();
+        chartPtRec.clear();
+
+        canvas.save();
+        canvas.translate(PLOT_X, PLOT_Y);
+        canvas.scale(PLOT_W / CHW, PLOT_H / CHH);
+
+        float yLow = yOf(LOW_MA / 1000f, top);
+        float yHigh = yOf(HIGH_MA / 1000f, top);
+        fill.setColor(mulAlpha(0xFFC87C00, 0.06f * fade));
+        canvas.drawRect(CH_L, yLow, CH_R, CH_B, fill);
+        fill.setColor(mulAlpha(0xFFDC2626, 0.06f * fade));
+        canvas.drawRect(CH_L, CH_T, CH_R, yHigh, fill);
+        stroke.setColor(mulAlpha(LINE, fade));
+        stroke.setStrokeWidth(1);
+        canvas.drawLine(CH_L, CH_B, CH_R, CH_B, stroke);
+        drawDashed(canvas, CH_L, yHigh, CH_R, yHigh, mulAlpha(C_HIGH, fade), limitDash);
+        drawDashed(canvas, CH_L, yLow, CH_R, yLow, mulAlpha(C_LOW, fade), limitDash);
+        text(canvas, "2.0", 0, yHigh + 3, 9, mulAlpha(INK3, fade), Paint.Align.LEFT, mono, 0, 1);
+        text(canvas, "0.2", 0, yLow + 3, 9, mulAlpha(INK3, fade), Paint.Align.LEFT, mono, 0, 1);
+        if (top > FULL_MA / 1000f + 0.05f) {
+            text(canvas, String.format(Locale.US, "%.1f", top), 0, CH_T + 3, 9,
+                    mulAlpha(INK3, fade), Paint.Align.LEFT, mono, 0, 1);
+        }
+
+        if (n < 1) {
+            text(canvas, "还没有存档记录", (CH_L + CH_R) / 2f, 68, 11, mulAlpha(INK3, fade),
+                    Paint.Align.CENTER, sans, 0, 1);
+        } else {
+            if (n == 1) {
+                text(canvas, "再测一次就有曲线", (CH_L + CH_R) / 2f, CH_B - 8, 11,
+                        mulAlpha(INK3, fade), Paint.Align.CENTER, sans, 0, 1);
+            }
+            List<float[]> labels = new ArrayList<>();          // addr, x, y
+            List<Integer> addrs = new ArrayList<>(groups.keySet());
+            Collections.sort(addrs);
+            canvas.save();
+            canvas.clipRect(CH_L, CH_T - 6, CH_R, CH_B + 6);
+            long span = chartDomainSpan;
+            for (int addr : addrs) {
+                List<MeterReading> arr = groups.get(addr);
+                int color = seriesColor(addr);
+                if (arr.size() > 1) {
+                    workPath.reset();
+                    for (int i = 0; i < arr.size(); i++) {
+                        MeterReading r = arr.get(i);
+                        float px = xOf(r.timestamp, tMin, span);
+                        float py = yOf(r.currentMa / 1000f, top);
+                        if (i == 0) workPath.moveTo(px, py);
+                        else workPath.lineTo(px, py);
+                    }
+                    stroke.setColor(mulAlpha(color, fade));
+                    stroke.setStrokeWidth(2);
+                    stroke.setStrokeJoin(Paint.Join.ROUND);
+                    stroke.setStrokeCap(Paint.Cap.ROUND);
+                    canvas.drawPath(workPath, stroke);
+                    stroke.setStrokeCap(Paint.Cap.BUTT);
+                }
+                for (MeterReading r : arr) {
+                    float px = xOf(r.timestamp, tMin, span);
+                    float py = yOf(r.currentMa / 1000f, top);
+                    chartPtXY.add(new float[]{px, py});
+                    chartPtRec.add(r);
+                    if (MeterReading.LOW.equals(r.status) || MeterReading.HIGH.equals(r.status)) {
+                        fill.setColor(mulAlpha(FRAME, fade));
+                        canvas.drawCircle(px, py, 4, fill);
+                        stroke.setColor(mulAlpha(statusColor(r.status), fade));
+                        stroke.setStrokeWidth(2);
+                        canvas.drawCircle(px, py, 4, stroke);
+                    }
+                }
+                MeterReading last = arr.get(arr.size() - 1);
+                float lx = xOf(last.timestamp, tMin, span);
+                float ly = yOf(last.currentMa / 1000f, top);
+                fill.setColor(mulAlpha(FRAME, fade));
+                canvas.drawCircle(lx, ly, 2.6f, fill);
+                stroke.setColor(mulAlpha(color, fade));
+                stroke.setStrokeWidth(2);
+                canvas.drawCircle(lx, ly, 2.6f, stroke);
+                if (lx <= CH_R + 2) {
+                    labels.add(new float[]{addr, lx + 6, ly});
+                }
+            }
+            canvas.restore();
+
+            // 标签贴在各条线真正结束的地方,横向挨得近的才纵向避让
+            labels.sort((a, b) -> Float.compare(a[2], b[2]));
+            for (int i = 1; i < labels.size(); i++) {
+                float[] prev = labels.get(i - 1);
+                if (Math.abs(labels.get(i)[1] - prev[1]) < 24
+                        && labels.get(i)[2] - prev[2] < 11) {
+                    labels.get(i)[2] = prev[2] + 11;
+                }
+            }
+            for (float[] l : labels) {
+                text(canvas, hex1((int) l[0]), Math.min(l[1], CH_R + 6),
+                        clamp(l[2], CH_T + 4, CH_B) + 3, 9,
+                        mulAlpha(seriesColor((int) l[0]), fade), Paint.Align.LEFT, mono, 0, 1);
+            }
+            if (readoutOn) {
+                drawDashed(canvas, cursorX, CH_T, cursorX, CH_B, mulAlpha(INK3, fade), cursorDash);
+            }
+            if (chartDomainSpan > 0) {
+                text(canvas, clockFormat.format(new Date(tOfU(viewU0, tMin))), CH_L, CH_B + 15,
+                        9, mulAlpha(INK3, fade), Paint.Align.LEFT, mono, 0, 1);
+                text(canvas, clockFormat.format(new Date(tOfU(viewU1, tMin))), CH_R, CH_B + 15,
+                        9, mulAlpha(INK3, fade), Paint.Align.RIGHT, mono, 0, 1);
+            }
+        }
+        canvas.restore();
+
+        // 复位按钮 .2s 淡入
+        boolean zoomed = viewU0 > 0.001f || viewU1 < 0.999f;
+        resetAlpha.retarget(zoomed ? 1f : 0f, now, 200);
+        float ra = resetAlpha.get(now);
+        if (ra > 0.003f) {
+            float w = measure("复位", 10.5f, sans, 0) + 18;
+            resetRect.set(952 - w, 72.5f, 952, 96.2f);
+            fill.setColor(mulAlpha(FRAME, ra));
+            canvas.drawRoundRect(resetRect, 11.85f, 11.85f, fill);
+            stroke.setColor(mulAlpha(LINE2, ra));
+            stroke.setStrokeWidth(1);
+            canvas.drawRoundRect(resetRect, 11.85f, 11.85f, stroke);
+            text(canvas, "复位", resetRect.centerX(), resetRect.centerY() + 3.8f, 10.5f,
+                    INK2, Paint.Align.CENTER, sans, 0, ra);
+        }
+    }
+
+    private void drawReadout(Canvas canvas, long now) {
+        float a = readoutAlpha.get(now);
+        if (a <= 0.003f) {
+            return;
+        }
+        float tw = measure(readoutText, 11, sans, 0);
+        float w = tw + 18, h = 26.5f;
+        float leftEdge = readoutX - w / 2f;
+        fill.setColor(mulAlpha(INK, a));
+        canvas.drawRoundRect(leftEdge, readoutY - h, leftEdge + w, readoutY, 9, 9, fill);
+        text(canvas, readoutText, readoutX, readoutY - h / 2f + 4, 11, FRAME,
+                Paint.Align.CENTER, sans, 0, a);
+    }
+
+    /* ── 记录头 ── */
+    private void drawLogHead(Canvas canvas) {
+        List<MeterReading> all = scopedRecords();
+        String count = allScope
+                ? "共 " + history.size() + " 条（上限 " + CAP + "）"
+                : "地址 " + hex1(panelAddr) + " " + all.size() + " 条 · 全部 " + history.size();
+        text(canvas, count, 434, LOGHEAD_CY + 4.1f, 11.5f, INK3, Paint.Align.LEFT, sans, 0, 1);
+
+        int pages = all.isEmpty() ? 0 : (all.size() + PAGE_SIZE - 1) / PAGE_SIZE;
+        drawPagerButton(canvas, prevRect, "‹", page > 0);
+        text(canvas, (all.isEmpty() ? 0 : page + 1) + " / " + pages, 696, LOGHEAD_CY + 4.1f,
+                11.5f, INK3, Paint.Align.CENTER, sans, 0, 1);
+        drawPagerButton(canvas, nextRect, "›", page + 1 < pages);
+
+        String clearLabel = clearArmed ? "确认清空" : "清空";
+        float cw = measure(clearLabel, 11.5f, clearArmed ? sansMedium : sans, 0);
+        text(canvas, clearLabel, 958, LOGHEAD_CY + 4.1f, 11.5f, clearArmed ? C_HIGH : INK3,
+                Paint.Align.RIGHT, clearArmed ? sansMedium : sans, 0, 1);
+        clearRect.set(958 - cw - 8, LOGHEAD_CY - 11, 960, LOGHEAD_CY + 11);
+    }
+
+    private void drawPagerButton(Canvas canvas, RectF rect, String label, boolean enabled) {
+        float a = enabled ? 1f : 0.35f;
+        fill.setColor(mulAlpha(FRAME, a));
+        canvas.drawRoundRect(rect, 6, 6, fill);
+        stroke.setColor(mulAlpha(LINE2, a));
+        stroke.setStrokeWidth(1);
+        canvas.drawRoundRect(rect, 6, 6, stroke);
+        text(canvas, label, rect.centerX(), rect.centerY() + 4.3f, 12, INK2,
+                Paint.Align.CENTER, sans, 0, a);
+    }
+
+    /* ── 记录 ── */
+    private void drawLog(Canvas canvas, long now) {
+        fill.setColor(FRAME);
+        canvas.drawRoundRect(LOG_RECT, 16, 16, fill);
+        stroke.setColor(LINE);
+        stroke.setStrokeWidth(1);
+        canvas.drawRoundRect(LOG_RECT, 16, 16, stroke);
+
+        if (rows.isEmpty()) {
+            String msg = allScope ? "还没有记录" : "地址 " + hex1(panelAddr) + " 还没有记录";
+            text(canvas, msg, LOG_RECT.centerX(), LOG_RECT.top + 36, 12.5f, INK3,
+                    Paint.Align.CENTER, sans, 0, 1);
+            return;
+        }
+        canvas.save();
+        canvas.clipRect(LOG_RECT);
+        for (int i = 0; i < rows.size(); i++) {
+            drawRow(canvas, i, now);
+        }
+        canvas.restore();
+    }
+
+    private float rowBaseline(int i, float fontSize) {
+        return LOG_RECT.top + i * ROW_H + ROW_H / 2f + fontSize * 0.36f;
+    }
+
+    private void drawRow(Canvas canvas, int i, long now) {
+        Row row = rows.get(i);
+        MeterReading r = row.rec;
+        float top = LOG_RECT.top + i * ROW_H;
+        float rowAlpha = 1f;
+        float clipFrac = 1f;
+        float tyOff = 0f;
+        if (row.anim == 1) {                                   // 长出来:clip 自上而下展开
+            float t = (now - row.animStart) / 500f;
+            if (t < 0) return;
+            if (t < 1) {
+                float e = EASE.getInterpolation(t);
+                rowAlpha = e;
+                clipFrac = e;
+            } else {
+                row.anim = 0;
+            }
+        } else if (row.anim == 2) {                            // 换页:下移淡入
+            float t = (now - row.animStart) / 300f;
+            if (t < 0) return;
+            if (t < 1) {
+                float e = EASE.getInterpolation(t);
+                rowAlpha = e;
+                tyOff = -4f * (1 - e);
+            } else {
+                row.anim = 0;
+            }
+        }
+        float othersAlpha = rowAlpha;
+        boolean valueHidden = row.forming;
+        if (row.forming) {
+            othersAlpha = 0f;
+        } else if (row.formedAt > 0) {
+            float t = (now - row.formedAt) / 260f;
+            if (t >= 1) {
+                row.formedAt = 0;
+            } else {
+                othersAlpha = rowAlpha * EASE.getInterpolation(clamp(t, 0f, 1f));
+            }
+        }
+        canvas.save();
+        if (clipFrac < 1f) {
+            canvas.clipRect(LOG_RECT.left, top, LOG_RECT.right, top + ROW_H * clipFrac);
+        }
+        if (tyOff != 0f) {
+            canvas.translate(0, tyOff);
+        }
+        if (i > 0) {
+            stroke.setColor(mulAlpha(LINE, rowAlpha));
+            stroke.setStrokeWidth(1);
+            canvas.drawLine(LOG_RECT.left, top, LOG_RECT.right, top, stroke);
+        }
+        int col = statusColor(r.status);
+        text(canvas, clockFormat.format(new Date(r.timestamp)), REC_T_X, rowBaseline(i, 11.5f),
+                11.5f, INK2, Paint.Align.LEFT, mono, 0, othersAlpha);
+        text(canvas, hex1(r.address), REC_A_X, rowBaseline(i, 11.5f), 11.5f, INK2,
+                Paint.Align.LEFT, monoBold, 0, othersAlpha);
+        text(canvas, "AUTO".equalsIgnoreCase(r.source) ? "自动" : "手动", REC_SRC_X,
+                rowBaseline(i, 10.5f), 10.5f, INK3, Paint.Align.LEFT, sans, 0, othersAlpha);
+        if (!valueHidden) {
+            String value = r.currentMa < 0 ? BLANK : fmtA(r.currentMa);
+            float unitW = measure("A", 13, sansMedium, 0);
+            float base = rowBaseline(i, 13);
+            text(canvas, "A", REC_V_RIGHT, base, 13, col, Paint.Align.RIGHT, sansMedium, 0, rowAlpha);
+            text(canvas, value, REC_V_RIGHT - unitW - 3, base, 13, col, Paint.Align.RIGHT,
+                    sansMedium, 0, rowAlpha);
+        }
+        text(canvas, statusLabel(r.status), REC_S_RIGHT, rowBaseline(i, 10.5f), 10.5f, col,
+                Paint.Align.RIGHT, sansMedium, 0, othersAlpha);
+        canvas.restore();
+    }
+
+    /* ── 飞行 ── */
+    private void drawFlyer(Canvas canvas, long now) {
+        if (!flyActive) {
+            return;
+        }
+        float t = clamp((now - flyStart) / 460f, 0f, 1f);
+        float e = FLY.getInterpolation(t);
+        float right = lerp(flyFromRight, flyToRight, e);
+        float base = lerp(flyFromBase, flyToBase, e);
+        float numSize = lerp(40, 13, e);
+        float unitSize = lerp(15, 13, e);
+        float gap = lerp(4, 3, e);
+        int numColor = mixColor(flyNumFrom, flyNumTo, e);
+        int unitColor = mixColor(flyUnitFrom, flyUnitTo, e);
+        float unitW = measure("A", unitSize, sansMedium, 0);
+        text(canvas, "A", right, base, unitSize, unitColor, Paint.Align.RIGHT, sansMedium, 0, 1);
+        text(canvas, flyNum, right - unitW - gap, base, numSize, numColor, Paint.Align.RIGHT,
+                sansMedium, 0, 1);
+    }
+
+    /* ══════════ 图表数据 ══════════ */
+    private Map<Integer, List<MeterReading>> chartGroups() {
+        Map<Integer, List<MeterReading>> groups = new LinkedHashMap<>();
+        for (MeterReading r : scopedRecords()) {
+            if (r.currentMa < 0 || MeterReading.OFFLINE.equals(r.status)) {
+                continue;                                      // 离线记录不进曲线,留成缺口
+            }
+            List<MeterReading> arr = groups.computeIfAbsent(r.address, k -> new ArrayList<>());
+            if (arr.size() < 200) {
+                arr.add(r);
+            }
+        }
+        for (List<MeterReading> arr : groups.values()) {
+            Collections.reverse(arr);                          // 时间升序
+        }
+        return groups;
+    }
+
+    private float yOf(float amps, float top) {
+        return CH_B - amps / top * (CH_B - CH_T);
+    }
+
+    private float xOf(long ts, long tMin, long span) {
+        float u = span > 0 ? (ts - tMin) / (float) span : 0.5f;   // 只有一条记录时放在正中
+        return CH_L + (u - viewU0) / (viewU1 - viewU0) * (CH_R - CH_L);
+    }
+
+    private long tOfU(float u, long tMin) {
+        return tMin + (long) (u * chartDomainSpan);
+    }
+
+    /* ══════════ 小工具 ══════════ */
+    private boolean present(int addr) {
+        return registered.contains(addr) || live[addr].everSeen;
+    }
+
+    private MeterReading firstRecordFor(int addr) {
+        for (MeterReading r : history) {
+            if (r.address == addr) {
+                return r;
+            }
+        }
+        return null;
+    }
+
+    private static String classifyStatus(int ma) {
+        return MeterReading.classify(ma, LOW_MA, HIGH_MA);
+    }
+
+    private static String hex1(int n) {
+        return Integer.toHexString(n).toUpperCase(Locale.ROOT);
+    }
+
+    private static String fmtA(int ma) {
+        return String.format(Locale.US, "%.3f", ma / 1000f);
+    }
+
+    private static String fmtHub(int ma) {
+        return String.format(Locale.US, "%.3f", clamp(ma / 1000f, 0f, 9.999f));
+    }
+
+    private static String statusLabel(String status) {
+        if (MeterReading.LOW.equals(status)) return "低限";
+        if (MeterReading.HIGH.equals(status)) return "超限";
+        if (MeterReading.OFFLINE.equals(status)) return "离线";
+        return "正常";
+    }
+
+    private static int statusColor(String status) {
+        if (MeterReading.LOW.equals(status)) return C_LOW;
+        if (MeterReading.HIGH.equals(status)) return C_HIGH;
+        if (MeterReading.OFFLINE.equals(status)) return C_OFF;
+        return C_OK;
+    }
+
+    /* 越靠近阈值越暖:沿色相「绿 → 琥珀 → 红」,不在 RGB 里直接对插 */
+    private static int heat(float t, boolean toRed) {
+        float stop = toRed ? 0.55f : 1f;
+        if (t <= stop) {
+            float u = stop > 0 ? t / stop : 0;
+            return hsl(lerp(160, 42, u), lerp(84, 100, u), lerp(32, 40, u));
+        }
+        float u = (t - stop) / (1 - stop);
+        return hsl(lerp(42, 0, u), lerp(100, 72, u), lerp(40, 50, u));
+    }
+
+    private static int warmColor(int ma) {
+        if (ma < 0) {
+            return C_OFF;
+        }
+        float amps = ma / 1000f;
+        float lowP = clamp((LOW_MA / 1000f + 0.16f - amps) / 0.16f, 0f, 1f);
+        float highP = clamp((amps - (HIGH_MA / 1000f - 0.32f)) / 0.32f, 0f, 1f);
+        return highP >= lowP ? heat(highP, true) : heat(lowP, false);
+    }
+
+    /* 16 个地址 16 个色相,落在 172°–320°,乘 5 与 16 互素拉开相邻地址 */
+    private static int seriesColor(int addr) {
+        return hsl(172 + ((addr * 5) % 16) * 9.8f, 58, 46);
+    }
+
+    private static int hsl(float h, float s, float l) {
+        s /= 100f;
+        l /= 100f;
+        float c = (1 - Math.abs(2 * l - 1)) * s;
+        float hp = (((h % 360) + 360) % 360) / 60f;
+        float x = c * (1 - Math.abs(hp % 2 - 1));
+        float r = 0, g = 0, b = 0;
+        if (hp < 1) { r = c; g = x; }
+        else if (hp < 2) { r = x; g = c; }
+        else if (hp < 3) { g = c; b = x; }
+        else if (hp < 4) { g = x; b = c; }
+        else if (hp < 5) { r = x; b = c; }
+        else { r = c; b = x; }
+        float m = l - c / 2;
+        return Color.rgb(Math.round((r + m) * 255), Math.round((g + m) * 255),
+                Math.round((b + m) * 255));
+    }
+
+    private void drawDashed(Canvas canvas, float x1, float y1, float x2, float y2,
+                            int color, DashPathEffect dash) {
+        workPath.reset();
+        workPath.moveTo(x1, y1);
+        workPath.lineTo(x2, y2);
+        stroke.setColor(color);
+        stroke.setStrokeWidth(1);
+        stroke.setPathEffect(dash);
+        canvas.drawPath(workPath, stroke);
+        stroke.setPathEffect(null);
+    }
+
+    private void text(Canvas canvas, String s, float x, float baseline, float size, int color,
+                      Paint.Align align, Typeface tf, float letterSpacingEm, float alpha) {
+        textPaint.setTextSize(size);
+        textPaint.setTypeface(tf);
+        textPaint.setTextAlign(align);
+        textPaint.setLetterSpacing(letterSpacingEm);
+        textPaint.setColor(color);
+        if (alpha < 1f) {
+            textPaint.setAlpha((int) (Color.alpha(color) * alpha));
+        }
+        canvas.drawText(s, x, baseline, textPaint);
+    }
+
+    private float measure(String s, float size, Typeface tf, float letterSpacingEm) {
+        textPaint.setTextSize(size);
+        textPaint.setTypeface(tf);
+        textPaint.setTextAlign(Paint.Align.LEFT);
+        textPaint.setLetterSpacing(letterSpacingEm);
+        return textPaint.measureText(s);
+    }
+
+    private static int mulAlpha(int color, float f) {
+        int a = (int) (Color.alpha(color) * clamp(f, 0f, 1f));
+        return (color & 0x00FFFFFF) | (a << 24);
+    }
+
+    private static int mixColor(int from, int to, float t) {
+        t = clamp(t, 0f, 1f);
+        int a = Math.round(Color.alpha(from) + (Color.alpha(to) - Color.alpha(from)) * t);
+        int r = Math.round(Color.red(from) + (Color.red(to) - Color.red(from)) * t);
+        int g = Math.round(Color.green(from) + (Color.green(to) - Color.green(from)) * t);
+        int b = Math.round(Color.blue(from) + (Color.blue(to) - Color.blue(from)) * t);
+        return Color.argb(a, r, g, b);
+    }
+
+    private static float clamp(float v, float lo, float hi) {
+        return Math.max(lo, Math.min(hi, v));
+    }
+
+    private static float lerp(float a, float b, float t) {
+        return a + (b - a) * t;
+    }
+
+    private static float norm180(float d) {
+        return ((d + 180) % 360 + 360) % 360 - 180;
+    }
+
+    private static float dist(float x, float y, float cx, float cy) {
+        return (float) Math.hypot(x - cx, y - cy);
+    }
+}

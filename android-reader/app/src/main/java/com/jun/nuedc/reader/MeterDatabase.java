@@ -8,7 +8,9 @@ import android.database.sqlite.SQLiteOpenHelper;
 
 import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 public final class MeterDatabase extends SQLiteOpenHelper {
@@ -54,7 +56,10 @@ public final class MeterDatabase extends SQLiteOpenHelper {
         SQLiteDatabase db = getWritableDatabase();
         ContentValues values = valuesFor(reading);
         long id = db.insertOrThrow("readings", null, values);
-        registerMeter(db, reading);
+        if (!reading.mac.isEmpty()) {
+            // 空地址的离线存档没有真实 MAC,不当作已登记的表
+            registerMeter(db, reading);
+        }
         prune(db);
         return new MeterReading(
                 id,
@@ -69,18 +74,10 @@ public final class MeterDatabase extends SQLiteOpenHelper {
         );
     }
 
-    public synchronized List<MeterReading> markMissingMetersOffline(
-            Set<String> seenMacs,
-            long timestamp
-    ) {
-        Set<String> normalizedSeen = new HashSet<>();
-        for (String mac : seenMacs) {
-            normalizedSeen.add(mac.toUpperCase());
-        }
-
-        SQLiteDatabase db = getWritableDatabase();
-        List<MeterReading> inserted = new ArrayList<>();
-        try (Cursor cursor = db.query(
+    /** 已登记的表:地址 → {mac, name}。自动轮据此给不在线的表补离线记录。 */
+    public synchronized Map<Integer, String[]> registeredMeters() {
+        Map<Integer, String[]> result = new LinkedHashMap<>();
+        try (Cursor cursor = getReadableDatabase().query(
                 "meters",
                 new String[]{"address", "mac", "name"},
                 null,
@@ -90,40 +87,13 @@ public final class MeterDatabase extends SQLiteOpenHelper {
                 "address ASC"
         )) {
             while (cursor.moveToNext()) {
-                int address = cursor.getInt(0);
-                String mac = cursor.getString(1);
-                String name = cursor.getString(2);
-                if (normalizedSeen.contains(mac.toUpperCase()) || isLatestOffline(db, address)) {
-                    continue;
-                }
-
-                MeterReading offline = new MeterReading(
-                        0,
-                        timestamp,
-                        address,
-                        -1,
-                        MeterReading.OFFLINE,
-                        mac,
-                        name,
-                        -127,
-                        "AUTO"
+                result.put(
+                        cursor.getInt(0),
+                        new String[]{cursor.getString(1), cursor.getString(2)}
                 );
-                long id = db.insertOrThrow("readings", null, valuesFor(offline));
-                inserted.add(new MeterReading(
-                        id,
-                        offline.timestamp,
-                        offline.address,
-                        offline.currentMa,
-                        offline.status,
-                        offline.mac,
-                        offline.deviceName,
-                        offline.rssi,
-                        offline.source
-                ));
             }
         }
-        prune(db);
-        return inserted;
+        return result;
     }
 
     public synchronized List<MeterReading> latestByAddress() {
@@ -159,6 +129,20 @@ public final class MeterDatabase extends SQLiteOpenHelper {
             ascending.add(descending.get(i));
         }
         return ascending;
+    }
+
+    /** meters 表里登记过的地址:界面据此区分「有表」与「空地址」。 */
+    public synchronized Set<Integer> registeredAddresses() {
+        Set<Integer> result = new HashSet<>();
+        try (Cursor cursor = getReadableDatabase().rawQuery(
+                "SELECT address FROM meters",
+                null
+        )) {
+            while (cursor.moveToNext()) {
+                result.add(cursor.getInt(0));
+            }
+        }
+        return result;
     }
 
     public synchronized int storedCount() {
@@ -209,21 +193,6 @@ public final class MeterDatabase extends SQLiteOpenHelper {
         meter.put("name", reading.deviceName);
         meter.put("last_seen", reading.timestamp);
         db.insertWithOnConflict("meters", null, meter, SQLiteDatabase.CONFLICT_REPLACE);
-    }
-
-    private boolean isLatestOffline(SQLiteDatabase db, int address) {
-        try (Cursor cursor = db.query(
-                "readings",
-                new String[]{"status"},
-                "address=?",
-                new String[]{Integer.toString(address)},
-                null,
-                null,
-                "id DESC",
-                "1"
-        )) {
-            return cursor.moveToFirst() && MeterReading.OFFLINE.equals(cursor.getString(0));
-        }
     }
 
     private ContentValues valuesFor(MeterReading reading) {
