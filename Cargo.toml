@@ -9,6 +9,20 @@ license-file = "LICENSE-PROPRIETARY"
 # are asked for by name.
 default-run = "passive-ac-ammeter-and-wireless-reader"
 
+# 裸机 target 没有 `test` crate，隐式生成的 test/bench 目标一编译就是 E0463。
+# 关掉它们，`cargo check --all-targets`（IDE linter 默认就这么调）才不会报错。
+[[bin]]
+name = "passive-ac-ammeter-and-wireless-reader"
+path = "src/main.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "oparails"
+path = "src/bin/oparails.rs"
+test = false
+bench = false
+
 [dependencies]
 embassy-mspm0 = { git = "https://github.com/ozongzi/embassy", rev = "f6daf50db52bb90e7dbee2314a04eee77b46b03b", features = ["mspm0g3507pm", "rt", "time-driver-any", "unstable-pac"] }
 embassy-executor = { git = "https://github.com/ozongzi/embassy", rev = "f6daf50db52bb90e7dbee2314a04eee77b46b03b", features = ["platform-cortex-m", "executor-thread"] }

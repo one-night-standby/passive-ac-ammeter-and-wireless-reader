@@ -34,7 +34,7 @@ pub fn init() {
     }
 }
 
-/// Set the 12-bit output code (0..=4095), Vout = code / 4096 * VDDA.
+/// Set the 12-bit output code (`0..=4095`), Vout = code / 4096 * VDDA.
 pub fn set(code: u16) {
     unsafe {
         write_volatile((DAC0_BASE + DATA0) as *mut u32, code as u32 & 0xFFF);

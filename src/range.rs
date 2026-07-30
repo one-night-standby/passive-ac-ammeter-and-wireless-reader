@@ -61,8 +61,8 @@ impl Range {
     ];
 
     /// Nominal multiplier. The CFG.GAIN encoding is the log2 of the ladder
-    /// step, so 1..=5 maps to 2..=32 by a shift; `Direct` is 1 by definition,
-    /// and exactly 1 -- it is a wire, not a trimmed resistor ratio.
+    /// step, so `1..=5` maps to `2..=32` by a shift; `Direct` is 1 by
+    /// definition, and exactly 1 -- it is a wire, not a trimmed resistor ratio.
     ///
     /// Used *only* for range arithmetic and the DAC pivot, never in the
     /// reading itself. That distinction matters: the on-chip ladder's real
@@ -91,9 +91,9 @@ impl Range {
 ///
 /// OPA1 runs off VDDA/VSSA, so those two voltages bound what its output can
 /// swing to. ADC1 is referenced to the same pair (`sampler::init_adc1_event`
-/// sets VRSEL to VDDA/VSSA), so its full scale 0..4095 *is* that same pair. The
-/// amplifier's rails and the converter's endpoints are not two limits to choose
-/// the tighter of -- they are one limit, measured in two units.
+/// sets VRSEL to VDDA/VSSA), so its full scale `0..4095` *is* that same pair.
+/// The amplifier's rails and the converter's endpoints are not two limits to
+/// choose the tighter of -- they are one limit, measured in two units.
 ///
 /// Clipping happens *at* those rails, not short of them, and the corner is
 /// sharp: driven past either end the output flattens within a LSB or two of the
@@ -227,7 +227,7 @@ pub fn fits(range: Range, mean_in: i32, pp_in: u32, fill_pct: i32) -> bool {
 ///
 /// The fallback is not a guess: `Direct` is the least demanding range there
 /// is (see `Range`), so if it does not fit, nothing would have. Reaching it
-/// means the input's own excursion leaves 0..VDDA -- an analog front-end
+/// means the input's own excursion leaves `0..VDDA` -- an analog front-end
 /// limit that no choice inside this chip can widen, which is why the caller
 /// flags that case rather than the planner hiding it.
 pub fn pick_range(mean_in: i32, pp_in: u32) -> Range {
@@ -281,7 +281,7 @@ pub fn next_range(current: Range, mean_in: i32, pp_in: u32) -> Range {
 ///
 /// The flag matters because the probe is the one place the firmware looks at
 /// the outside world with no gain to fall back on: an input that leaves
-/// 0..VDDA is simply not visible: it reads as a flat top or bottom, which
+/// `0..VDDA` is simply not visible: it reads as a flat top or bottom, which
 /// makes pp too small and the mean wrong in the same direction. Acting on
 /// those numbers would pick too high a gain and then clip the frame that
 /// carries the marks. No gain setting can fix an input outside the supply --

@@ -46,13 +46,13 @@
 //! sitting near the top rail. Genuinely saturated too.
 //!
 //! Every `rail_*` line therefore carries `cmd`, the commanded output in ADC LSB.
-//! **If `cmd` is not far outside 0..4095, that line is not a rail** -- it is the
-//! amplifier working linearly, and the number is whatever it was fed times the
-//! gain. A flat-looking reading is not evidence of clipping on its own: command
-//! an output of 0 V and the DAC's own floor plus the OPA's input offset leave a
-//! few LSB at the input, which comes back as `G * Vos` and looks like a plausible
-//! low rail at every gain. `cmd` is what distinguishes the two, and the `warn`
-//! line checks the same thing from the readings alone.
+//! **If `cmd` is not far outside `0..4095`, that line is not a rail** -- it is
+//! the amplifier working linearly, and the number is whatever it was fed times
+//! the gain. A flat-looking reading is not evidence of clipping on its own:
+//! command an output of 0 V and the DAC's own floor plus the OPA's input offset
+//! leave a few LSB at the input, which comes back as `G * Vos` and looks like a
+//! plausible low rail at every gain. `cmd` is what distinguishes the two, and
+//! the `warn` line checks the same thing from the readings alone.
 //!
 //! CFGBASE is left exactly as the firmware sets it (GBW=HIGHGAIN, RRI on), since
 //! those bits configure the amplifier whose swing is being measured. What this
@@ -160,7 +160,7 @@ const CURVE_GAIN: Gain = Gain::X2;
 /// point, so this cannot mistake slope for plateau.
 const FLAT_LSB: i32 = 3;
 
-/// How far outside 0..4095 a commanded output has to be before the reading is
+/// How far outside `0..4095` a commanded output has to be before the reading is
 /// accepted as a rail rather than as linear operation.
 ///
 /// Sized against the thing it has to rule out, not against full scale. The only

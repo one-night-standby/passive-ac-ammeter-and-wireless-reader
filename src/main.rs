@@ -137,7 +137,7 @@ async fn main(_spawner: Spawner) -> ! {
         // Re-ranging on numbers known to be wrong is strictly worse than
         // keeping a setting that was right one period ago -- and in the
         // railed case the reading is flagged rather than silently trusted,
-        // because an input outside 0..VDDA is an analog front-end problem
+        // because an input outside `0..VDDA` is an analog front-end problem
         // that no range inside this chip can fix.
 
         // --- Measurement frame: whatever the chosen range put the signal on
@@ -166,7 +166,7 @@ async fn main(_spawner: Spawner) -> ! {
             // A leading marker means the reading below it is not to be
             // believed, and says which of the two ways it went wrong:
             //   '!' the probe found the input pinned at an ADC end, so the
-            //       signal is leaving 0..VDDA and no internal gain or bias
+            //       signal is leaving `0..VDDA` and no internal gain or bias
             //       choice can recover it -- that needs external conditioning.
             //   '>' the arithmetic says the signal will not fit even on
             //       Direct, the least demanding range there is, so the frame
