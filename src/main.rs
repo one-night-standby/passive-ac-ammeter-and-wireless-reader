@@ -170,12 +170,13 @@ async fn main(_spawner: Spawner) -> ! {
             //       choice can recover it -- that needs external conditioning.
             //   '>' the arithmetic says the signal will not fit even on
             //       Direct, the least demanding range there is, so the frame
-            //       is clipping. Since Direct's window is the converter's own
-            //       full scale, this is the same physical condition as '!' --
-            //       predicted from the probe's mean/pp rather than seen as
-            //       pinned samples. Adding Direct to the ladder is what made
-            //       it near-unreachable; it is kept as the arithmetic
-            //       backstop, and stays correct if the windows are re-measured.
+            //       is clipping. Every range is bounded by the supply and
+            //       nothing tighter (see range::OUT_LO -- OPA1's rails and
+            //       ADC1's full scale are the same two voltages), which makes
+            //       this exactly the same physical condition as '!', predicted
+            //       from the probe's mean/pp rather than seen as pinned
+            //       samples. Adding Direct to the ladder is what made it
+            //       near-unreachable; it is kept as the arithmetic backstop.
             //   '?' the measurement frame's DMA never drained, so BUF is part
             //       new samples and part stale ones.
             // All three sit on the primary line on purpose: a number this

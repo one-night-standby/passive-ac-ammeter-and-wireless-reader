@@ -37,9 +37,10 @@ pub enum Gain {
 /// still holds it, because nothing there multiplies the offset.
 ///
 /// `Direct` is also provably the least demanding range, which is what makes
-/// it the right floor to fall back to. Against `Pga(X2)` it needs half the
-/// swing (multiplier 1 versus 2) while its window bound is `2*mean - OUT_LO`
-/// tighter at worst -- so wherever `Pga(X2)` fits, `Direct` fits too.
+/// it the right floor to fall back to. Every range is bounded by the same
+/// window (see `OUT_LO`), and against `Pga(X2)` this one needs half the swing
+/// inside it -- multiplier 1 versus 2. So wherever `Pga(X2)` fits, `Direct`
+/// fits too.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Range {
     /// ADC1 reads PA18 straight, OPA bypassed. No gain, no DAC pivot.
@@ -83,33 +84,43 @@ impl Range {
             Range::Pga(_) => ADC_CH_OPA_OUT,
         }
     }
-
-    /// The window samples must stay inside. The PGA path is bounded by the
-    /// OPA's own clipping; the direct path has no OPA in it, so the only
-    /// bound is the converter's full scale.
-    const fn window(self) -> (i32, i32) {
-        match self {
-            Range::Direct => (0, ADC_MASK as i32),
-            Range::Pga(_) => (OUT_LO, OUT_HI),
-        }
-    }
 }
 
-/// Usable OPA output window in ADC LSB, from STRUCTURE.md's observed
-/// 292..3802 -- the OPA clips well before the rails, so the rails are not the
-/// limit that matters.
+/// Window samples must stay inside, in ADC LSB. One window for every range,
+/// because there is only one limit here and everything shares it: the supply.
 ///
-/// This is the one bench-derived constant the autoranger still leans on, and
-/// unlike the numbers it replaced it is a property of the OPA and its supply
-/// rather than of whatever is driving the input, so it carries over from one
-/// signal source to another. Re-measure it by driving the input past clipping
-/// at a known gain and reading where `rms` stops growing; nothing else in
-/// this file needs to change if it moves.
-pub const OUT_LO: i32 = 292;
+/// OPA1 runs off VDDA/VSSA, so those two voltages bound what its output can
+/// swing to. ADC1 is referenced to the same pair (`sampler::init_adc1_event`
+/// sets VRSEL to VDDA/VSSA), so its full scale 0..4095 *is* that same pair. The
+/// amplifier's rails and the converter's endpoints are not two limits to choose
+/// the tighter of -- they are one limit, measured in two units.
+///
+/// Clipping happens *at* those rails, not short of them, and the corner is
+/// sharp: driven past either end the output flattens within a LSB or two of the
+/// linear extrapolation. So a hard bound is the right model and `fits` owes no
+/// compression margin on top of `FILL_TARGET_PCT`. GBW=HIGHGAIN with RRI on is a
+/// rail-to-rail output stage behaving like one.
+///
+/// Both ends sit on their rail to within the converter's own offset error, which
+/// is why full scale is the honest pair of numbers rather than something a few
+/// LSB inside it -- a tighter bound would be guarding a difference smaller than
+/// the uncertainty on measuring it.
+///
+/// Re-measure with `src/bin/oparails.rs`, which drives OPA1 through its own muxes
+/// so the answer does not depend on what is wired to the input. It saturates each
+/// end with the topology that can actually reach it (`Vout = G*Vdac` for the top,
+/// this file's `Vout = G*Vin + (1-G)*Vdac` for the bottom, whose DAC term is what
+/// makes a negative command possible) and prints the commanded output next to
+/// every reading, so "the amplifier was pushed past what it can deliver" is
+/// checked rather than assumed. Worth re-running after a supply change or on a
+/// different board; nothing at run time depends on it.
+pub const OUT_LO: i32 = 0;
 
-pub const OUT_HI: i32 = 3802;
+pub const OUT_HI: i32 = ADC_MASK as i32;
 
-pub const OUT_CENTER: i32 = (OUT_LO + OUT_HI) / 2;
+/// Mid-supply, which is where `dac_code_for` pivots the amplified DC -- the point
+/// furthest from both rails, so it is the placement that leaves the most swing.
+pub const OUT_CENTER: i32 = OUT_HI / 2;
 
 /// DAC12 full-scale code. The pivot solution below is not always reachable
 /// -- see `dac_code_for` -- so this bound is part of the range arithmetic,
@@ -193,13 +204,14 @@ pub const fn g_nominal(g: Gain) -> i32 {
     Range::Pga(g).nominal()
 }
 
-/// Usable half-swing on this range: the distance from its DC to the nearer
-/// end of its window. Zero (or negative, reported as zero) means the DC is
-/// already outside the window and no signal fits at all.
+/// Usable half-swing on this range: the distance from its DC to the nearer end
+/// of the window. Zero (or negative, reported as zero) means the DC is already
+/// outside the window and no signal fits at all.
+///
+/// Only the DC placement still depends on the range -- the bounds no longer do.
 pub fn headroom(range: Range, mean_in: i32) -> i32 {
-    let (lo, hi) = range.window();
     let dc = dc_for(range, mean_in);
-    (dc - lo).min(hi - dc).max(0)
+    (dc - OUT_LO).min(OUT_HI - dc).max(0)
 }
 
 /// Does this range's signal fit inside `fill_pct` of the headroom it actually

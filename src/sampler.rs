@@ -24,8 +24,14 @@ pub const SAMPLE_HZ: u32 = 4_000;
 
 pub const LOAD: u32 = TIMER_CLK_HZ / SAMPLE_HZ - 1;
 
-pub const PINCM_PA18: usize = 40; // OPA1_IN1+ (signal in)
-pub const PINCM_PA16: usize = 38; // OPA1_OUT (also ADC1 channel 1, signal out)
+/// Indices into `IOMUX.pincm()`, which is a zero-based array (`IOMUX + 0x04 +
+/// 4*n`), while the datasheet numbers the same registers from 1. The index for
+/// datasheet PINCMn is therefore n-1, and being one off here lands on the next
+/// pin up: index 40 is PA19, the SWDIO the debug probe needs. Cross-check
+/// against `gpio_pincm()` in embassy-mspm0's generated pin table, which is
+/// indexed the same way.
+pub const PINCM_PA18: usize = 39; // OPA1_IN1+ (signal in), datasheet PINCM40
+pub const PINCM_PA16: usize = 37; // OPA1_OUT (also ADC1 ch 1), datasheet PINCM38
 
 /// ADC1 channel numbers for the two pins above, taken from the PAC's own pin
 /// table (`impl_adc_pin!(ADC1, PA16, 1u8)`, `impl_adc_pin!(ADC1, PA18, 3u8)`).

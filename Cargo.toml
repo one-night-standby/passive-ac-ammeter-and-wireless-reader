@@ -4,6 +4,10 @@ version = "0.1.0"
 edition = "2024"
 publish = false
 license-file = "LICENSE-PROPRIETARY"
+# `src/bin/` holds bench bins alongside the firmware, and a second binary makes
+# a bare `cargo run` ambiguous. The firmware stays the default; the bench bins
+# are asked for by name.
+default-run = "passive-ac-ammeter-and-wireless-reader"
 
 [dependencies]
 embassy-mspm0 = { git = "https://github.com/ozongzi/embassy", rev = "f6daf50db52bb90e7dbee2314a04eee77b46b03b", features = ["mspm0g3507pm", "rt", "time-driver-any", "unstable-pac"] }
