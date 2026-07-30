@@ -134,6 +134,7 @@ body {
 }
 .hub:active { transform: scale(.985); }
 .hub.is-busy { animation: hubbump .26s var(--ease); }
+.hub * { pointer-events: none; }
 @keyframes hubbump { 0%, 100% { transform: none; } 45% { transform: scale(.972); } }
 .hub-addr { font: 600 13px/1 var(--mono); color: var(--ink-3); letter-spacing: .1em; }
 .hub-line { display: flex; align-items: baseline; gap: 4px; margin: 3px 0 1px; }
