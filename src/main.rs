@@ -2,7 +2,9 @@
 #![no_main]
 
 //! "Passive" AC ammeter, circuit A + B: measure the harvested CT signal,
-//! show it, and push it out over the HC-42.
+//! show it, and push it out over the HC-42. The OLED and HC-42 are both kept
+//! inactive during the first measurement so the harvesting supply only has
+//! to start the analog and compute path.
 //!
 //! This file is the wiring and the measurement period; the substance lives in
 //! the four modules below.
@@ -51,10 +53,23 @@ bind_interrupts!(struct Irqs {
 });
 
 const HC42_BAUD_RATE: u32 = 9_600;
+/// HC-42 manual: allow at least 350 ms after power-on before using its UART.
+const HC42_POWER_UP_MS: u64 = 350;
 
 #[embassy_executor::main]
 async fn main(_spawner: Spawner) -> ! {
     let p = embassy_mspm0::init(Default::default());
+
+    // PB17 drives the active-high EN input of an external 3.3 V load switch;
+    // it must never drive the HC-42 VCC pin directly. A physical pull-down on
+    // EN keeps the module off before this firmware takes control of PB17.
+    //
+    // Keep UART2 uninitialized while power is off as well. Otherwise its TX
+    // idle-high level could feed the unpowered module through RXD's protection
+    // diode and defeat the power gate.
+    let mut hc42_power_enable = Output::new(p.PB17, Level::Low);
+    let mut hc42_peripherals = Some((p.UART2, p.PB16, p.PB15));
+    let mut hc42 = None;
 
     set_analog(PINCM_PA18);
     set_analog(PINCM_PA16);
@@ -72,11 +87,10 @@ async fn main(_spawner: Spawner) -> ! {
     init_timer();
 
     let mut dma = Channel::new(p.DMA_CH0, Irqs);
-    // SAFETY: sole owner of the OLED's fixed pins (PB2/PB3) -- nothing
-    // else in this firmware uses them. Created once, outside the loop --
-    // re-running the full SSD1306 init sequence every measurement would
-    // flicker the screen and waste time on the bit-banged I2C bus.
-    let mut display = unsafe { Oled::new() };
+    // `None` deliberately leaves PB2/PB3 in their reset state during the
+    // first probe, capture and calculation. `Some(Err(_))` records a failed
+    // first initialization so fixed pins are never stolen a second time.
+    let mut display = None;
 
     let mut led = Output::new(unsafe { peripherals::PA0::steal() }, Level::Low);
     led.set_inversion(true);
@@ -91,17 +105,10 @@ async fn main(_spawner: Spawner) -> ! {
     let address_bit2 = Input::new(p.PB7, Pull::Up);
     let address_bit3 = Input::new(p.PB8, Pull::Up);
 
-    let mut uart_config = UartConfig::default();
-    uart_config.baudrate = HC42_BAUD_RATE;
-    let mut hc42 = Uart::new_blocking(p.UART2, p.PB16, p.PB15, uart_config).unwrap();
-
     let mut spread_track = Spread::new();
     let mut range = Range::Pga(Gain::X2);
     let mut input_bad = false;
     let mut range_over = false;
-
-    // HC-42 needs about 300 ms after power-on before it is ready.
-    Timer::after_millis(500).await;
 
     loop {
         // --- Probe: the raw input at unity gain, straight off PA18 ---
@@ -159,7 +166,15 @@ async fn main(_spawner: Spawner) -> ! {
         let hz = estimate_hz(buf, pivot);
         let amps = lsb_to_amps(rms, range);
 
-        if let Ok(display) = &mut display {
+        // Only now, after the first complete measurement is available, may
+        // the OLED pins be driven and the SSD1306 initialization traffic run.
+        if display.is_none() {
+            // SAFETY: PB2/PB3 have not been used above and this branch executes
+            // once because both Ok and Err are retained inside `Some`.
+            display = Some(unsafe { Oled::new() });
+        }
+
+        if let Some(Ok(display)) = &mut display {
             let _ = display.clear(BinaryColor::Off);
             let style = MonoTextStyle::new(&FONT_9X15, BinaryColor::On);
 
@@ -218,6 +233,22 @@ async fn main(_spawner: Spawner) -> ! {
             let _ = display.flush();
         }
 
+        // Power the HC-42 only after measurement and the first OLED refresh.
+        // The module stays on afterwards because a BLE peripheral must remain
+        // discoverable for the reader to decide when it is needed. Turning it
+        // off between frames would make wireless wake-up impossible.
+        if hc42.is_none() {
+            hc42_power_enable.set_high();
+            Timer::after_millis(HC42_POWER_UP_MS).await;
+
+            let (uart2, rx, tx) = hc42_peripherals
+                .take()
+                .expect("HC-42 UART peripherals can only be initialized once");
+            let mut uart_config = UartConfig::default();
+            uart_config.baudrate = HC42_BAUD_RATE;
+            hc42 = Some(Uart::new_blocking(uart2, rx, tx, uart_config).unwrap());
+        }
+
         // Address dip switches, read once per cycle -- the Android app
         // re-derives alarm status from CURRENT_MA itself (see
         // MeterReading::classify), so STATUS here is just a fixed token
@@ -234,9 +265,11 @@ async fn main(_spawner: Spawner) -> ! {
             "METER_TEST,ADDR={:02},CURRENT_MA={},STATUS=NORMAL\r\n",
             address, current_ma
         );
-        let _ = hc42.blocking_write(frame.as_bytes());
-        let _ = hc42.blocking_flush();
-        tx_green_led.toggle();
+        if let Some(hc42) = &mut hc42 {
+            let _ = hc42.blocking_write(frame.as_bytes());
+            let _ = hc42.blocking_flush();
+            tx_green_led.toggle();
+        }
 
         // Heartbeat: one toggle per measurement cycle.
         // led.toggle();
