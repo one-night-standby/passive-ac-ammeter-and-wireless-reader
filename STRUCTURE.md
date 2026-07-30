@@ -1,12 +1,22 @@
 题面/HC42规格在 docs
 
-DSP流程
+DSP流程（自动量程，每个测量周期跑一遍）
 
-原始输入                                     +- 1.414 V <input>
-片内 OPA 偏置                                 0.236 - 3.064
-4k samples per sec 采样 800 点 （市电，50Hz）  292 - 3802
-RMS                                           u64 IVpp
-Calibration                                   f32 Vpp <output>
+探测帧   ADC1.3 直采 PA18，X1，160 点/40 ms      -> mean, pp（输入端 LSB）
+选档     最大的档使 G*pp/2 <= 65% 可用余量        -> G ∈ {1,2,4,8,16,32}
+定偏置   Vdac = (C - G*mean)/(1 - G)，C = 2047   -> 输出直流落回窗口中心
+主帧     4k sps，800 点 = 10 个 50Hz 周期        -> ADC1.1(OPA1_OUT) 或 ADC1.3(x1)
+RMS      Hann 加权，减本帧算出的均值             -> f32 LSB
+标定     按档查对应的 CAL 表，分段线性           -> f32 A <output>
+
+x1 档不经 OPA，ADC 直采 PA18（和探测帧同一条路），所以窗口是转换器满量程 0-4095；
+PGA 各档窗口是 292 - 3802 LSB（OPA 远在轨前就限幅，实测值，见 main.rs
+OUT_LO/OUT_HI）。x1 之所以必须是一个真档而不是特例：阶梯最低就是 2x，而 2x 把直流
+也放大 2 倍（Vout <= 2*Vin_dc，DAC 改不了），输入直流偏低时 PGA 各档都够不着量程
+顶端，只有 x1 装得下。
+
+输入直流不作任何假设：由探测帧实测，DAC 跟着走。探测帧撞到 ADC 两端、或连 x1 都
+装不下（输入自身越出 0..VDDA）时，读数前会打标记，不静默出数。
 
 output 1. OLED 128x64 显示
 output 2. HC-42 串口透传为蓝牙
