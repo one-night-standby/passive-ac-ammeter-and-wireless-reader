@@ -95,6 +95,7 @@ public final class MeterPollingService extends Service {
     private static final long SCAN_ON_MS = 8_000L;             // 扫 8 秒歇 12 秒,避开系统节流
     private static final long SCAN_OFF_MS = 12_000L;
     private static final long PUMP_MS = 1_000L;
+    private static final long ROUND_RETRY_MS = 500L;           // 轮次撞上手动读取时的退让
     private static final long RETRY_MS = 1_500L;
     private static final long RETRY_SLOW_MS = 10_000L;         // 连败三次后放慢,别拖累别的链
     private static final int RETRY_SLOW_AFTER = 3;
@@ -173,6 +174,7 @@ public final class MeterPollingService extends Service {
         }
     };
     private final Runnable autoRoundRunnable = this::autoRound;
+    private final Runnable roundRetry = this::pumpRound;
     private final Runnable countdownTick = this::updateCountdownNotification;
 
     private final ScanCallback scanCallback = new ScanCallback() {
@@ -543,6 +545,19 @@ public final class MeterPollingService extends Service {
         ask(link, -1, false);
     }
 
+    /**
+     * 自动模式下有新表接入时补一轮。
+     *
+     * <p>不补的话,「一键启动」按下时还没有任何连接,那一轮的目标集是空的,
+     * 界面要空等一个完整周期才见到第一条记录。
+     */
+    private void kickRoundIfIdle() {
+        if (autoMode && roundQueue.isEmpty()) {
+            handler.removeCallbacks(autoRoundRunnable);
+            handler.postDelayed(autoRoundRunnable, ROUND_RETRY_MS);
+        }
+    }
+
     /* ══════════ 请求-应答 ══════════ */
 
     /**
@@ -611,6 +626,7 @@ public final class MeterPollingService extends Service {
             handler.removeCallbacks(timeout);
         }
         link.askingAddr = NOT_ASKING;
+        link.askingForRound = false;
     }
 
     private void handleData(BluetoothGatt gatt, BluetoothGattCharacteristic characteristic,
@@ -621,17 +637,25 @@ public final class MeterPollingService extends Service {
         }
         for (MeterFrameParser.ParsedFrame frame : link.parser.feed(value)) {
             link.address = frame.address;
-            if (frame.hasReading()) {
-                boolean forRound = link.askingForRound;
-                link.lastMa = frame.currentMa;
+            // 电流表上电时会不请自来地发一帧。那不是任何请求的应答,不能拿它
+            // 推进轮次,也不能按上一次请求的身份落库——否则一次重启就会凭空
+            // 多存一条、并且把轮次队列多弹一个地址出去。
+            boolean solicited = link.askingAddr != NOT_ASKING
+                    && (link.askingAddr < 0 || link.askingAddr == frame.address);
+            boolean forRound = solicited && link.askingForRound;
+            if (solicited) {
                 clearReplyTimeout(link);
+            }
+            if (frame.hasReading()) {
+                link.lastMa = frame.currentMa;
                 broadcastFrame(frame, link);
                 onReplyArrived(frame.address, frame.currentMa, link, forRound);
+                if (!solicited || !forRound) {
+                    kickRoundIfIdle();                         // 认出地址了,补一轮
+                }
             } else if (frame.isFault()) {
                 // 表答了,但说这次读数不可信。和「没人应答」必须分开:一个是表
                 // 有毛病,一个是表不在,读表器指示的东西不一样。
-                boolean forRound = link.askingForRound;
-                clearReplyTimeout(link);
                 broadcastState("METER_FAULT", String.format(
                         Locale.CHINA, "%d号表读数异常(%s)", frame.address, frame.flag));
                 onReplyMissing(link, frame.address, forRound);
@@ -721,6 +745,13 @@ public final class MeterPollingService extends Service {
         }
         MeterLink link = idleSubscribedLink();
         if (link == null) {
+            if (subscribedCount() > 0) {
+                // 链在,只是正忙(多半是手动读取插了进来)。等一下再问这一个,
+                // 别为了一次插队把整轮丢掉。
+                roundQueue.addFirst(next);
+                handler.postDelayed(roundRetry, ROUND_RETRY_MS);
+                return;
+            }
             // 一条链都没有:这一轮问不了,不必逐个记离线——离线本来就不落库。
             roundQueue.clear();
             finishRound();
