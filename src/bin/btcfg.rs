@@ -57,9 +57,16 @@ bind_interrupts!(struct Irqs {
 
 const CONSOLE_BAUD_RATE: u32 = 115_200;
 
-/// 模块出厂波特率。工具从这里起步去找模块——如果模块已经被改过,第一步的
-/// `AT` 就不会有回应,输出里会直接说出来。
-const FACTORY_BAUD_RATE: u32 = 9_600;
+/// 工具用哪个波特率跟模块说话。
+///
+/// 默认就是固件用的那个:模块改过一次就停在那里(掉电不丢失),所以这是常态,
+/// 跑一遍等于确认整条链是通的。**拿到一块出厂状态的新模块时**,把这里改成
+/// 9600 烧一次——工具发现它不在目标波特率上就会把它改过去——然后再改回来。
+///
+/// 只按一个波特率建一次 UART,不做重配:台面上试过重配活着的 BufferedUart,
+/// `set_baudrate` 报 OK,但之后两个方向都不通了。全新构造没有这个问题,而
+/// 正式固件走的也正是全新构造这条路。
+const PROBE_BAUD_RATE: u32 = link::BT_BAUD_RATE;
 
 /// 手册 5.1:模块启动约 300 ms,建议上电或复位 350 ms 之后再发 AT 指令。
 const BOOT_MS: u64 = 350;
@@ -70,6 +77,17 @@ const REPLY_MS: u64 = 800;
 static mut TX_BUF: [u8; 64] = [0; 64];
 
 static mut RX_BUF: [u8; 64] = [0; 64];
+
+/* 每次尝试一套独立的缓冲。同一对 static 用两次会同时存在两个 &mut,而且会
+把 UART 的生命周期钉成 'static、反过来卡住 Peri 的借用。一次性工具,
+256 字节换一个能编译的干净结构值得。 */
+static mut TX_BUF_HIGH: [u8; 64] = [0; 64];
+
+static mut RX_BUF_HIGH: [u8; 64] = [0; 64];
+
+static mut TX_BUF_LOW: [u8; 64] = [0; 64];
+
+static mut RX_BUF_LOW: [u8; 64] = [0; 64];
 
 struct Console<'d>(UartTx<'d, Blocking>);
 
@@ -144,7 +162,7 @@ async fn main(_spawner: Spawner) -> ! {
     Timer::after_millis(BOOT_MS).await;
 
     let mut config = UartConfig::default();
-    config.baudrate = FACTORY_BAUD_RATE;
+    config.baudrate = PROBE_BAUD_RATE;
     let mut bt = BufferedUart::new(
         p.UART2,
         p.PB15,
@@ -156,53 +174,39 @@ async fn main(_spawner: Spawner) -> ! {
     )
     .unwrap();
 
-    let _ = writeln!(&mut console, "\n[1] 以 {} 找模块", FACTORY_BAUD_RATE);
+    let _ = writeln!(&mut console, "\n[1] 以 {} 找模块", PROBE_BAUD_RATE);
     if at(&mut console, &mut bt, "AT").await == 0 {
         let _ = writeln!(
             &mut console,
-            "  {} 上没有模块。它可能已经是 {} 了,或者手机还连着。",
-            FACTORY_BAUD_RATE,
-            link::BT_BAUD_RATE
+            "\n# {} 上问不到模块。三种可能:\n\
+             #   模块在别的波特率上——改 PROBE_BAUD_RATE 重烧;\n\
+             #   手机还连着——连上后模块进透传,AT 会被当数据转发给对端;\n\
+             #   供电或 PB15/PB16 接线的问题。",
+            PROBE_BAUD_RATE
         );
     } else {
-        let _ = writeln!(&mut console, "\n[2] 改波特率");
-        // 从常量拼指令,而不是把数字再写一遍:这条指令和固件用的波特率必须
-        // 是同一个数,写两份就是让它们有机会分家。
-        let mut command: heapless::String<24> = heapless::String::new();
-        let _ = write!(command, "AT+UART={}", link::BT_BAUD_RATE);
-        at(&mut console, &mut bt, &command).await;
-    }
+        let _ = writeln!(&mut console, "\n[2] 查当前波特率");
+        at(&mut console, &mut bt, "AT+UART").await;
 
-    // 模块断电重启。手册说参数立即生效,但那说的是模块内部;重启一次把双方
-    // 都摆回确定的起点,免得去猜是谁没跟上。
-    let _ = writeln!(&mut console, "\n[*] 模块断电重启");
-    power.set_low();
-    Timer::after_millis(300).await;
-    power.set_high();
-    Timer::after_millis(BOOT_MS).await;
-
-    // 本机这一侧也换过去。返回值必须看:它失败的话下一步的「无回应」就不是
-    // 模块的问题,而是我们还在旧波特率上说话——两种原因症状完全一样。
-    let _ = writeln!(&mut console, "\n[3] 本机改到 {}", link::BT_BAUD_RATE);
-    match bt.set_baudrate(link::BT_BAUD_RATE) {
-        Ok(()) => {
-            let _ = writeln!(&mut console, "  set_baudrate OK");
+        if PROBE_BAUD_RATE == link::BT_BAUD_RATE {
+            let _ = writeln!(
+                &mut console,
+                "\n# 模块已经在固件要用的 {} 上。烧回正式固件即可",
+                link::BT_BAUD_RATE
+            );
+        } else {
+            let _ = writeln!(&mut console, "\n[3] 改成 {}", link::BT_BAUD_RATE);
+            // 从常量拼指令,而不是把数字再写一遍:这条指令和固件用的波特率
+            // 必须是同一个数,写两份就是让它们有机会分家。
+            let mut command: heapless::String<24> = heapless::String::new();
+            let _ = write!(command, "AT+UART={}", link::BT_BAUD_RATE);
+            at(&mut console, &mut bt, &command).await;
+            let _ = writeln!(
+                &mut console,
+                "\n# 模块收到 OK+UART= 就是改成功了(掉电不丢失)。\n\
+                 # 把 PROBE_BAUD_RATE 改回 link::BT_BAUD_RATE 再跑一遍可以验证。"
+            );
         }
-        Err(_) => {
-            let _ = writeln!(&mut console, "  set_baudrate 失败——本机仍在旧波特率上");
-        }
-    }
-
-    let _ = writeln!(&mut console, "\n[4] 读回验证");
-    if at(&mut console, &mut bt, "AT+UART").await == 0 {
-        let _ = writeln!(
-            &mut console,
-            "\n# {} 上问不到模块。若上面 set_baudrate 是 OK,那就是模块没切过去;\n\
-             # 也检查手机是否还连着(连上后 AT 会被当数据转发)。",
-            link::BT_BAUD_RATE
-        );
-    } else {
-        let _ = writeln!(&mut console, "\n# 成功。改动掉电不丢失,烧回正式固件即可");
     }
 
     // 配置完就把射频断电,别让它在这块无所事事的固件下面一直耗着。
