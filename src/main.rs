@@ -10,10 +10,11 @@
 //! onto the panel, which stays lit for `DISPLAY_ON_MS` and then goes dark.
 //!
 //! Power-on waits for the supply rail before any of that. Nothing analog is
-//! enabled and the radio is not powered until ADC0's internal monitor puts VDD
-//! at `BOOT_MIN_MV`, so a meter coming up on a harvested rail starts once, at a
-//! voltage every block downstream is rated for, rather than half-starting on the
-//! way there. Only the LED runs during the wait.
+//! enabled, the radio is not powered and the indicator is not lit until ADC0's
+//! internal monitor puts VDD at `BOOT_MIN_MV`, so a meter coming up on a
+//! harvested rail starts once, at a voltage every block downstream is rated
+//! for, rather than half-starting on the way there. Nothing runs during the
+//! wait: the rail charges against no load this firmware switched on.
 //!
 //! Past that, power-on takes one reading unasked, before the radio is up, and
 //! reports it the moment the port opens. So the meter always has a number to
@@ -118,18 +119,6 @@ async fn wait_for_request(trigger: &mut Input<'static>, link: &mut Link, address
 async fn main(spawner: Spawner) -> ! {
     let p = embassy_mspm0::init(Default::default());
 
-    // First thing after the clocks, so the indicator is up before anything
-    // that can fail or block: from here on, a dark LED means the firmware
-    // never got this far.
-    //
-    // The task pool is one deep and this is its only spawn, so the token
-    // cannot come back `Err`. Handled rather than unwrapped anyway: an
-    // indicator that failed to start is a reason to run without it, not a
-    // reason to halt a meter that is otherwise fine.
-    if let Ok(token) = led::blink(Output::new(p.PA0, Level::Low)) {
-        spawner.spawn(token);
-    }
-
     let mut meter = Meter::new(p.PA8, p.PA26);
     let mut dma = Channel::new(p.DMA_CH0, Irqs);
     let mut panel = Panel::new();
@@ -139,8 +128,8 @@ async fn main(spawner: Spawner) -> ! {
     // low when pressed; unlike S1/PA18, it does not disturb the ADC input.
     let mut trigger = Input::new(p.PB21, Pull::Up);
 
-    // Nothing above this line has drawn any current worth the name: the pins are
-    // configured, the LED is blinking, and no analog block has been enabled.
+    // Nothing above this line has drawn any current worth the name: the pins
+    // are configured, nothing is lit, and no analog block has been enabled.
     // Nothing below it runs until the rail is up.
     //
     // This is the whole of the supply gate, and it is here rather than in front
@@ -157,9 +146,24 @@ async fn main(spawner: Spawner) -> ! {
     // duty comes to. The CPU time the polling costs is a fifth of that.
     //
     // There is no deadline. A rail that never reaches BOOT_MIN_MV parks the
-    // meter here, blinking, which is the honest state to be in: no reading it
+    // meter here, dark, which is the honest state to be in: no reading it
     // could take would be in spec and nothing it drove would be either.
     supply::wait_above(BOOT_MIN_MV).await;
+
+    // The indicator starts on this side of the gate because it is a load, and
+    // the one stretch of a power cycle where a few milliamps through LED1 are
+    // worth anything is the stretch just waited out: cold-start harvest is
+    // milliwatts, and all of it belongs in the storage cap. So dark means the
+    // rail has not arrived, blinking means it has and the executor is running,
+    // and the indicator is never what kept the meter from starting.
+    //
+    // The task pool is one deep and this is its only spawn, so the token
+    // cannot come back `Err`. Handled rather than unwrapped anyway: an
+    // indicator that failed to start is a reason to run without it, not a
+    // reason to halt a meter that is otherwise fine.
+    if let Ok(token) = led::blink(Output::new(p.PA0, Level::Low)) {
+        spawner.spawn(token);
+    }
 
     // One reading on power-up, before anything can ask for it, and before the
     // radio exists. Measuring first is what the board notes ask for on a
