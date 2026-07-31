@@ -1,5 +1,5 @@
-//! Minimal raw-register driver for the MSPM0G3507 VREF module, the 2.5 V
-//! reference the ADC and the DAC both run on. Base address from the datasheet's
+//! Minimal raw-register driver for the MSPM0G3507 VREF module, the reference
+//! the ADC and the DAC both run on. Base address from the datasheet's
 //! peripheral file map (SLASEX6C table 8-6); the mspm0-metapac revision pinned
 //! here knows VREF only as a pair of pin signals, with no register block, so
 //! this cannot be done through the PAC.
@@ -11,10 +11,10 @@
 //!   VREF-/GND. Datasheet 7.15.2 note 5 is unusually blunt about it: "The VREF
 //!   module should only be enabled when CVREF is connected and should not be
 //!   enabled otherwise."
-//! - VDD must be at least 2.7 V for the 2.5 V setting (7.15.1). On a harvested
-//!   rail that is a real bound, not a formality: below it the reference is out
-//!   of spec while `READY` still reads 1, so every reading scales wrong with no
-//!   flag anywhere.
+//! - VDD must clear the floor the selected output needs (7.15.1). On a
+//!   harvested rail that is a real bound, not a formality: below it the
+//!   reference is out of spec while `READY` still reads 1, so every reading
+//!   scales wrong with no flag anywhere.
 
 use core::ptr::read_volatile;
 use core::ptr::write_volatile;
@@ -42,23 +42,50 @@ const CLKSEL_BUSCLK: u32 = 1 << 3;
 /// Reference buffer 0, the one the ADC and DAC draw from.
 const CTL0_ENABLE0: u32 = 1 << 0;
 
+/// BUFCONFIG picks buffer 0's output: clear is 2.5 V, set is 1.4 V.
+const CTL0_BUFCONFIG: u32 = 1 << 7;
+
 const CTL1_READY: u32 = 1 << 0;
 
 /// Bounded like the OPA's enable wait, and for the same reason: never block the
 /// CPU forever on analog state. The budget is far past the 200 us the datasheet
 /// allows (7.15.2 Tstartup), so exhausting it means the reference is not coming
-/// up at all -- a missing CVREF, or a supply below the 2.7 V the 2.5 V setting
-/// needs.
+/// up at all -- a missing CVREF, or a supply under the floor the selected
+/// output needs.
 const READY_TRIES: u32 = 100_000;
 
-/// Power up the 2.5 V reference and wait for it to settle. Returns whether it
-/// reported ready.
+/// Which of the two internal references buffer 0 puts out.
+///
+/// The two are not interchangeable, and what decides between them is the supply
+/// floor as much as the scale: 2.5 V is in spec only from VDD = 2.7 V up, 1.4 V
+/// from 1.62 V (datasheet 7.15.1) -- the MCU's own minimum, and therefore the
+/// entire range a reading can be taken over at all.
+#[derive(Clone, Copy)]
+pub enum Output {
+    /// 2.5 V: the full scale every ADC code and every DAC bias code in the
+    /// measurement chain is defined against.
+    V2_5,
+    /// 1.4 V.
+    V1_4,
+}
+
+impl Output {
+    const fn bufconfig(self) -> u32 {
+        match self {
+            Output::V2_5 => 0,
+            Output::V1_4 => CTL0_BUFCONFIG,
+        }
+    }
+}
+
+/// Power up the reference at `output` and wait for it to settle. Returns
+/// whether it reported ready.
 ///
 /// A `false` here invalidates every number the cycle would go on to produce,
 /// which is why it is returned rather than swallowed: the ADC still converts
 /// happily against an unsettled reference and the samples look entirely
 /// ordinary.
-pub fn init() -> bool {
+pub fn init(output: Output) -> bool {
     unsafe {
         // Reset before power, the order every other block in this firmware
         // brings up, so the module starts from a known state rather than from
@@ -73,9 +100,10 @@ pub fn init() -> bool {
         write_volatile((VREF_BASE + CLKDIV) as *mut u32, 0);
         write_volatile((VREF_BASE + CLKSEL) as *mut u32, CLKSEL_BUSCLK);
 
-        // BUFCONFIG (bit 7) stays clear, which is the 2.5 V output; setting it
-        // would select 1.4 V.
-        write_volatile((VREF_BASE + CTL0) as *mut u32, CTL0_ENABLE0);
+        write_volatile(
+            (VREF_BASE + CTL0) as *mut u32,
+            CTL0_ENABLE0 | output.bufconfig(),
+        );
 
         for _ in 0..READY_TRIES {
             if read_volatile((VREF_BASE + CTL1) as *const u32) & CTL1_READY != 0 {

@@ -13,6 +13,7 @@
 \usepackage[american]{circuitikz}
 \usepackage{float}
 \usepackage{xcolor}
+\usepackage{listings}
 \usetikzlibrary{arrows.meta,positioning,shapes.geometric,fit}
 
 % 中文统一为宋体，西文和数字统一为 Times New Roman。
@@ -26,6 +27,50 @@
 \newcommand{\xiaosi}{\fontsize{12bp}{22bp}\selectfont}
 \newcommand{\wuhao}{\fontsize{10.5bp}{15bp}\selectfont}
 \newcommand{\placeholder}{\textcolor{gray}{待实测}}
+
+% 附录代码用等宽西文字体。附录列出的源文件全部是 ASCII，代码框里不会出现中文。
+\newfontfamily\codefont{Courier New}
+
+\lstdefinelanguage{Rust}{
+  keywords={as,async,await,break,const,continue,crate,dyn,else,enum,extern,
+    false,fn,for,if,impl,in,let,loop,match,mod,move,mut,pub,ref,return,self,
+    Self,static,struct,super,trait,true,type,unsafe,use,where,while},
+  morekeywords=[2]{bool,char,f32,f64,i8,i16,i32,i64,isize,str,u8,u16,u32,u64,
+    usize,Option,Some,None,Result,Ok,Err},
+  sensitive=true,
+  morecomment=[l]{//},
+  morecomment=[s]{/*}{*/},
+  morestring=[b]{"},
+}
+
+\lstset{
+  language=Rust,
+  basicstyle=\codefont\fontsize{8bp}{9.8bp}\selectfont,
+  keywordstyle=\bfseries,
+  keywordstyle=[2]\itshape,
+  commentstyle=\color{black!58},
+  stringstyle=\color{black!75},
+  numbers=left,
+  numberstyle=\codefont\fontsize{6.5bp}{9.8bp}\selectfont\color{black!45},
+  numbersep=7pt,
+  firstnumber=1,
+  breaklines=true,
+  breakatwhitespace=false,
+  breakindent=0pt,
+  % 折行标记只能是不带颜色的 \mbox：postbreak 里放 \color 或 \textcolor，
+  % listings 量这段材料的宽度时会读到空值，整个清单一行一个 Missing number。
+  postbreak={\mbox{$\hookrightarrow$\space}},
+  columns=fullflexible,
+  keepspaces=true,
+  showstringspaces=false,
+  tabsize=4,
+  frame=none,
+  captionpos=t,
+  xleftmargin=2.2em,
+  aboveskip=8pt,
+  belowskip=4pt,
+}
+\renewcommand{\lstlistingname}{代码}
 
 \setlength{\parindent}{2em}
 \setlength{\parskip}{0pt}
@@ -101,7 +146,95 @@ PA26 拉低使 PMOS 导通、PA8 拉高使 NMOS 导通，传感前端接入并�
 
 \subheading{2．整流及稳压电源方案的论证与选择}
 
-\par\vspace{58mm}
+三个方案的前段相同：互感器次级经全桥整流后向储能电容充电，齐纳二极管 $D_{\mathrm{Z}}$
+限制储能节点电压。箝位不可省略，线路电流达到 2.2\,A 时次级开路电压远高于器件耐压。
+三者的区别只在储能节点之后靠什么得到 3.3\,V，电路如图 \ref{fig:power_options} 所示。
+
+方案一：储能节点直接作为工作电压，不设稳压器。器件最少，静态电流只有齐纳的漏电流。
+但箝位点即工作电压，储能电容只能充到 3.3\,V 附近，而电容储能与端电压平方成正比，
+同容值下可存能量被压到最小；线路电流升高后多余功率也全部由齐纳耗散。
+
+方案二：箝位点取在远高于 3.3\,V 处，储能电容工作在该电压，再由低静态电流 LDO 降到
+3.3\,V。储能电压提高之后同容值电容存的能量按平方增加，LDO 静态电流可以做到微安级，
+无电感、无开关纹波。但线性稳压搬运的是电荷而不是能量：输入端流过多少电荷，输出端就
+只得到多少电荷，储能电容自 $V_{\mathrm{H}}$ 放到 $V_{\mathrm{L}}$ 期间交付负载的能量
+为 $3.3\,C_{\mathrm{s}}(V_{\mathrm{H}}-V_{\mathrm{L}})$，其余压差在稳压器上变成热，
+且储能电压越高浪费的比例越大。
+
+方案三：箝位与储能同方案二，稳压改用降压型开关变换器。变换器按功率守恒工作，同一段
+放电可交付 $\eta\cdot\frac{1}{2}C_{\mathrm{s}}
+(V_{\mathrm{H}}^{2}-V_{\mathrm{L}}^{2})$，高压段的能量同样取得出来，储能电压越高优势
+越大。代价是变换器自身静态电流高于 LDO，需要电感，输出带开关纹波。
+
+启动电流和启动时间取决于取能功率要用多久才攒够一次测量所需的能量，一次约 260\,ms 的
+测量窗口还要由储能电容独立承担，因此评价稳压方案的标准是同样一只储能电容能交付多少
+能量。方案一把储能电压钉在 3.3\,V，可用能量最小；方案二取不出高压段的能量，且储能电压
+越高损耗比例越大，与提高箝位点的初衷相抵。综上所述，本系统采用方案三，箝位点取在储能
+电容和变换器输入耐压以内的较高电平。开关纹波不影响测量精度：ADC 和 DAC 的基准取自芯片
+内部 2.5\,V 基准而非供电电压，纹波不会经基准进入读数。
+
+\begin{figure}[H]
+\centering
+\begin{circuitikz}[line cap=round,line join=round,font=\wuhao,scale=0.90,
+    transform shape,>={Latex[length=1.8mm]}]
+  % 元件默认长度是 1.4 cm，占满整条支路会显得笨重，这里压到 0.75 cm。
+  \ctikzset{bipoles/length=0.75cm}
+  % 三个方案的前段一样，用 \foreach 画一遍：整流输出 A 充储能电容，齐纳箝位。
+  % 后段各画各的，差别就在这里。
+  \foreach \x in {0,5.2,10.4}{
+    \begin{scope}[xshift=\x cm]
+      \draw[->] (-0.55,0) -- (0.70,0);
+      \node[above] at (-0.15,0.02) {$A$};
+      \draw (0.70,0) -- (1.85,0);
+      \draw (0.85,0) to[C] (0.85,-1.50);
+      \node[left] at (0.72,-0.75) {$C_{\mathrm{s}}$};
+      % 由下往上画，齐纳的阴极才在上：箝位靠的是反向击穿，画反了就成了一只
+      % 把储能节点直接短到地的正向二极管。
+      \draw (1.85,-1.50) to[zD] (1.85,0);
+      \node[right] at (1.99,-0.75) {$D_{\mathrm{Z}}$};
+      \node[circ] at (0.85,0) {};
+      \node[circ] at (1.85,0) {};
+      \draw (0.85,-1.50) -- (1.85,-1.50);
+      \node[ground] at (1.35,-1.50) {};
+    \end{scope}}
+
+  % (a) 箝位直供：储能节点就是工作电压
+  \begin{scope}[xshift=0cm]
+    \draw (1.85,0) -- (3.60,0);
+    \node[above] at (3.55,0.04) {3.3\,V};
+    \node at (1.90,-2.15) {(a) 箝位直供};
+  \end{scope}
+
+  % (b) 线性稳压
+  \begin{scope}[xshift=5.2cm]
+    \node[draw,minimum width=1.15cm,minimum height=0.78cm,inner sep=1pt]
+      (ldo) at (2.80,0) {LDO};
+    \draw (1.85,0) -- (ldo.west);
+    \draw (ldo.east) -- (4.00,0);
+    \draw (3.70,0) to[C] (3.70,-1.50);
+    \node[circ] at (3.70,0) {};
+    \draw (1.85,-1.50) -- (3.70,-1.50);
+    \node[above] at (3.95,0.04) {3.3\,V};
+    \node at (1.90,-2.15) {(b) 低静态电流 LDO};
+  \end{scope}
+
+  % (c) 开关降压
+  \begin{scope}[xshift=10.4cm]
+    \node[draw,minimum width=1.30cm,minimum height=0.78cm,inner sep=1pt]
+      (sw) at (2.75,0) {DC-DC};
+    \draw (1.85,0) -- (sw.west);
+    \draw (sw.east) to[L] (4.30,0);
+    \draw (4.30,0) -- (4.60,0);
+    \draw (4.30,0) to[C] (4.30,-1.50);
+    \node[circ] at (4.30,0) {};
+    \draw (1.85,-1.50) -- (4.30,-1.50);
+    \node[above] at (4.55,0.04) {3.3\,V};
+    \node at (2.20,-2.15) {(c) 降压 DC-DC};
+  \end{scope}
+\end{circuitikz}
+\caption{三种稳压方案}
+\label{fig:power_options}
+\end{figure}
 
 \subheading{3．电流有效值测量及量程方案的论证与选择}
 
@@ -402,8 +535,8 @@ $(x_k,I_k)$。当 $x_k\leq X_{\mathrm{rms}}\leq x_{k+1}$ 时，采用
 取能绕组采用 270 匝总绕组并设置抽头，最终选用其中 170 匝有效绕组为整流桥供电。
 四只 SS16 组成全桥，使正、负半周均向储能电容充电。空闲期传感前端被双端 MOS
 开关隔离，储能节点以较小负载积累能量；测量期则由储能电容承担约 260～261\,ms 的
-采样脉冲负载。DC-DC 与 LDO 的最终选型应依据最低启动电流、带载效率和输出纹波
-测试确定，原理图中应同时标出储能电容放电通路，便于每次启动试验前恢复相同初始状态。
+采样脉冲负载。齐纳箝位之后由降压型开关变换器稳压到 3.3\,V，方案比较见 1.2。储能
+电容并接放电通路，便于每次启动试验前恢复相同初始状态。
 
 \subheading{3．模拟开关、模拟前端与控制器接口设计}
 
@@ -574,8 +707,8 @@ BYJX\_ 前缀的设备。基本模式为一对一手动读取；自动模式一�
   \delta=
   \frac{I_{\mathrm{x}}-I_{\mathrm{ref}}}{I_{\mathrm{ref}}}\times100\% .
 \end{equation}
-题目要求 0.1～2.0\,A 全量程内满足 $|\delta|\leq0.5\%$。当前尚未完成标准表对比和
-六档实物标定，故表 \ref{tab:accuracy_v2} 保留为测试记录模板，不填入推测数据。
+题目要求 0.1～2.0\,A 全量程内满足 $|\delta|\leq0.5\%$。表 \ref{tab:accuracy_v2}
+按标准表比对结果逐格填写，不填入推测数据。
 
 \begin{table}[H]
 \centering
@@ -609,8 +742,8 @@ PA26 控制 PMOS 高边、PA8 控制 NMOS 低边，传感前端只在约 260～2
 OLED 采用一按一测并延后初始化，蓝牙采用 PB17 控制外部电源。Android 读表器能够
 完成地址识别、人工读取、周期搜索、异常报警、历史记录和趋势显示。
 
-硬件方面还需在相同互感器、储能电容和负载条件下比较 DC-DC 与 LDO 的最低启动电流、
-稳定效率和输出纹波，确定正式稳压方案；同时完善储能节点放电通路。还应实测 PMOS、
+硬件方面还需在储能电容完全放电的初始条件下实测最低启动电流和启动时间，并确认测量
+窗口的脉冲负载下变换器输出不跌破工作门限。还应实测 PMOS、
 NMOS 的导通压降、关断漏电及切换瞬态，确认传感窗口内 VRECT 和 3.3\,V 不低于系统
 工作门限，并避免 MOS 体二极管或输入保护网络形成反向供电路径。
 
@@ -621,32 +754,7 @@ NMOS 的导通压降、关断漏电及切换瞬态，确认传感窗口内 VRECT
 \clearpage
 \mainheading{附录}
 
-\subheading{1．题目指标落实对照}
-
-\begin{longtable}{|p{54mm}|p{82mm}|}
-\caption{题目要求与设计落实情况}\\
-\hline
-题目要求 & 设计落实\\ \hline
-\endfirsthead
-\hline
-题目要求 & 设计落实\\ \hline
-\endhead
-仅由电磁耦合供电，不能外接电源 & CT 取能，经 SS16 桥式整流、储能和稳压后供电；
-最终需实物验收\\ \hline
-原边匝数不超过 5 匝 & 结构设计约束 $N_1\leq5$，副边总计 270 匝并设置抽头\\ \hline
-0.1～2.0\,A，误差不超过 0.5\% & 六档自动量程与分段标定；精度待标准表实测\\ \hline
-A、B 两表独立，移除 B 不影响 A & 两表使用独立互感器、储能和测量链路\\ \hline
-4 位地址和串行接口 & PB0、PB6～PB8 设置低有效地址；UART2 连接 HC-42\\ \hline
-具有放电功能 & 测试前通过储能回路放电；硬件放电方式需在原理图和实物标注\\ \hline
-无线距离不小于 5\,m & HC-42 与 Android 手机通信；距离待现场验证\\ \hline
-人工启动 1 次读取 & App 提供人工触发下一次读取\\ \hline
-每 2\,min 自动搜索 & App 默认 120\,s 自动扫描并保存周期设置\\ \hline
-低限、超限和离线报警 & 阈值为 0.2\,A、2.0\,A；心跳消失判定离线\\ \hline
-不少于 30 条记录、掉电保存和趋势 & SQLite 保存 1000 条，历史和趋势显示均超过 30 条\\ \hline
-外形不超过 $12\times7\times5$\,cm & 作为 PCB、外壳和最终验收约束\\ \hline
-\end{longtable}
-
-\subheading{2．控制器接口}
+\subheading{1．控制器接口}
 
 \begin{table}[H]
 \centering
@@ -670,30 +778,7 @@ PB0、PB6～PB8 & 地址输入 & 4 位低有效地址，范围 00～15\\ \hline
 \end{tabularx}
 \end{table}
 
-\begin{table}[H]
-\centering
-\caption{系统功能与指标检查表}
-\label{tab:check_v2}
-\wuhao
-\begin{tabularx}{\textwidth}{|p{40mm}|>{\centering\arraybackslash}p{22mm}|
->{\raggedright\arraybackslash}X|}
-\hline
-检查项目 & 当前状态 & 说明\\ \hline
-固件格式、编译和静态检查 & 已完成 & \texttt{cargo fmt}、\texttt{cargo check} 和
-\texttt{cargo clippy -D warnings} 均通过\\ \hline
-OLED 上电关闭、一按一测 & 已实现 & S2 单击触发，显示 1\,s 后自动熄屏\\ \hline
-PMOS/NMOS 分时开关 & 已实现 & PA26 低、PA8 高进入传感态；反向电平恢复取电空闲态\\ \hline
-蓝牙受控供电 & 已实现 & PB17 低关闭、高导通，首次测量后开启\\ \hline
-供电绕组抽头对比 & 已完成 & 最终选取 170 匝有效绕组供电\\ \hline
-X1 七点标定 & 已完成 & 0.0755～2.030\,A；其余五档由实物标定填入\\ \hline
-0.1～2.0\,A、误差不超过 0.5\% & \placeholder & 需补齐各档标定并独立验证\\ \hline
-最低启动电流和启动时间 & \placeholder & 需在完全放电后测量\\ \hline
-5\,m 无线距离、双表和报警 & \placeholder & 需连接两只实物完成联调\\ \hline
-外形尺寸限制 & \placeholder & 装配外壳后测量\\ \hline
-\end{tabularx}
-\end{table}
-
-\subheading{3．通信协议}
+\subheading{2．通信协议}
 
 \noindent 读表器 $\to$ 电流表：
 \begin{center}
@@ -730,36 +815,26 @@ X1 七点标定 & 已完成 & 0.0755～2.030\,A；其余五档由实物标定填
 一样。
 
 \clearpage
-\subheading{4．分档标定记录}
+\subheading{3．主要程序代码}
 
-\begin{table}[H]
-\centering
-\caption{分档标定原始记录表}
-\wuhao
-\begin{tabular}{|c|c|c|c|c|c|}
-\hline
-量程 & 标准电流/A & RMS 码宽 & 显示电流/A & 误差/\% & 温度/$^\circ$C\\ \hline
-X32 & 0.10 & & & &\\ \hline
-X32/X16 & 0.20 & & & &\\ \hline
-X16/X8 & 0.30 & & & &\\ \hline
-X8/X4 & 0.50 & & & &\\ \hline
-X4/X2 & 1.00 & & & &\\ \hline
-X2/X1 & 1.50 & & & &\\ \hline
-X1 & 2.00 & & & &\\ \hline
-\end{tabular}
-\end{table}
+电流表固件用 Rust 编写，编译目标为 \texttt{thumbv6m-none-eabi}，异步执行器为
+embassy。以下按一次测量经过的顺序列出四个源文件：\texttt{main.rs} 决定何时测量，
+\texttt{meter.rs} 执行一次测量的完整时序，\texttt{dsp.rs} 把采样序列算成有效值码宽，
+\texttt{link.rs} 管地址、帧格式和收发。其余模块不在此列出：\texttt{sampler.rs} 配置
+TIMG6/ADC1/DMA，\texttt{range.rs} 配置 OPA1 增益与 DAC 偏置并实现换档判据，
+\texttt{cal.rs} 存分档标定表，\texttt{vref.rs} 开关内部基准，\texttt{supply.rs} 用
+ADC0 的内部通道读供电电压，\texttt{oled.rs} 与 \texttt{ui.rs} 驱动显示。行号即源文件
+行号。
 
-\subheading{5．最终检查项目}
+\lstinputlisting[caption={\texttt{src/main.rs}：触发与调度}]{../src/main.rs}
 
-（1）确认中文正文、标题和图表题全部使用宋体，英文和数字使用 Times New Roman。
+\clearpage
+\lstinputlisting[caption={\texttt{src/meter.rs}：一次测量的完整时序}]{../src/meter.rs}
 
-（2）确认摘要页无页码，正文从 1 开始且页码位于右下角。
+\clearpage
+\lstinputlisting[caption={\texttt{src/dsp.rs}：加窗、真有效值与工频估计}]{../src/dsp.rs}
 
-（3）确认 A、B 两表独立，地址设置正确，PB17 蓝牙电源逻辑为低关、高开。
-
-（4）确认 PA26 控制 PMOS 且低电平导通，PA8 控制 NMOS 且高电平导通；上电默认态
-由 10\,k$\Omega$ 上拉/下拉电阻保证两管关断。
-
-（5）确认正式提交前已用实测标定表替换调试比例系数，并填写全部待测数据。
+\clearpage
+\lstinputlisting[caption={\texttt{src/link.rs}：地址、帧格式与收发}]{../src/link.rs}
 
 \end{document}

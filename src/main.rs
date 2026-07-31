@@ -30,7 +30,8 @@
 //!   `range`   -- OPA1 PGA, DAC bias pivot, and the autoranger
 //!   `dsp`     -- windowing, true RMS
 //!   `cal`     -- per-range LSB -> amps tables
-//!   `ui`      -- the OLED readout
+//!   `supply`  -- the rail itself, off ADC0's internal monitor
+//!   `ui`      -- the OLED readout, held dark until that rail is up
 //!   `led`     -- the power-on indicator
 
 use embassy_executor::Spawner;
@@ -51,6 +52,7 @@ mod meter;
 mod oled;
 mod range;
 mod sampler;
+mod supply;
 mod ui;
 mod vref;
 
@@ -167,13 +169,18 @@ async fn main(spawner: Spawner) -> ! {
             }
         };
 
-        // Report before the panel: the reader is waiting on an answer, and the
-        // second the display spends lighting up is a second the radio could
-        // have spent delivering it.
+        // Report before the panel: the reader is waiting on an answer, and
+        // every second the display spends lighting up is a second the radio
+        // could have spent delivering it. `show` can also sit indefinitely
+        // waiting for the rail to reach the voltage the SSD1306 is brought up
+        // at, and that is the stronger reason for this order -- a reading whose
+        // frame has already gone out is a reading the reader has, whatever the
+        // panel does next. What the wait does hold is everything after it: no
+        // heartbeat and no answer to `MEAS` until the rail is up.
         if let Some(link) = &mut link {
             link.send(address.read(), &reading);
         }
-        panel.show(&reading);
+        panel.show(&reading).await;
 
         // Anything that arrived while the meter was busy is dropped here, so
         // the next `wait_command` starts from silence -- the same rule the
