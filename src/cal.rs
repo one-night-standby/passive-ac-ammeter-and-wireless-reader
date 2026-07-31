@@ -41,74 +41,82 @@ use crate::range::{Gain, Range};
 /// 2 A, so the over-limit alarm region is interpolated rather than
 /// extrapolated.
 /// `CAL_X1` is the `Direct` range, and on this front end it is the range the
-/// bench actually runs in -- the autoranger never leaves it, because the input
-/// sits well below mid-rail and its swing already fills the headroom that DC
-/// leaves. Every row below came off a frame reporting `x1`.
+/// bench actually runs in -- the autoranger never leaves it. That is not a
+/// fault: the input's own swing already fills 76-89% of the headroom its DC
+/// leaves, at every current, so no gain step fits and unity is the correct
+/// choice. It stays that way while the front end's DC tracks its signal,
+/// because a PGA multiplies both.
 ///
-/// Reduced from a 91-frame run (`cal.csv`, 2026-07-31, reference SDM3055X-E):
-/// readings within 1% of each other in current are one bench point and enter
-/// as their median, and a row is kept only if its RMS is at least 6 LSB above
-/// the last kept one. That floor is twice the single-reading standard
-/// deviation measured in the run, and it is what stops the table from
-/// interpolating between two numbers whose difference is noise.
+/// Reduced from a 196-frame run (`cal.csv`, 2026-07-31 21:54-21:59, reference
+/// SDM3055X-E, ADC on the 2.5 V VREF): readings within 1% of each other in
+/// current are one bench point and enter as their median, and a row is kept
+/// only if its RMS is at least 3% above the last kept one. Below that step the
+/// residual stops improving -- the extra rows are fitting noise, not curve.
 ///
-/// Three things this table does not cover, all of them the run's limits rather
-/// than the format's:
+/// The run swept up and then back down, and **both directions are in here on
+/// purpose**. At matched current the descending pass reads 0.59% lower than
+/// the ascending one, consistently enough to be a systematic rather than
+/// scatter; folding the two together puts the table between them, which shows
+/// up as a residual of +0.17% on the ascending points and -0.24% on the
+/// descending ones. Half the error each way beats none in one direction and
+/// all of it in the other. It also cancels the pairing lag to first order: the
+/// reference reading trails the meter's window by ~300 ms, which biases a
+/// rising sweep one way and a falling sweep the other.
 ///
-/// - Nothing below 0.59 A or above 2.79 A. The `< 0.2 A` and `> 2 A` alarm
-///   regions of 2(3) are therefore reached by extending the end segments, not
-///   by interpolation.
-/// - 1.42 A to 1.75 A is one long segment. The front end plateaus there --
-///   19% more current moved the RMS by less than the reading noise -- so the
-///   run cannot resolve that band at all and the segment bridges it. Readings
-///   landing inside it are worth about 10%, and no table can fix that; the
-///   front end has to.
-/// - Fit residual against the run's own 88 usable points is 0.11% median,
-///   0.83% at the 90th percentile outside that plateau. In-sample, so it
-///   bounds how well the table represents this run, not how well it will read
-///   the next one.
+/// What bounds this table is not the table:
 ///
-/// One frame was discarded: 3.498 A reading 471.33 LSB, below the 2.79 A
-/// cluster in both RMS and probe mean. Both columns must ascend, so it could
-/// not be entered even if it were believed, and its shape is a mis-paired
-/// sample taken while the load was moving rather than a saturating front end.
+/// - Per-frame scatter is 0.45% (1 sigma, from local fits within one pass).
+///   Fit residual is 0.238% median and 0.714% at the 90th percentile, and it
+///   barely moves between 82 rows and 38 -- both numbers are the run's noise
+///   and its direction offset, not the interpolation.
+/// - Nothing below 0.55 A or above 2.32 A. Worse, the four frames above that
+///   came back `OVER`: at 2.33 A the probe already puts the waveform's peak at
+///   code 4107 against a 4095 ceiling. The `> 2 A` alarm region of 2(3) is
+///   therefore only about 15% wide before the front end runs out of window,
+///   and `< 0.2 A` is reached by extending the first segment.
 ///
-/// STALE: these rows were taken with ADC1 converting against VDDA. The
-/// converter now runs on the 2.5 V VREF, so the same input produces a code
-/// larger by roughly VDDA/2.5, and the front end was rebiased for that window
-/// besides. Every number here is wrong until the bench is run again; it is kept
-/// only as the record of the configuration it was measured in.
+/// Re-derive from the ascending pass alone if the load is only ever ramped up
+/// in service; the merge above is the choice that assumes least about that.
 pub static CAL_X1: &[(f32, f32)] = &[
-    (193.74, 0.5879),
-    (200.27, 0.6044),
-    (206.56, 0.6252),
-    (216.92, 0.6493),
-    (226.51, 0.6817),
-    (234.84, 0.7110),
-    (242.51, 0.7409),
-    (251.36, 0.7762),
-    (260.19, 0.8166),
-    (269.10, 0.8731),
-    (277.95, 0.9146),
-    (284.57, 0.9597),
-    (293.35, 1.0017),
-    (304.34, 1.0632),
-    (314.81, 1.1358),
-    (322.48, 1.1782),
-    (333.16, 1.2782),
-    (339.47, 1.3126),
-    (347.10, 1.3744),
-    (356.18, 1.4494),
-    (369.78, 1.7468),
-    (379.03, 1.8276),
-    (386.26, 1.9019),
-    (393.48, 1.9550),
-    (421.72, 2.1182),
-    (458.96, 2.3075),
-    (467.09, 2.5345),
-    (500.50, 2.7848),
+    (259.75, 0.5527),
+    (271.67, 0.5756),
+    (280.33, 0.5951),
+    (289.14, 0.6122),
+    (299.88, 0.6354),
+    (309.81, 0.6595),
+    (322.31, 0.6832),
+    (336.05, 0.7120),
+    (349.23, 0.7388),
+    (362.63, 0.7689),
+    (376.16, 0.7997),
+    (388.32, 0.8245),
+    (405.35, 0.8615),
+    (423.26, 0.8976),
+    (441.63, 0.9384),
+    (459.22, 0.9711),
+    (474.15, 1.0086),
+    (493.55, 1.0454),
+    (508.72, 1.0789),
+    (525.61, 1.1145),
+    (545.61, 1.1566),
+    (568.28, 1.2045),
+    (593.00, 1.2569),
+    (617.78, 1.3135),
+    (646.17, 1.3652),
+    (666.95, 1.4165),
+    (702.75, 1.4760),
+    (727.28, 1.5288),
+    (762.63, 1.6171),
+    (790.15, 1.6907),
+    (814.84, 1.7077),
+    (843.12, 1.7820),
+    (879.33, 1.8648),
+    (918.48, 1.9214),
+    (953.58, 2.0040),
+    (993.20, 2.1032),
+    (1029.83, 2.1726),
+    (1067.80, 2.2633),
 ];
-
 pub static CAL_X2: &[(f32, f32)] = &[];
 
 pub static CAL_X4: &[(f32, f32)] = &[
@@ -146,13 +154,15 @@ pub fn cal_for(range: Range) -> &'static [(f32, f32)] {
 ///
 /// Fitted to the same run as `CAL_X1`, by least squares on *relative* error (a
 /// reading is judged as a percentage) and through the origin (the only shape
-/// `lsb_to_amps` can use here). Worst case 38% across that run's span, which is
-/// what a single straight line is worth against a curve whose local slope
-/// moves by 2.5x. A fallback, not a calibration.
+/// `lsb_to_amps` can use here). Worst case 2.3% across that run's span -- the
+/// rebiased front end is nearly linear, so one straight line goes a long way
+/// here. Still a fallback and not a calibration: it says nothing about the
+/// five PGA steps it actually serves, which it reaches by the nominal ladder
+/// ratio from a run that never left x1.
 ///
 /// Written to the shortest decimal that round-trips through f32, so the source
 /// does not imply a precision this constant does not have.
-pub const CAL_FALLBACK_A_PER_LSB: f32 = 0.0034627696;
+pub const CAL_FALLBACK_A_PER_LSB: f32 = 0.0021205244;
 
 /// The gain `CAL_FALLBACK_A_PER_LSB` was fitted at.
 pub const CAL_FALLBACK_GAIN: f32 = 1.0;
