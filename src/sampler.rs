@@ -219,7 +219,6 @@ pub fn init_timer() {
 /// Factored out of the main loop so the probe and the measurement frame run
 /// the identical arming sequence -- the pieces that are easy to drop (the
 /// timer stop, the DMAEN re-arm) are exactly the ones that fail silently.
-#[allow(dead_code)] // Used by diagnostic binaries that do not poll a button.
 pub fn capture(dma: &mut Channel<'_>, dst: &mut [u32]) -> bool {
     capture_with_poll(dma, dst, || {})
 }

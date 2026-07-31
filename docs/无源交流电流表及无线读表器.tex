@@ -1,0 +1,235 @@
+\documentclass[12pt]{article}
+\usepackage{fontspec}\usepackage{xeCJK}\usepackage{geometry}
+\usepackage{fancyhdr}\usepackage{titlesec}\usepackage{caption}
+\usepackage{graphicx}\usepackage{amsmath}\usepackage{booktabs}
+\usepackage{tikz}\usetikzlibrary{positioning,arrows.meta,fit,calc,backgrounds}
+\usepackage[RPvoltages]{circuitikz}
+\usepackage{listings}\usepackage{xcolor}
+
+% Rust 代码清单样式（仅 ASCII，避免 CJK 进 listing）
+\definecolor{cmt}{RGB}{110,120,130}
+\definecolor{kw}{RGB}{20,70,160}
+\definecolor{str}{RGB}{160,60,40}
+\lstdefinestyle{rust}{
+  basicstyle=\ttfamily\footnotesize, keywordstyle=\color{kw}\bfseries,
+  commentstyle=\color{cmt}\itshape, stringstyle=\color{str},
+  numbers=left, numberstyle=\tiny\color{cmt}, numbersep=6pt,
+  showstringspaces=false, breaklines=true, columns=fullflexible,
+  frame=single, framesep=4pt, xleftmargin=14pt, aboveskip=6pt, belowskip=2pt,
+  morekeywords={let,mut,fn,for,in,if,else,while,loop,struct,impl,pub,const,
+    as,return,self,Self,f32,i32,u32,i16,u16,usize,i64,u64}}
+
+\geometry{a4paper, portrait, top=3cm, bottom=2cm, left=2.5cm, right=2.5cm,
+  headheight=0pt, headsep=0pt, footskip=1.2cm}
+
+\setmainfont{Times New Roman}
+\setCJKmainfont{STSong} % macOS 无 SimSun；STSong 同为宋体。Windows/Overleaf 可改回 SimSun
+\xeCJKsetup{AutoFakeBold=2.5}
+
+\newcommand{\sanhao}{\fontsize{16pt}{22pt}\selectfont}
+\newcommand{\sihao}{\fontsize{14pt}{22pt}\selectfont}
+\newcommand{\xiaosi}{\fontsize{12pt}{22pt}\selectfont}
+\newcommand{\wuhao}{\fontsize{10.5pt}{15pt}\selectfont}
+
+\titleformat{\section}{\sanhao\bfseries}{\thesection}{1em}{}
+\titleformat{\subsection}{\sihao\bfseries}{\thesubsection}{1em}{}
+\titleformat{\subsubsection}{\xiaosi\bfseries}{\thesubsubsection}{1em}{}
+\titlespacing{\section}{0pt}{12pt}{6pt}
+\titlespacing{\subsection}{0pt}{6pt}{6pt}
+
+\DeclareCaptionFont{wuhao}{\wuhao}
+\captionsetup{font=wuhao, labelsep=quad}
+\renewcommand{\figurename}{图}
+\renewcommand{\tablename}{表}
+
+% 浮动排布：放宽比例限制，避免表格聚集成难看的纯浮动页
+\renewcommand{\textfraction}{0.05}
+\renewcommand{\topfraction}{0.95}
+\renewcommand{\bottomfraction}{0.95}
+\renewcommand{\floatpagefraction}{0.85}
+
+\pagestyle{fancy}\fancyhf{}
+\renewcommand{\headrulewidth}{0pt}
+\fancyfoot[R]{\wuhao\thepage}
+
+
+\begin{document}
+\xiaosi
+
+\newpage
+\setcounter{page}{1}
+
+% ===== 摘要 =====
+\begin{center}
+  {\sanhao\bfseries 摘\quad 要}
+\end{center}
+\noindent 本作品完成了一个无源交流电流表及无线读表器，该表由变压器，电流互感器，电磁耦合供电模块，TI MSPM0G507 单片机四部分构成。
+
+\vspace{6pt}
+\noindent{\xiaosi\bfseries 关键词：}无线读表器；电流互感器；
+
+\newpage
+\setcounter{page}{1}
+
+% ===== 正文 =====
+
+% TODO 硬件：系统方案、取电前端、传感通道、放电回路、读表器硬件
+
+\section{程序设计}
+\subsection{软件总体结构}
+软件以测量周期为单位循环执行，流程见图~\ref{fig:flow}。每周期依次完成探测帧采集与量程判定、
+测量帧采集、有效值计算、标定换算、显示与无线发送。采样由定时器触发 ADC、DMA 成帧，采样间隔
+由时钟决定。主要参数见表~\ref{tab:param}。
+
+\begin{figure}[htbp]\centering
+\begin{tikzpicture}[
+  font=\wuhao,
+  blk/.style={draw, rounded corners=2pt, align=center, minimum height=10mm,
+    inner sep=2pt, fill=black!3, text width=17mm},
+  >={Stealth[length=2mm]}, line width=0.4pt, node distance=3mm]
+  \node[blk] (probe) {探测帧\\$\times1$ 直采\\160 点/40\,ms};
+  \node[blk, right=of probe] (pick) {量程判定\\$G$、DAC 码};
+  \node[blk, right=of pick] (main) {测量帧\\4\,ksps\\800 点};
+  \node[blk, right=of main] (rms) {加权有效值\\（LSB）};
+  \node[blk, right=of rms] (cal) {分档标定\\（A）};
+  \node[blk, right=of cal] (out) {OLED 显示\\无线发送};
+  \draw[->] (probe) -- (pick);  \draw[->] (pick) -- (main);
+  \draw[->] (main) -- (rms);    \draw[->] (rms) -- (cal);
+  \draw[->] (cal) -- (out);
+  \draw[->] (out.south) -- ++(0,-3mm) -| (probe.south);
+\end{tikzpicture}
+  \caption{测量周期流程}
+  \label{fig:flow}
+\end{figure}
+
+\begin{table}[htbp]\centering
+\caption{采样与测量参数}
+\label{tab:param}
+\wuhao
+\begin{tabular}{ll}
+\toprule
+参数 & 取值\\
+\midrule
+采样频率 $f_s$      & 4\,kHz\\
+帧长 $N$            & 800 点（200\,ms，10 个工频周期）\\
+探测帧长            & 160 点（40\,ms）\\
+ADC                 & 12 位，参考 $V_{DDA}/V_{SSA}$，满量程 $0\text{--}4095$\\
+增益档位            & $\times1$、$\times2$、$\times4$、$\times8$、$\times16$、$\times32$\\
+窗函数              & 周期型 Hann\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{交流电流有效值的数字测量}
+交流电流有效值定义为 $I=\sqrt{\frac1T\int_0^T i^2(t)\,\mathrm{d}t}$。对等间隔采样序列 $x[n]$，
+取整数枢轴 $p$、窗函数 $w[n]=\tfrac12\bigl(1-\cos\frac{2\pi n}{N}\bigr)$，加权直流与加权有效值为
+\begin{equation}
+  \delta=\frac{\sum_n w[n]\,(x[n]-p)}{\sum_n w[n]},\qquad
+  X_{\text{rms}}=\sqrt{\frac{\sum_n w[n]\,\bigl(x[n]-p-\delta\bigr)^2}{\sum_n w[n]}}\,.
+\end{equation}
+帧长取工频周期的整数倍，$N=f_s M/f=800$（$M=10$，$f=50$\,Hz）。误差按下列各项估算，汇总于
+表~\ref{tab:budget}。
+
+\textbf{非同步采样误差}\quad 工频与采样时钟均存在偏差，实际帧长不严格为整周期，平方和中残留
+二倍频分量，其幅度等于窗序列频响在 $2f$ 处的取值。本设计 $2f$ 对应第 20 号频点：矩形窗该处
+旁瓣约 $-35$\,dB，按 49.66\,Hz 计对应有效值误差 0.33\,\%；Hann 窗低于 $-95$\,dB，该项可忽略。
+$h$ 次谐波对应第 $20h$ 号频点，抑制更深。因此本设计不需锁频与过零检测。
+
+\textbf{量化误差}\quad 量化噪声有效值 $q/\sqrt{12}=0.29$\,LSB。0.1\,A 在 $\times32$ 档的读数约
+233\,LSB，量化项为 0.12\,\%；不加放大时约 7\,LSB，量化项达 4\,\%。
+
+\textbf{噪声偏置}\quad 噪声与信号正交叠加，读数为 $\sqrt{X^2+\sigma^2}$，相对偏差
+$\sigma^2/2X^2$，为单边误差，多帧平均不能消除。该项由前端纹波决定，需实测 $\sigma$ 后确定。
+
+\begin{table}[htbp]\centering
+\caption{有效值测量误差预算（0.1\,A，$\times32$ 档，指标 0.5\,\%）}
+\label{tab:budget}
+\wuhao
+\begin{tabular}{lll}
+\toprule
+误差项 & 量值 & 来源\\
+\midrule
+非同步采样（Hann 窗） & $<0.01\,\%$ & 分析值，矩形窗为 $0.33\,\%$\\
+量化                  & $0.12\,\%$  & $0.29$\,LSB / 233\,LSB\\
+单帧噪声底            & $0.043\,\%$ & 分析值，加窗前 $0.035\,\%$\\
+噪声偏置 $\sigma^2/2X^2$ & $\sigma=1$\,LSB 时 $0.06\,\%$；$\sigma=3$\,LSB 时 $0.53\,\%$ & 待实测 $\sigma$\\
+标定表插值残差        & 待实测 & 由标定点间距决定\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{自动量程与偏置}
+$0.1\text{--}2$\,A 量程比为 20:1，指标 0.5\,\% 在下端为 0.5\,mA，故采用逐周期自动量程。片内运放
+配置为非反相可编程增益放大器，电阻梯底部接片内 12 位 DAC，输出电压、偏置码与选档条件为
+\begin{equation}
+  V_{\text{out}} = G\,V_{\text{in}} + (1-G)\,V_{\text{dac}},\qquad
+  D=\frac{G\,m-C}{G-1},\qquad
+  \frac{G\,p}{2}\le 0.65\min(d,\,4095-d),
+\end{equation}
+式中 $m$、$p$ 为探测帧测得的输入直流与峰峰值，$C=2047$ 为窗口中心，$d$ 为该档输出直流，取满足
+条件的最大档。DAC 使放大以输入直流为支点；直流灵敏度 $\mathrm{d}V_{\text{out}}/\mathrm{d}V_{\text{in,dc}}=G$，
+$\times32$ 档上 50\,mV 失配即使输出偏离中心 1.6\,V。$\times1$ 档由 ADC 直接读取输入，用于输入
+直流过低、各 PGA 档均无法容纳的情形。换档设 25\,\%/75\,\% 回差。
+
+\subsection{标定}
+标定表为"加权有效值（LSB）$\to$ 电流（A）"的分段线性表，每档一张，读数按
+$I=y_0+(y_1-y_0)(X-x_0)/(x_1-x_0)$ 插值，表外按端段外推。分档建表的原因是片内电阻梯各档实际
+比值对标称 $2/4/8/16/32$ 的偏离与 0.5\,\% 指标同量级，且互感器在低磁通下比差随电流变化，单一
+比例系数无法覆盖。标定数据由台架比对获得，填表方法见测试章节。
+
+\subsection{通信协议}
+电流表每测量周期发送一帧 ASCII 数据，字段见表~\ref{tab:frame}，以回车换行结尾。接收端按行解析
+并作格式校验，不合格式的行丢弃。电流表不接收控制命令。
+
+\begin{table}[htbp]\centering
+\caption{数据帧格式}
+\label{tab:frame}
+\wuhao
+\begin{tabular}{lll}
+\toprule
+字段 & 示例 & 说明\\
+\midrule
+帧头       & \texttt{METER\_TEST} & 固定标识\\
+地址       & \texttt{ADDR=01}     & 四位编码开关，$0\text{--}15$\\
+电流       & \texttt{CURRENT\_MA=1305} & 有效值，单位 mA\\
+状态       & \texttt{STATUS=NORMAL}    & 状态标识\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{读表器软件}
+读表器周期扫描（8\,s 扫描、12\,s 间歇），对搜索到的电流表分别建立连接并持续接收数据帧。基本
+模式为一对一手动读取，每次操作记录一帧；自动模式一键启动，每 2 分钟记录各表最新一帧，1.5\,s
+内无新数据的电流表记为离线。报警按电流值判定：小于 0.2\,A 为低限、大于 2\,A 为超限、无数据为
+离线。记录存入手机内部数据库，含读取时间、电流表地址、电流值与状态，掉电不丢失，容量 1000 条，
+并按地址绘制电流趋势曲线。
+
+% TODO 测试：\section{测试方案与测试结果}\label{sec:test}
+
+\appendix
+% TODO 附录 A：前端电路原理图
+
+\section{附录 B\quad 有效值计算源码}
+一帧 800 点的 Hann 加权真有效值。均值与平方和用同一个窗加权，并分两趟：合成一趟要用
+$\overline{wx^{2}}-\bar{x}^{2}$，是两个 $4.2\times10^{6}$ 量级的数相减去取 $10^{2}$ 量级的结果，
+单精度浮点的尾数不够这次抵消。
+
+\begin{lstlisting}[style=rust,caption={Hann 加权真有效值}]
+// Pass 1: Hann-weighted DC, as an offset from the integer pivot.
+let (mut sum_w, mut sum_wd) = (0.0f32, 0.0f32);
+for (&x, &w) in buf.iter().zip(HANN.iter()) {
+    sum_w += w;
+    sum_wd += w * ((x & 0xFFF) as i32 - pivot) as f32;
+}
+let offset = sum_wd / sum_w;
+
+// Pass 2: weighted mean square of the residual.
+let mut sum_wd2 = 0.0f32;
+for (&x, &w) in buf.iter().zip(HANN.iter()) {
+    let d = ((x & 0xFFF) as i32 - pivot) as f32 - offset;
+    sum_wd2 += w * d * d;
+}
+sqrtf(sum_wd2 / sum_w) // rms, in ADC LSB
+\end{lstlisting}
+
+\end{document}
