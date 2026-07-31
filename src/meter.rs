@@ -186,7 +186,7 @@ impl Meter {
         // the window the autoranger fits into and the codes the RMS is formed
         // from. Its 200 us settle (datasheet 7.15.2) hides inside AFE_SETTLE_MS
         // like the rest.
-        let ref_bad = !crate::vref::init(crate::vref::Output::V2_5);
+        let ref_bad = !crate::vref::init();
         let gain = match self.range {
             Range::Pga(g) => g,
             Range::Direct => Gain::X2,

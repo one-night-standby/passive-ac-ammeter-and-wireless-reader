@@ -654,7 +654,7 @@ async fn main(_spawner: Spawner) -> ! {
     // be up before the first conversion, exactly as in the main firmware. The
     // DAC drives this sweep against the same reference, which is what keeps
     // commanded code and measured code on one scale.
-    let vref_ready = vref::init(vref::Output::V2_5);
+    let vref_ready = vref::init();
     init_adc1_event();
     init_timer();
 

@@ -9,10 +9,16 @@
 //! and puts everything back to sleep. The result goes out over the radio and
 //! onto the panel, which stays lit for `DISPLAY_ON_MS` and then goes dark.
 //!
-//! Power-on takes one reading unasked, before the radio is up, and reports it
-//! the moment the port opens. So the meter always has a number to give, and a
-//! reader that connects before anyone has pressed anything is not told the
-//! meter is silent when it is merely idle.
+//! Power-on waits for the supply rail before any of that. Nothing analog is
+//! enabled and the radio is not powered until ADC0's internal monitor puts VDD
+//! at `BOOT_MIN_MV`, so a meter coming up on a harvested rail starts once, at a
+//! voltage every block downstream is rated for, rather than half-starting on the
+//! way there. Only the LED runs during the wait.
+//!
+//! Past that, power-on takes one reading unasked, before the radio is up, and
+//! reports it the moment the port opens. So the meter always has a number to
+//! give, and a reader that connects before anyone has pressed anything is not
+//! told the meter is silent when it is merely idle.
 //!
 //! Requests that land inside a cycle are dropped, not queued, from either
 //! source: `wait_for_falling_edge` clears pending edges before it arms, and
@@ -31,7 +37,7 @@
 //!   `dsp`     -- windowing, true RMS
 //!   `cal`     -- per-range LSB -> amps tables
 //!   `supply`  -- the rail itself, off ADC0's internal monitor
-//!   `ui`      -- the OLED readout, held dark until that rail is up
+//!   `ui`      -- the OLED readout
 //!   `led`     -- the power-on indicator
 
 use embassy_executor::Spawner;
@@ -72,6 +78,16 @@ bind_interrupts!(struct Irqs {
 static mut TX_BUF: [u8; 192] = [0; 192];
 
 static mut RX_BUF: [u8; 64] = [0; 64];
+
+/// The rail this meter starts up on, in millivolts. Nothing analog and nothing
+/// on the radio runs until `supply` measures at least this.
+///
+/// It is a threshold on the *measured* supply, and the measurement carries the
+/// divider's 1.5% and the reference's 1.6% (datasheet 7.12.1, 7.15.1), so a rail
+/// regulated to a hair under 3.3 V can read a hair under 3.3 V. With no deadline
+/// on the wait, that is a meter that never starts: this constant is the one to
+/// lower.
+const BOOT_MIN_MV: u16 = 3_300;
 
 /// Idle until something asks for a reading, announcing this meter's address
 /// every `HEARTBEAT_MS` in the meantime.
@@ -123,6 +139,28 @@ async fn main(spawner: Spawner) -> ! {
     // low when pressed; unlike S1/PA18, it does not disturb the ADC input.
     let mut trigger = Input::new(p.PB21, Pull::Up);
 
+    // Nothing above this line has drawn any current worth the name: the pins are
+    // configured, the LED is blinking, and no analog block has been enabled.
+    // Nothing below it runs until the rail is up.
+    //
+    // This is the whole of the supply gate, and it is here rather than in front
+    // of the display because everything downstream of it wants a rail that has
+    // arrived, not just the SSD1306: the reference the reading is scaled
+    // against needs VDD >= 2.7 V, the radio module wants its 3.3 V, and the
+    // panel's charge pump wants the same. One wait covers all three.
+    //
+    // Waited on rather than watched: the rail is re-measured every POLL_MS with
+    // VREF and ADC0 powered down in between. An always-armed watch is available
+    // -- ADC0's window comparator raising HIGHIFG onto the event fabric -- and
+    // costs more, because nothing but the CPU can cycle VREF, so arming it pins
+    // the reference on at 189 uA typ (330 uA max) against the 2.4 uA that a 1.5%
+    // duty comes to. The CPU time the polling costs is a fifth of that.
+    //
+    // There is no deadline. A rail that never reaches BOOT_MIN_MV parks the
+    // meter here, blinking, which is the honest state to be in: no reading it
+    // could take would be in spec and nothing it drove would be either.
+    supply::wait_above(BOOT_MIN_MV).await;
+
     // One reading on power-up, before anything can ask for it, and before the
     // radio exists. Measuring first is what the board notes ask for on a
     // harvested rail (6.1): the module's start-up current is the largest single
@@ -169,18 +207,13 @@ async fn main(spawner: Spawner) -> ! {
             }
         };
 
-        // Report before the panel: the reader is waiting on an answer, and
-        // every second the display spends lighting up is a second the radio
-        // could have spent delivering it. `show` can also sit indefinitely
-        // waiting for the rail to reach the voltage the SSD1306 is brought up
-        // at, and that is the stronger reason for this order -- a reading whose
-        // frame has already gone out is a reading the reader has, whatever the
-        // panel does next. What the wait does hold is everything after it: no
-        // heartbeat and no answer to `MEAS` until the rail is up.
+        // Report before the panel: the reader is waiting on an answer, and the
+        // second the display spends lighting up is a second the radio could
+        // have spent delivering it.
         if let Some(link) = &mut link {
             link.send(address.read(), &reading);
         }
-        panel.show(&reading).await;
+        panel.show(&reading);
 
         // Anything that arrived while the meter was busy is dropped here, so
         // the next `wait_command` starts from silence -- the same rule the

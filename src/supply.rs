@@ -7,21 +7,35 @@
 //! with channel 15 selected its mux reaches none of the pins ADC0 shares with
 //! the rest of the firmware, PA26 among them.
 //!
-//! Read against the 1.4 V reference rather than the 2.5 V one the meter runs
-//! on. VDD/3 is 1.1 V at 3.3 V and 1.2 V at the 3.6 V the MCU is rated to, so
-//! 1.4 V full scale holds the whole operating range without clipping, and it is
-//! itself in spec down to VDD = 1.62 V. The 2.5 V setting stops being valid at
-//! 2.7 V, which is inside the range this exists to watch: it would go out of
-//! spec exactly where the answer starts to matter, and `READY` would still read
-//! 1 while it did.
+//! Read against the same 2.5 V reference the measurement chain runs on, which
+//! is the only reference this program ever selects. VDD/3 is 1.1 V at 3.3 V, so
+//! the answer sits at code 1802 of 4095 -- 44% of the scale, 1.83 mV of supply
+//! per code -- and full scale is 7.5 V, far above the 3.6 V the MCU is rated to,
+//! so no supply the part survives can push the code off the top and come back
+//! looking like a healthy rail.
 //!
-//! Nothing here is shared with a reading. The reference is brought up and put
-//! back down around the one conversion, so `meter::measure` still starts from
-//! an unpowered VREF and configures it for its own 2.5 V.
+//! The 2.5 V setting needs VDD >= 2.7 V to be in spec, which is *below* the
+//! voltage being judged, so the verdict is taken where the reference is valid.
+//! Under 2.7 V the reference sags with the supply it is powered from, and a
+//! sagging reference makes the code read high rather than low -- to fake a pass
+//! at 3.3 V it would have to collapse to 1.97 V, which is a supply the CPU is
+//! not executing at. Out of spec here means imprecise, not wrong-sided.
+//!
+//! The 1.4 V setting BUFCONFIG also offers would be valid further down, and is
+//! still not worth having: a second reference voltage means CVREF has to be
+//! pulled from 2.5 V down to 1.4 V, which the buffer cannot do -- TRM 23.2.1
+//! wants the module disabled and PA23 driven low as a GPIO for 100 us first.
+//! A gate at 3.3 V does not need a valid number at 2 V. It needs a correct
+//! yes/no at 3.3 V, and one reference voltage gives it that for nothing.
+//!
+//! Nothing here is left running. The reference is brought up and put back down
+//! around each conversion, so `meter::measure` still starts from an unpowered
+//! VREF and brings up its own.
 
 use embassy_mspm0::pac;
+use embassy_time::Timer;
 
-use crate::vref::{self, Output};
+use crate::vref;
 
 /// ADC0's internal supply monitor.
 const CH_SUPPLY: u8 = 15;
@@ -42,30 +56,43 @@ const SAMPLE_CYCLES: u16 = 200;
 const CONVERT_TRIES: u32 = 10_000;
 
 /// The supply that would put channel 15 at full scale: the divider is VDD/3 and
-/// the reference is 1.4 V, so 4.2 V spans the 4096 codes. That is above the
-/// 3.6 V maximum the MCU is rated for, which is the point -- no supply the part
-/// survives can push the code off the top of the scale and come back looking
-/// like a healthy rail.
-const FULL_SCALE_MV: u32 = 3 * 1_400;
+/// the reference is 2.5 V, so 7.5 V spans the 4096 codes.
+const FULL_SCALE_MV: u32 = 3 * 2_500;
 
 const CODES: u32 = 4096;
+
+/// How often the rail is re-measured while `wait_above` waits on it. Each look
+/// is one reference bring-up and one conversion, a few hundred microseconds, so
+/// this is also the duty cycle VREF and ADC0 run at across the wait -- neither
+/// is left enabled between looks.
+const POLL_MS: u64 = 20;
+
+/// Block until the rail is at `min_mv` or above. There is no deadline: a supply
+/// that never gets there waits here forever.
+///
+/// A supply that cannot be measured counts as "not yet" rather than as
+/// "unknown, carry on". `millivolts` only comes back `None` for a reference that
+/// never settled, which is either a supply under the 2.7 V that setting needs --
+/// a rail that may still be climbing, and the whole thing being waited for -- or
+/// a missing CVREF, which is a board that has nothing to measure against.
+pub async fn wait_above(min_mv: u16) {
+    while !millivolts().is_some_and(|mv| mv >= min_mv) {
+        Timer::after_millis(POLL_MS).await;
+    }
+}
 
 /// VDD in millivolts, or `None` if it could not be measured.
 ///
 /// `None` means the reference never reported ready, which is either a supply
-/// below the 1.62 V that setting needs or a missing CVREF cap -- and neither
-/// leaves a number worth returning.
+/// below the 2.7 V it needs or a missing CVREF cap -- and neither leaves a
+/// number worth returning.
 pub fn millivolts() -> Option<u16> {
-    let code = if vref::init(Output::V1_4) {
-        convert()
-    } else {
-        None
-    };
+    let code = if vref::init() { convert() } else { None };
     vref::power_down();
-    // Rounded, not truncated. One code is 1.03 mV of supply and the converter
+    // Rounded, not truncated. One code is 1.83 mV of supply and the converter
     // has already floored once; flooring the scaling too would put an exact
-    // 3.3 V rail at 3299 mV, a millivolt under a threshold someone will
-    // reasonably write as 3300.
+    // 3.3 V rail at 3298 mV, under a threshold someone will reasonably write
+    // as 3300.
     code.map(|code| ((u32::from(code) * FULL_SCALE_MV + CODES / 2) / CODES) as u16)
 }
 
@@ -119,7 +146,7 @@ fn convert() -> Option<u16> {
     regs.memctl(0).modify(|w| {
         w.set_chansel(CH_SUPPLY);
         // VRSEL=2: internal reference, VSS as the negative -- the same mode
-        // ADC1 uses, at the 1.4 V setting `millivolts` just brought up.
+        // ADC1 uses, against the 2.5 V `millivolts` just brought up.
         w.set_vrsel(vals::Vrsel::from_bits(2));
         w.set_stime(vals::Stime::SEL_SCOMP0);
         w.set_avgen(false);
