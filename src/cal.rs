@@ -41,21 +41,66 @@ use crate::range::{Gain, Range};
 /// 2 A, so the over-limit alarm region is interpolated rather than
 /// extrapolated.
 /// `CAL_X1` is the `Direct` range, and on this front end it is the range the
-/// bench actually runs in: every reading below came off the OLED showing `x1`.
+/// bench actually runs in -- the autoranger never leaves it, because the input
+/// sits well below mid-rail and its swing already fills the headroom that DC
+/// leaves. Every row below came off a frame reporting `x1`.
 ///
-/// Two gaps this span does not cover. The top point is 2.03 A, so the `> 2 A`
-/// alarm region 2(3) has to watch is extrapolated off the last segment rather
-/// than interpolated -- it wants a point past 2 A. And 0.191 A to 0.530 A is
-/// one segment carrying most of the decade where the CT's ratio error is
-/// worst, which is the opposite of the "denser at the bottom" above.
+/// Reduced from a 91-frame run (`cal.csv`, 2026-07-31, reference SDM3055X-E):
+/// readings within 1% of each other in current are one bench point and enter
+/// as their median, and a row is kept only if its RMS is at least 6 LSB above
+/// the last kept one. That floor is twice the single-reading standard
+/// deviation measured in the run, and it is what stops the table from
+/// interpolating between two numbers whose difference is noise.
+///
+/// Three things this table does not cover, all of them the run's limits rather
+/// than the format's:
+///
+/// - Nothing below 0.59 A or above 2.79 A. The `< 0.2 A` and `> 2 A` alarm
+///   regions of 2(3) are therefore reached by extending the end segments, not
+///   by interpolation.
+/// - 1.42 A to 1.75 A is one long segment. The front end plateaus there --
+///   19% more current moved the RMS by less than the reading noise -- so the
+///   run cannot resolve that band at all and the segment bridges it. Readings
+///   landing inside it are worth about 10%, and no table can fix that; the
+///   front end has to.
+/// - Fit residual against the run's own 88 usable points is 0.11% median,
+///   0.83% at the 90th percentile outside that plateau. In-sample, so it
+///   bounds how well the table represents this run, not how well it will read
+///   the next one.
+///
+/// One frame was discarded: 3.498 A reading 471.33 LSB, below the 2.79 A
+/// cluster in both RMS and probe mean. Both columns must ascend, so it could
+/// not be entered even if it were believed, and its shape is a mis-paired
+/// sample taken while the load was moving rather than a saturating front end.
 pub static CAL_X1: &[(f32, f32)] = &[
-    (18.34, 0.0755),
-    (35.81, 0.191),
-    (129.07, 0.530),
-    (144.41, 0.707),
-    (185.5, 1.040),
-    (269.18, 1.505),
-    (441.4, 2.030),
+    (193.74, 0.5879),
+    (200.27, 0.6044),
+    (206.56, 0.6252),
+    (216.92, 0.6493),
+    (226.51, 0.6817),
+    (234.84, 0.7110),
+    (242.51, 0.7409),
+    (251.36, 0.7762),
+    (260.19, 0.8166),
+    (269.10, 0.8731),
+    (277.95, 0.9146),
+    (284.57, 0.9597),
+    (293.35, 1.0017),
+    (304.34, 1.0632),
+    (314.81, 1.1358),
+    (322.48, 1.1782),
+    (333.16, 1.2782),
+    (339.47, 1.3126),
+    (347.10, 1.3744),
+    (356.18, 1.4494),
+    (369.78, 1.7468),
+    (379.03, 1.8276),
+    (386.26, 1.9019),
+    (393.48, 1.9550),
+    (421.72, 2.1182),
+    (458.96, 2.3075),
+    (467.09, 2.5345),
+    (500.50, 2.7848),
 ];
 
 pub static CAL_X2: &[(f32, f32)] = &[];
@@ -93,15 +138,15 @@ pub fn cal_for(range: Range) -> &'static [(f32, f32)] {
 /// nominal ladder ratio, precisely the approximation the per-range tables
 /// exist to replace.
 ///
-/// Fitted to the `CAL_X1` points above, by least squares on *relative* error
-/// (a reading is judged as a percentage) and through the origin (the only
-/// shape `lsb_to_amps` can use here). It lands within 15.5% at every one of
-/// those points, which is what a single straight line is worth on this data.
-/// A fallback, not a calibration.
+/// Fitted to the same run as `CAL_X1`, by least squares on *relative* error (a
+/// reading is judged as a percentage) and through the origin (the only shape
+/// `lsb_to_amps` can use here). Worst case 38% across that run's span, which is
+/// what a single straight line is worth against a curve whose local slope
+/// moves by 2.5x. A fallback, not a calibration.
 ///
 /// Written to the shortest decimal that round-trips through f32, so the source
 /// does not imply a precision this constant does not have.
-pub const CAL_FALLBACK_A_PER_LSB: f32 = 0.0047436945;
+pub const CAL_FALLBACK_A_PER_LSB: f32 = 0.0034627696;
 
 /// The gain `CAL_FALLBACK_A_PER_LSB` was fitted at.
 pub const CAL_FALLBACK_GAIN: f32 = 1.0;

@@ -4,3 +4,6 @@
 android-reader/.gradle/
 android-reader/local.properties
 android-reader/**/build/
+__pycache__/
+*.pyc
+.venv/
