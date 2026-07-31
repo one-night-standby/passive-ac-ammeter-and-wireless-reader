@@ -67,6 +67,14 @@ const AFE_SETTLE_MS: u64 = 20;
 /// How long a reading stays lit before the panel is blanked.
 const DISPLAY_ON_MS: u64 = 1_000;
 
+/// How many times the SSD1306 may be brought up before this power cycle gives
+/// up on it. A failed attempt is retried on a later press rather than being
+/// remembered as final, because the press most likely to fail is the first one
+/// -- it lands while the harvested rail is still weak. The cap is what keeps a
+/// display that is simply absent from costing a bus transaction on every press
+/// for the rest of the power cycle.
+const OLED_INIT_ATTEMPTS: u8 = 4;
+
 #[embassy_executor::main]
 async fn main(_spawner: Spawner) -> ! {
     let p = embassy_mspm0::init(Default::default());
@@ -94,9 +102,9 @@ async fn main(_spawner: Spawner) -> ! {
 
     let mut dma = Channel::new(p.DMA_CH0, Irqs);
     // `None` leaves PB2/PB3 in their reset state until the first reading
-    // exists. `Some(Err(_))` records a failed initialization so the fixed pins
-    // are never stolen a second time.
-    let mut display: Option<Result<Oled, ()>> = None;
+    // exists.
+    let mut display: Option<Oled> = None;
+    let mut oled_attempts_left = OLED_INIT_ATTEMPTS;
 
     // LaunchPad S2 is the independent user button on PB21. It pulls the pin
     // low when pressed; unlike S1/PA18, it does not disturb the ADC input.
@@ -176,13 +184,17 @@ async fn main(_spawner: Spawner) -> ! {
         let amps = lsb_to_amps(rms, range);
 
         // PB2/PB3 and the SSD1306 stay untouched until there is a reading to
-        // put on them.
-        if display.is_none() {
-            // SAFETY: PB2/PB3 have not been used above, and this branch runs
-            // once because both Ok and Err are retained.
-            display = Some(unsafe { Oled::new() });
+        // put on them. A failed bring-up leaves `display` at `None` and is
+        // tried again on a later press: the attempt that failed dropped its
+        // half-built driver, and with it the pins it had stolen, so the next
+        // attempt starts from the same state as the first one did.
+        if display.is_none() && oled_attempts_left > 0 {
+            oled_attempts_left -= 1;
+            // SAFETY: PB2/PB3 are used by nothing else in this firmware, and
+            // no live `Oled` exists here -- `display` is `None`.
+            display = unsafe { Oled::new() }.ok();
         }
-        if let Some(Ok(display)) = &mut display {
+        if let Some(display) = &mut display {
             let _ = display.clear(BinaryColor::Off);
             let style = MonoTextStyle::new(&FONT_9X15, BinaryColor::On);
 
@@ -239,7 +251,7 @@ async fn main(_spawner: Spawner) -> ! {
 
         Timer::after_millis(DISPLAY_ON_MS).await;
 
-        if let Some(Ok(display)) = &mut display {
+        if let Some(display) = &mut display {
             let _ = display.set_display_on(false);
         }
     }

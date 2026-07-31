@@ -6,8 +6,6 @@
 //! writer; simplicity over speed since this display only needs to refresh a
 //! few times a second.
 
-use core::convert::Infallible;
-
 use embassy_mspm0::gpio::{Level, OutputOpenDrain};
 use embassy_mspm0::peripherals;
 use embedded_graphics_core::Pixel;
@@ -15,7 +13,7 @@ use embedded_graphics_core::draw_target::DrawTarget;
 use embedded_graphics_core::geometry::{OriginDimensions, Size};
 use embedded_graphics_core::pixelcolor::BinaryColor;
 use embedded_graphics_core::primitives::Rectangle;
-use embedded_hal::i2c::{ErrorType, I2c, Operation};
+use embedded_hal::i2c::{ErrorKind, ErrorType, I2c, NoAcknowledgeSource, Operation};
 use ssd1306::mode::{BufferedGraphicsMode, DisplayConfig};
 use ssd1306::prelude::{Brightness, DisplayRotation, DisplaySize128x64, I2CInterface};
 use ssd1306::{I2CDisplayInterface, Ssd1306};
@@ -39,56 +37,93 @@ struct SoftI2c {
     sda: OpenDrainPin,
 }
 
+/// BUSCLK, which is what `cortex_m::asm::delay` counts against.
+const CPU_HZ: u32 = 32_000_000;
+
+/// Round up: a phase that lands under the datasheet minimum is the exact
+/// failure these constants exist to prevent.
+const fn cycles_for_ns(ns: u32) -> u32 {
+    (CPU_HZ / 1_000_000 * ns).div_ceil(1_000)
+}
+
+/// SSD1306 fast-mode I2C timing: t_LOW >= 1.3 us, t_HIGH >= 0.6 us, and a
+/// cycle of at least 2.5 us (400 kHz). These sit above all three with margin,
+/// because the two directions are not symmetric -- being slow costs a few
+/// milliseconds per refresh, being fast costs a display that answers
+/// intermittently, and now that the ACK is checked an out-of-spec bus does not
+/// fail quietly any more, it fails as a NACK the driver believes.
+const SCL_LOW_CYCLES: u32 = cycles_for_ns(1_700);
+const SCL_HIGH_CYCLES: u32 = cycles_for_ns(1_300);
+
 impl SoftI2c {
-    fn tick() {
-        for _ in 0..16 {
-            cortex_m::asm::nop();
-        }
+    /// SCL held low, and the window in which SDA is allowed to move.
+    fn low_phase() {
+        cortex_m::asm::delay(SCL_LOW_CYCLES);
+    }
+
+    /// SCL held high, during which SDA must be stable -- this is the window
+    /// the slave samples data in, and drives the ACK bit in.
+    fn high_phase() {
+        cortex_m::asm::delay(SCL_HIGH_CYCLES);
     }
 
     fn start(&mut self) {
         self.sda.set_high();
         self.scl.set_high();
-        Self::tick();
+        Self::high_phase();
         self.sda.set_low();
-        Self::tick();
+        Self::high_phase();
         self.scl.set_low();
+        Self::low_phase();
     }
 
     fn stop(&mut self) {
         self.sda.set_low();
+        Self::low_phase();
         self.scl.set_high();
-        Self::tick();
+        Self::high_phase();
         self.sda.set_high();
-        Self::tick();
+        // Bus-free time before whatever START comes next.
+        Self::high_phase();
     }
 
-    fn write_byte(&mut self, byte: u8) {
+    /// Returns whether the slave acknowledged: SDA pulled low by the far end
+    /// during the ninth clock. This is the only failure a bit-banged master
+    /// can observe at all, so it is the whole error detection this bus has --
+    /// an unpowered or absent display NACKs, and without this the driver would
+    /// write into the void and report success.
+    #[must_use]
+    fn write_byte(&mut self, byte: u8) -> bool {
         for bit in (0..8).rev() {
             if byte & (1 << bit) != 0 {
                 self.sda.set_high();
             } else {
                 self.sda.set_low();
             }
+            Self::low_phase();
             self.scl.set_high();
-            Self::tick();
+            Self::high_phase();
             self.scl.set_low();
         }
-        // Release SDA for ACK. The display's ACK is sampled for bus timing,
-        // while this infallible GPIO backend deliberately does not surface it.
+        // Release SDA so the slave can drive the ACK bit, and sample it at the
+        // end of the high phase, which is the most time the slave can be given
+        // to pull the line down.
         self.sda.set_high();
+        Self::low_phase();
         self.scl.set_high();
-        Self::tick();
-        let _ack = self.sda.is_low();
+        Self::high_phase();
+        let acked = self.sda.is_low();
         self.scl.set_low();
+        acked
     }
 
     fn read_byte(&mut self, last: bool) -> u8 {
         self.sda.set_high();
         let mut byte = 0;
         for _ in 0..8 {
+            Self::low_phase();
             self.scl.set_high();
-            Self::tick();
+            Self::high_phase();
             byte = (byte << 1) | u8::from(self.sda.is_high());
             self.scl.set_low();
         }
@@ -97,16 +132,28 @@ impl SoftI2c {
         } else {
             self.sda.set_low();
         }
+        Self::low_phase();
         self.scl.set_high();
-        Self::tick();
+        Self::high_phase();
         self.scl.set_low();
         self.sda.set_high();
         byte
     }
 }
 
+/// Nobody drove the ACK bit low. On this bus that means the display is absent,
+/// unpowered, or not answering at the address we used.
+#[derive(Debug)]
+pub struct Nack(NoAcknowledgeSource);
+
+impl embedded_hal::i2c::Error for Nack {
+    fn kind(&self) -> ErrorKind {
+        ErrorKind::NoAcknowledge(self.0)
+    }
+}
+
 impl ErrorType for SoftI2c {
-    type Error = Infallible;
+    type Error = Nack;
 }
 
 impl I2c for SoftI2c {
@@ -117,22 +164,34 @@ impl I2c for SoftI2c {
     ) -> Result<(), Self::Error> {
         for operation in operations {
             self.start();
-            match operation {
+            let result = match operation {
                 Operation::Read(bytes) => {
-                    self.write_byte((address << 1) | 1);
-                    let length = bytes.len();
-                    for (index, byte) in bytes.iter_mut().enumerate() {
-                        *byte = self.read_byte(index + 1 == length);
+                    if self.write_byte((address << 1) | 1) {
+                        let length = bytes.len();
+                        for (index, byte) in bytes.iter_mut().enumerate() {
+                            *byte = self.read_byte(index + 1 == length);
+                        }
+                        Ok(())
+                    } else {
+                        Err(Nack(NoAcknowledgeSource::Address))
                     }
                 }
                 Operation::Write(bytes) => {
-                    self.write_byte(address << 1);
-                    for &byte in *bytes {
-                        self.write_byte(byte);
+                    if !self.write_byte(address << 1) {
+                        Err(Nack(NoAcknowledgeSource::Address))
+                    } else if bytes.iter().copied().all(|byte| self.write_byte(byte)) {
+                        Ok(())
+                    } else {
+                        Err(Nack(NoAcknowledgeSource::Data))
                     }
                 }
-            }
+            };
+            // STOP runs on the failing path too. Returning straight out of a
+            // NACK would leave SCL low and the bus owned by a master that has
+            // stopped clocking it, and the retry would then start from a state
+            // no slave can recover from.
             self.stop();
+            result?;
         }
         Ok(())
     }
