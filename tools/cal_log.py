@@ -2,14 +2,26 @@
 """Bench calibration logger: HC-42 over BLE on one side, SDM3055X-E on the other.
 
 Connects to the meter exactly the way the Android reader does -- Nordic-style
-transparent serial, service 0xFFE0 / characteristic 0xFFE1, subscribe and
-listen, no command written -- so whatever the firmware pushes out UART2 lands
-here as lines. Every line that parses as a frame triggers one reading of the
-bench multimeter, and the pair is appended to a CSV.
+transparent serial, service 0xFFE0 / characteristic 0xFFE1 -- so whatever the
+firmware pushes out UART2 lands here as lines. Every frame that carries a
+measurement triggers one reading of the bench multimeter, and the pair is
+appended to a CSV.
 
 The reference reading is taken *when the frame arrives*, not on a timer: the
-meter reports one measurement per press, and the current that matters is the
+meter reports one measurement per request, and the current that matters is the
 one flowing while that measurement was taken.
+
+Two ways to get frames, and which one applies is `--trigger`:
+
+- Listening only, the default. Something else decides when a reading happens --
+  `bin/stream.rs` on its own timer, or a finger on S2.
+- Driving it, with `--trigger`. `MEAS` goes out on FFE1 -- the same line the
+  phone writes (`MeterPollingService.ask`) and the same one `main.rs`
+  answers, so a run driven this way calibrates the delivered firmware rather
+  than a bench build of it. The next request is not sent until the previous
+  reading has been paired, which is what keeps the meter from outpacing the
+  DMM: with a free-running meter the frames queue up and every later pairing
+  drifts further from its own measurement window.
 
     pip install bleak                     # BLE
     pip install pyvisa pyvisa-py pyusb    # the DMM over USB
@@ -17,11 +29,12 @@ one flowing while that measurement was taken.
 
     ./tools/cal_log.py --list        # 有哪些蓝牙设备
     ./tools/cal_log.py --list-dmm    # 有哪些仪器
-    ./tools/cal_log.py --out cal-x32.csv
+    ./tools/cal_log.py --trigger --out cal-x32.csv     # main.rs，脚本按快门
+    ./tools/cal_log.py --out cal-x32.csv               # stream.rs 或按 S2
 
 Keys while running:
 
-    space   暂停 / 继续（暂停时蓝牙帧照收但不记，万用表也不读）
+    space   暂停 / 继续（暂停时蓝牙帧照收但不记，万用表也不读，也不发 MEAS）
     q       退出
 """
 
@@ -130,6 +143,23 @@ def parse_frame(line):
     return row
 
 
+def is_reading(row):
+    """Whether this frame reports a measurement.
+
+    Tested on the payload rather than on the tag, for the same reason the keys
+    are: what the firmware calls its frames is its business. `METER_CAL` brings
+    the RMS and `METER_TEST` brings the scaled amps, so either one is a bench
+    point; `main.rs` also announces itself every HEARTBEAT_MS with
+    `IMHERE,ADDR=n`, which parses cleanly and carries neither.
+
+    Applied at arrival, so an announcement never reaches the queue at all.
+    Filtering it later would not be enough: it would still be swept into the
+    burst of whatever reading it landed next to, where its ADDR would overwrite
+    the reading's own.
+    """
+    return bool(row.get("rms_lsb") or row.get("current_ma"))
+
+
 def split_lines(pending):
     """Drain whole lines out of `pending`, leaving any partial tail behind.
 
@@ -151,13 +181,13 @@ def split_lines(pending):
 
 
 async def drain_burst(lines, window):
-    """Collect the lines that belong with one already-taken line.
+    """Collect the queued readings that belong with one already-taken reading.
 
     One measurement goes out as more than one frame -- the reader's
-    `METER_TEST` and the bench's `METER_CAL` -- and at 9600 baud those take
-    over a hundred milliseconds to clock out, so they arrive as a burst rather
-    than together. Logging them as separate rows would mean half the CSV has
-    the RMS and the other half has the amps, and each would carry its own
+    `METER_TEST` and the bench's `METER_CAL` -- and BLE hands them over in
+    whatever notifications they happen to land in, so they arrive as a burst
+    rather than together. Logging them as separate rows would mean half the CSV
+    has the RMS and the other half has the amps, and each would carry its own
     reference reading taken at a different instant. They belong in one row.
 
     Bounded by a fixed window rather than by a frame count, because the number
@@ -396,6 +426,56 @@ def list_dmm():
     return 0
 
 
+class Trigger:
+    """Asks the meter for one reading, and knows when to ask again.
+
+    `main.rs` treats a written `MEAS` as identical to a press of S2, so this is
+    the bench standing in for the finger. One request is outstanding at a time:
+    the next goes out only once the previous reading has been paired with the
+    DMM, which makes the meter's rate the DMM's rate and puts a backlog out of
+    reach rather than merely reporting it.
+
+    The retry deadline is the other half. A request can go unanswered -- it can
+    land while the meter is already mid-cycle, where `Link::discard_pending`
+    throws it away, or the write can be accepted by the stack and never reach
+    the module -- and without a retry a bench run would simply stop with no
+    error anywhere.
+    """
+
+    def __init__(self, client, addr, timeout):
+        self.client = client
+        self.line = ("MEAS\n" if addr is None else f"MEAS,ADDR={addr}\n").encode()
+        self.timeout = timeout
+        self.due = 0.0
+        # Whether FFE1 took a write-without-response, which is what the phone
+        # uses. Resolved on the first write and then left alone: a stack that
+        # refuses it refuses every one, and retrying the fast path per request
+        # would cost an exception per reading.
+        self.no_response = True
+
+    async def ask(self):
+        try:
+            await self.client.write_gatt_char(
+                CHAR_UUID, self.line, response=not self.no_response
+            )
+        except Exception as exc:
+            if self.no_response:
+                self.no_response = False
+                print(f"  ! MEAS 无应答写被拒（{exc}），改用有应答写")
+                return await self.ask()
+            print(f"  ! 发 MEAS 失败: {exc}")
+        self.due = time.monotonic() + self.timeout
+
+    async def poll(self):
+        """Send a request if one is due. Called once per loop pass."""
+        if time.monotonic() >= self.due:
+            await self.ask()
+
+    def answered(self):
+        """A reading was logged, so the next request is due immediately."""
+        self.due = 0.0
+
+
 class Keyboard:
     """Single-keypress control without blocking the event loop.
 
@@ -517,10 +597,24 @@ async def run(args):
             print("\n[退出]")
 
     def on_notify(_sender, data):
+        """Reassemble, parse, and queue the lines that are bench points.
+
+        Parsed here rather than on the consuming task so that `lines.qsize()`
+        counts readings waiting to be paired, which is the only thing the
+        backlog warning below is worth printing about. A meter announcing
+        itself every two seconds would otherwise hold it permanently non-zero.
+        """
         pending.extend(data)
         now = time.monotonic()
         for line in split_lines(pending):
-            lines.put_nowait((now, line))
+            if args.echo:
+                print(f"  < {line}")
+            row = parse_frame(line)
+            if row is None:
+                if not args.echo:
+                    print(f"  ? 无法解析: {line}")
+            elif is_reading(row):
+                lines.put_nowait((now, line, row))
 
     async def read_dmm():
         try:
@@ -533,21 +627,29 @@ async def run(args):
         async with BleakClient(address) as client:
             print(f"[ble] 已连接 {address}")
             await client.start_notify(CHAR_UUID, on_notify)
-            print("[就绪] 空格暂停/继续，q 退出\n")
+            trigger = (
+                Trigger(client, args.addr, args.trigger_timeout)
+                if args.trigger
+                else None
+            )
+            if trigger is None:
+                how = "只听，不发命令"
+            else:
+                who = "广播" if args.addr is None else f"ADDR={args.addr}"
+                how = f"脚本发 MEAS 按快门（{who}）"
+            print(f"[就绪] {how}，空格暂停/继续，q 退出\n")
 
             while not state["quit"]:
+                # Before the wait, not after: this is what sends the first
+                # request, and what re-sends one the meter never answered.
+                # Paused means paused -- a request sent now would be answered
+                # into a run that is not recording.
+                if trigger and not state["paused"]:
+                    await trigger.poll()
+
                 try:
-                    arrived, line = await asyncio.wait_for(lines.get(), 0.2)
+                    arrived, line, row = await asyncio.wait_for(lines.get(), 0.2)
                 except asyncio.TimeoutError:
-                    continue
-
-                if args.echo:
-                    print(f"  < {line}")
-
-                row = parse_frame(line)
-                if row is None:
-                    if not args.echo:
-                        print(f"  ? 无法解析: {line}")
                     continue
 
                 if state["paused"]:
@@ -560,15 +662,8 @@ async def run(args):
                 # had to change in, and the burst collection below is free
                 # while the DMM integrates.
                 dmm_task = asyncio.create_task(read_dmm())
-                for _, more in await drain_burst(lines, args.burst_window):
-                    if args.echo:
-                        print(f"  < {more}")
-                    extra = parse_frame(more)
-                    if extra is None:
-                        if not args.echo:
-                            print(f"  ? 无法解析: {more}")
-                    else:
-                        merge_frame(row, extra)
+                for _, more, extra in await drain_burst(lines, args.burst_window):
+                    merge_frame(row, extra)
                     line = f"{line} | {more}"
                 amps = await dmm_task
 
@@ -580,12 +675,16 @@ async def run(args):
                 row["lag_ms"] = f"{(time.monotonic() - arrived) * 1000:.0f}"
                 row["raw"] = line
                 log.write(row)
+                if trigger:
+                    trigger.answered()
 
-                # The meter free-runs; if it outpaces the DMM, frames queue up
-                # and every later pairing drifts further from its own
-                # measurement. Said out loud rather than absorbed silently,
-                # because the symptom in the data is just a slow calibration
-                # drift that looks like the front end.
+                # Only reachable when something else sets the pace. A meter
+                # that free-runs past the DMM queues frames up, and every later
+                # pairing drifts further from its own measurement window. Said
+                # out loud rather than absorbed silently, because the symptom
+                # in the data is a slow drift that looks like the front end.
+                # Under --trigger one request is outstanding at a time, so
+                # there is nothing here to queue.
                 if lines.qsize():
                     print(f"  ! 积压 {lines.qsize()} 行，万用表跟不上电流表的节奏")
 
@@ -608,7 +707,7 @@ def main():
     ap = argparse.ArgumentParser(
         description="标定用：一边收 HC-42 的蓝牙帧，一边读 SDM3055X-E，成对存 CSV",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="运行时：空格 暂停/继续，q 退出",
+        epilog="加 --trigger 由脚本发 MEAS 按快门（main.rs）；运行时：空格 暂停/继续，q 退出",
     )
     ap.add_argument("--name", help="按广播名子串挑设备，默认认 HC-42/METER/BYJX_ 等")
     ap.add_argument("--address", help="直接指定 BLE 地址（macOS 上是 UUID），跳过扫描")
@@ -648,7 +747,31 @@ def main():
         help="同一次读数的多行帧合并窗口，秒（默认 0.15，与万用表积分并行不额外耗时）",
     )
     ap.add_argument("--echo", action="store_true", help="打印收到的每一行原文")
+    ap.add_argument(
+        "--trigger",
+        action="store_true",
+        help="每次配对完就往 FFE1 写一条 MEAS 要下一个读数（main.rs 用；stream.rs 自己跑，不要开）",
+    )
+    ap.add_argument(
+        "--addr",
+        type=int,
+        help="只让编码开关等于这个值的表应答，发 MEAS,ADDR=n；不给就广播（现场只有一台时够用）",
+    )
+    ap.add_argument(
+        "--trigger-timeout",
+        type=float,
+        default=3.0,
+        help=(
+            "MEAS 发出后多久没等到读数就重发，秒（默认 3；"
+            "main.rs 一次读数约 0.26 s 测量 + 1 s 亮屏，之后才回来收命令）"
+        ),
+    )
     args = ap.parse_args()
+
+    if args.addr is not None and not args.trigger:
+        ap.error("--addr 只在 --trigger 下有意义：不发命令就没有地址可带")
+    if args.addr is not None and not 0 <= args.addr <= 15:
+        ap.error("--addr 是四位编码开关，取值 0-15")
 
     if args.list_dmm:
         return list_dmm()

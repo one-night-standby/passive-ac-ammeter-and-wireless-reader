@@ -108,7 +108,7 @@ async fn main(spawner: Spawner) -> ! {
     };
 
     loop {
-        link.send(address.read(), &reading);
+        link.send(address.read(), &reading).await;
         Timer::after_millis(PERIOD_MS).await;
         reading = meter.measure(&mut dma).await;
     }

@@ -13,7 +13,7 @@ use embassy_mspm0::interrupt::typelevel::Binding;
 use embassy_mspm0::peripherals;
 use embassy_mspm0::uart::{BufferedInterruptHandler, BufferedUart, Config as UartConfig, Instance};
 use embassy_time::Timer;
-use embedded_io_async::{Read, ReadReady};
+use embedded_io_async::{Read, ReadReady, Write};
 
 use crate::meter::{Quality, Reading};
 
@@ -50,6 +50,12 @@ const MAX_FRAME_MA: u32 = 9_999_999;
 /// the plot or line noise that happens to lack newlines; either way the buffer
 /// resets rather than growing.
 const CMD_MAX: usize = 32;
+
+/// Longest line this link emits, CRLF included. `METER_CAL` at its widest --
+/// every optional field present and every number at full width -- is 72 bytes.
+/// The rest is margin for an `rms` the DSP produced outside the converter's
+/// range, which is a number worth reporting rather than reshaping.
+const LINE_MAX: usize = 128;
 
 /// How often the meter announces itself while idle. Cheap enough to ignore:
 /// one 17-byte line is 18 ms of 9600-baud UART and no analog blocks at all,
@@ -201,10 +207,31 @@ impl Link {
         None
     }
 
+    /// One line onto the wire.
+    ///
+    /// Awaited, not spun on. `blocking_write` looks like the cheaper choice for
+    /// something this short, but a full TX ring puts it in a loop with no exit
+    /// -- it returns only from inside a branch that requires room, and has no
+    /// error path at all -- so the caller spins with the CPU never yielding and
+    /// takes every other task down with it. Awaiting turns the same condition
+    /// into this task waiting while the rest of the executor keeps running, and
+    /// the indicator keeps blinking to say so.
+    ///
+    /// No deadline on the wait. At 115200 the whole 192-byte ring drains in
+    /// 17 ms, so a wait longer than that means the port has stopped clocking,
+    /// and that is a fault worth being visible rather than one to paper over
+    /// by dropping frames on a timer.
+    async fn put_line(&mut self, line: &str) {
+        let _ = self.uart.write_all(line.as_bytes()).await;
+    }
+
     /// "I am here, and I am meter n." Carries no reading on purpose: this is a
     /// presence beat, not a measurement, and nothing analog wakes up for it.
-    pub fn send_alive(&mut self, addr: u8) {
-        let _ = writeln!(self, "IMHERE,ADDR={}", addr);
+    pub async fn send_alive(&mut self, addr: u8) {
+        let mut line: heapless::String<LINE_MAX> = heapless::String::new();
+        if write!(line, "IMHERE,ADDR={}\r\n", addr).is_ok() {
+            self.put_line(&line).await;
+        }
     }
 
     /// One reading, on the wire.
@@ -222,9 +249,16 @@ impl Link {
     ///
     /// `METER_CAL` always goes out, including for the withheld cases. A frame
     /// the bench cannot use is still evidence, and it carries its own FLAG.
-    pub fn send(&mut self, addr: u8, reading: &Reading) {
+    ///
+    /// Each line is built whole before any of it is sent, and a line that
+    /// overran `LINE_MAX` is dropped rather than sent short. A truncated frame
+    /// is worse than a missing one: the reader's parser discards it either way,
+    /// but silence reads as a meter that is offline, which is a state the
+    /// reader already knows how to show.
+    pub async fn send(&mut self, addr: u8, reading: &Reading) {
         let quality = reading.quality();
         let ma = milliamps(reading);
+        let mut line: heapless::String<LINE_MAX> = heapless::String::new();
 
         let test_status = match quality {
             Quality::Good => Some(status(ma)),
@@ -232,68 +266,37 @@ impl Link {
             Quality::RefBad | Quality::InputBad | Quality::Incomplete => None,
         };
         if let Some(test_status) = test_status {
-            let _ = writeln!(
-                self,
-                "METER_TEST,ADDR={},CURRENT_MA={},STATUS={}",
+            if write!(
+                line,
+                "METER_TEST,ADDR={},CURRENT_MA={},STATUS={}\r\n",
                 addr, ma, test_status
-            );
+            )
+            .is_ok()
+            {
+                self.put_line(&line).await;
+            }
+            line.clear();
         }
 
-        let _ = write!(
-            self,
+        let mut built = write!(
+            line,
             "METER_CAL,ADDR={},RMS={:.2},GAIN={},FLAG={}",
             addr,
             reading.rms,
             reading.range.nominal(),
             flag(quality)
-        );
+        )
+        .is_ok();
         // Omitted rather than zeroed when the probe frame never drained: a mean
         // of 0 is a legal reading, and a bench that cannot tell it from "no
         // probe" would chase the wrong fault.
         if let Some((mean_in, pp_in)) = reading.probe {
-            let _ = write!(self, ",MEAN={},PP={}", mean_in, pp_in);
+            built &= write!(line, ",MEAN={},PP={}", mean_in, pp_in).is_ok();
         }
-        let _ = writeln!(self);
-    }
-}
-
-/// `core::fmt` sink, so frames are written with plain `write!` instead of
-/// formatting into a `heapless::String` a line at a time.
-impl Link {
-    /// Push every byte, however many calls that takes.
-    ///
-    /// `BufferedUartTx::blocking_write` is a *short* write: it copies into the
-    /// ring buffer's contiguous region and returns how much fit, which is less
-    /// than asked for whenever the ring wraps mid-frame. Ignoring that count
-    /// truncates frames at a boundary that moves with traffic, and a truncated
-    /// frame does not read as a fault -- the parser simply drops it, so the
-    /// meter looks intermittently silent instead of broken.
-    fn put(&mut self, mut bytes: &[u8]) {
-        while !bytes.is_empty() {
-            match self.uart.blocking_write(bytes) {
-                Ok(0) | Err(_) => return,
-                Ok(n) => bytes = &bytes[n..],
-            }
+        built &= line.push_str("\r\n").is_ok();
+        if built {
+            self.put_line(&line).await;
         }
-    }
-}
-
-/// `core::fmt` sink, so frames are written with plain `write!` instead of
-/// formatting into a `heapless::String` a line at a time.
-impl core::fmt::Write for Link {
-    /// Translates bare LF to CRLF. `MeterFrameParser` strips the CR itself, but
-    /// every serial terminal used to look at this link mid-bench does not.
-    fn write_str(&mut self, s: &str) -> core::fmt::Result {
-        for part in s.split_inclusive('\n') {
-            match part.strip_suffix('\n') {
-                Some(head) => {
-                    self.put(head.as_bytes());
-                    self.put(b"\r\n");
-                }
-                None => self.put(part.as_bytes()),
-            }
-        }
-        Ok(())
     }
 }
 

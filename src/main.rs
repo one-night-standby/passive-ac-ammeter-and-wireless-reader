@@ -110,7 +110,7 @@ async fn wait_for_request(trigger: &mut Input<'static>, link: &mut Link, address
             // Re-read the switch on every beat rather than caching it: moving
             // the switch is the one operation 2(2) allows during a run, so the
             // address has to be able to change between two beats.
-            Either3::Third(()) => link.send_alive(address.read()),
+            Either3::Third(()) => link.send_alive(address.read()).await,
         }
     }
 }
@@ -142,8 +142,10 @@ async fn main(spawner: Spawner) -> ! {
     // VREF and ADC0 powered down in between. An always-armed watch is available
     // -- ADC0's window comparator raising HIGHIFG onto the event fabric -- and
     // costs more, because nothing but the CPU can cycle VREF, so arming it pins
-    // the reference on at 189 uA typ (330 uA max) against the 2.4 uA that a 1.5%
-    // duty comes to. The CPU time the polling costs is a fifth of that.
+    // the reference on at 189 uA typ (330 uA max) against the 19 uA a 10% duty
+    // comes to. Nearly all of each look is the reference settling, which the
+    // CPU sleeps through; an armed watch would be paying for that settle
+    // continuously and would still be reading the same converter.
     //
     // There is no deadline. A rail that never reaches BOOT_MIN_MV parks the
     // meter here, dark, which is the honest state to be in: no reading it
@@ -215,7 +217,7 @@ async fn main(spawner: Spawner) -> ! {
         // second the display spends lighting up is a second the radio could
         // have spent delivering it.
         if let Some(link) = &mut link {
-            link.send(address.read(), &reading);
+            link.send(address.read(), &reading).await;
         }
         panel.show(&reading);
 
