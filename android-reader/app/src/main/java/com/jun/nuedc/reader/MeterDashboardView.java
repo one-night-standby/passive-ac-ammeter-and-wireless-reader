@@ -61,7 +61,11 @@ public final class MeterDashboardView extends View {
        读条走完时应答还在路上,存下去的就是上一次的值。 */
     private static final long STORE_MS = 1400;
     private static final long ALERT_MS = 2200;                // 状态变化后的短暂提示
-    private static final long ALARM_RING_COOLDOWN_MS = 10_000; // 同一地址的响铃/震动冷却
+    /* 同一地址的响铃/震动去重窗口。不是「冷却」:每一次读数只要越限就该响,
+       包括电流表上按键触发、值没变的那一次。这里只挡同一次读数被重复触发
+       (比如同一帧被处理两遍),所以取得很短——两次真实读数之间的间隔,最快
+       也是人按一下按键的间隔。 */
+    private static final long ALARM_DEDUP_MS = 400;
     private static final int PAGE_SIZE = 6;
     private static final int CAP = MeterDatabase.MAX_STORED_READINGS;
     private static final String BLANK = "-.---";
@@ -399,6 +403,15 @@ public final class MeterDashboardView extends View {
         if (currentMa >= 0) {
             m.frameMa = currentMa;
             m.frameWallTs = wallTs;
+            // 每一次读数都判一次:越限就响,不要求状态发生变化。读数是稀疏
+            // 的——手动读一次、自动轮次一次、表上按一次键一次——每一次都是
+            // 一个独立的、值得被告知的事件。
+            String st = classifyStatus(currentMa);
+            if (MeterReading.LOW.equals(st) || MeterReading.HIGH.equals(st)) {
+                long alarmAt = SystemClock.uptimeMillis();
+                m.alertUntil = alarmAt + ALERT_MS;
+                alarmFeedback(address, alarmAt);
+            }
         }
         m.lastAt = SystemClock.uptimeMillis();
         if (mac != null && !mac.isEmpty()) m.mac = mac;
@@ -464,12 +477,11 @@ public final class MeterDashboardView extends View {
             // 首次读到就报,不要求之前有已知状态。旧模型下帧一直在流,状态几拍
             // 就稳定了,漏掉第一次无关紧要;现在读数是问一次来一个,第一次往往
             // 就是唯一一次。
+            // 这里只管视觉:状态变了闪一下。声音和震动挂在读数到达上,不挂在
+            // 状态跳变上——越限的读数即使和上一次一样也要报,而这个循环每 60 ms
+            // 跑一次,拿它当触发源只会变成按帧率响铃。
             if (st != null && !st.equals(m.status)) {
                 m.alertUntil = now + ALERT_MS;
-                // 进入低限/超限才震动+振铃;离线只做视觉指示。
-                if (MeterReading.LOW.equals(st) || MeterReading.HIGH.equals(st)) {
-                    alarmFeedback(i, now);
-                }
             }
             m.status = st;
         }
@@ -1024,12 +1036,12 @@ public final class MeterDashboardView extends View {
         }
     }
 
-    /** 进入报警的沿:震动两下 + 响一声系统铃(走闹钟音量,静音通知也听得见)。 */
+    /** 一次越限读数:震动两下 + 响一声系统铃(走闹钟音量,静音通知也听得见)。 */
     private void alarmFeedback(int addr, long now) {
         if (now < alarmMuteUntil[addr]) {
-            return;                                            // 阈值附近游走的表,别把铃打成连发
+            return;                                            // 同一次读数被重复处理时去个重
         }
-        alarmMuteUntil[addr] = now + ALARM_RING_COOLDOWN_MS;
+        alarmMuteUntil[addr] = now + ALARM_DEDUP_MS;
         vibrateEffect(VibrationEffect.createWaveform(new long[]{0, 120, 80, 120}, -1));
         try {
             if (alarmRingtone == null) {
