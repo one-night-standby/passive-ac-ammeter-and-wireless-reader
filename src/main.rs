@@ -42,7 +42,9 @@ mod sampler;
 use cal::lsb_to_amps;
 use dsp::{coarse_pivot, rms_lsb};
 use oled::Oled;
-use range::{DAC_MAX, Gain, Range, apply_range, next_range, probe_stats, setup_opa1_pga};
+use range::{
+    DAC_MAX, Gain, Range, apply_range, next_range, over_range, probe_stats, setup_opa1_pga,
+};
 use sampler::{
     ADC_CH_RAW_IN, BUF, PINCM_PA16, PINCM_PA18, PROBE_BUF, capture, init_adc1_event, init_timer,
     set_adc_channel, set_analog,
@@ -113,6 +115,11 @@ async fn main(_spawner: Spawner) -> ! {
         afe_enable.set_high();
         Timer::after_millis(AFE_SETTLE_MS).await;
 
+        // Both reset every press: one press is one independent reading, so a
+        // mark can only ever describe the frames this cycle actually took.
+        let mut input_bad = false;
+        let mut range_over = false;
+
         // --- Probe: the raw input at unity gain, straight off PA18 ---
         //
         // The OPA is not involved and does not move, so this costs one MEMCTL
@@ -125,12 +132,15 @@ async fn main(_spawner: Spawner) -> ! {
         // returning, so nothing else touches PROBE_BUF concurrently.
         let probed = capture(&mut dma, unsafe {
             &mut *core::ptr::addr_of_mut!(PROBE_BUF)
-        });
+        })
+        .await;
         if probed {
             // SAFETY: as above -- the transfer is finished or paused.
             let (mean_in, pp_in, railed) = probe_stats(unsafe { &*core::ptr::addr_of!(PROBE_BUF) });
+            input_bad = railed;
             if !railed {
                 range = next_range(range, mean_in, pp_in);
+                range_over = over_range(range, mean_in, pp_in);
                 if apply_range(range, mean_in) {
                     // Settle the DAC and the re-tapped ladder before the frame
                     // that carries the marks. Both are microsecond-scale; 1 ms
@@ -149,7 +159,7 @@ async fn main(_spawner: Spawner) -> ! {
         // which case the channel is already the one the probe just used) ---
         // SAFETY: `capture` waits the transfer out (or pauses it) before
         // returning, so nothing else touches BUF concurrently.
-        let _ = capture(&mut dma, unsafe { &mut *core::ptr::addr_of_mut!(BUF) });
+        let framed = capture(&mut dma, unsafe { &mut *core::ptr::addr_of_mut!(BUF) }).await;
 
         // Everything below this line works out of BUF. The front end has no
         // reader left, so it comes down before the arithmetic rather than
@@ -175,9 +185,54 @@ async fn main(_spawner: Spawner) -> ! {
         if let Some(Ok(display)) = &mut display {
             let _ = display.clear(BinaryColor::Off);
             let style = MonoTextStyle::new(&FONT_9X15, BinaryColor::On);
+
+            // A leading marker means the reading below it is not to be
+            // believed, and says which of the three ways it went wrong:
+            //   '!' the probe found the input pinned at an ADC end, so the
+            //       signal is leaving `0..VDDA` and no internal gain or bias
+            //       choice can recover it -- that needs external conditioning.
+            //   '>' the arithmetic says the signal will not fit even on
+            //       Direct, the least demanding range there is, so the frame
+            //       is clipping. Every range is bounded by the supply and
+            //       nothing tighter (see range::OUT_LO -- OPA1's rails and
+            //       ADC1's full scale are the same two voltages), which makes
+            //       this exactly the same physical condition as '!', predicted
+            //       from the probe's mean/pp rather than seen as pinned
+            //       samples. Adding Direct to the ladder is what made it
+            //       near-unreachable; it is kept as the arithmetic backstop.
+            //   '?' one of this cycle's DMA transfers never drained, so its
+            //       buffer is part new samples and part stale ones.
+            // All three sit on the primary line on purpose: a number this
+            // display cannot stand behind should not look like the others.
+            // They matter most while calibrating -- a marked frame's `rms`
+            // below is fiction, and entering it into a CAL table freezes the
+            // fiction into the instrument.
+            let marker = if input_bad {
+                "!"
+            } else if range_over {
+                ">"
+            } else if !probed || !framed {
+                "?"
+            } else {
+                ""
+            };
             let mut line: String<32> = String::new();
-            let _ = write!(line, "{:.3} A", amps);
-            let _ = Text::new(&line, Point::new(32, 38), style).draw(display);
+            let _ = write!(line, "{}{:.3} A", marker, amps);
+            let _ = Text::new(&line, Point::new(4, 26), style).draw(display);
+
+            // Raw single-frame RMS in LSB and the gain it was taken at --
+            // together they are one row of one CAL table, and the gain says
+            // *which* table, so the calibration cannot be entered against the
+            // wrong one. Two decimals: 0.01 LSB is 0.03% at 0.1 A, so the
+            // display resolution is not what limits the calibration.
+            //
+            // Starts at x=0, not x=4 like the line above: 14 characters of
+            // FONT_9X15 is exactly 126 px, so the margin is the difference
+            // between fitting and losing the last digit of the gain.
+            let mut line2: String<32> = String::new();
+            let _ = write!(line2, "rms {:.2} x{}", rms, range.nominal());
+            let _ = Text::new(&line2, Point::new(0, 52), style).draw(display);
+
             let _ = display.flush();
             let _ = display.set_display_on(true);
         }

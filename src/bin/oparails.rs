@@ -226,10 +226,10 @@ impl core::fmt::Write for Serial<'_> {
 /// Mean of `AVG_N` conversions on whichever channel is currently selected.
 /// `None` means the transfer never drained, in which case the buffer holds a mix
 /// of new and stale samples and must not be averaged.
-fn read_mean(dma: &mut Channel<'_>) -> Option<u16> {
+async fn read_mean(dma: &mut Channel<'_>) -> Option<u16> {
     // SAFETY: `capture` waits the transfer out (or pauses it) before it
     // returns, so nothing else touches AVG_BUF concurrently.
-    if !capture(dma, unsafe { &mut *core::ptr::addr_of_mut!(AVG_BUF) }) {
+    if !capture(dma, unsafe { &mut *core::ptr::addr_of_mut!(AVG_BUF) }).await {
         return None;
     }
     // SAFETY: as above -- the transfer is finished or paused.
@@ -245,7 +245,7 @@ fn read_mean(dma: &mut Channel<'_>) -> Option<u16> {
 async fn read_at(dma: &mut Channel<'_>, code: u16) -> Option<u16> {
     dac::set(code.min(DAC_MAX as u16));
     Timer::after_millis(1).await;
-    read_mean(dma)
+    read_mean(dma).await
 }
 
 /// `out.len()` points starting at DAC code `start`, `step` codes apart.
@@ -449,7 +449,7 @@ async fn measure(dma: &mut Channel<'_>, s: &mut Serial<'_>) -> Measurement {
     set_adc_channel(ADC_CH_RAW_IN);
     // SAFETY: `capture` waits the transfer out (or pauses it) before returning,
     // so nothing else touches PROBE_BUF concurrently.
-    let probed = capture(dma, unsafe { &mut *core::ptr::addr_of_mut!(PROBE_BUF) });
+    let probed = capture(dma, unsafe { &mut *core::ptr::addr_of_mut!(PROBE_BUF) }).await;
     let probe = probed.then(|| {
         // SAFETY: as above -- the transfer is finished or paused.
         let (mean, pp, _) = probe_stats(unsafe { &*core::ptr::addr_of!(PROBE_BUF) });

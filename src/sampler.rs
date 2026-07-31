@@ -4,6 +4,7 @@
 
 use embassy_mspm0::dma::{Channel, TransferOptions};
 use embassy_mspm0::pac;
+use embassy_time::Timer;
 
 /// Event fabric channel TIMG6 publishes its zero event on and ADC1
 /// subscribes to. Free pick -- only one producer/consumer pair exists in
@@ -219,17 +220,7 @@ pub fn init_timer() {
 /// Factored out of the main loop so the probe and the measurement frame run
 /// the identical arming sequence -- the pieces that are easy to drop (the
 /// timer stop, the DMAEN re-arm) are exactly the ones that fail silently.
-pub fn capture(dma: &mut Channel<'_>, dst: &mut [u32]) -> bool {
-    capture_with_poll(dma, dst, || {})
-}
-
-/// Capture one frame while running a lightweight callback about once per
-/// millisecond. This lets latency-sensitive GPIO state be latched without
-/// changing the hardware-timed ADC/DMA sample path.
-pub fn capture_with_poll<F>(dma: &mut Channel<'_>, dst: &mut [u32], mut poll: F) -> bool
-where
-    F: FnMut(),
-{
+pub async fn capture(dma: &mut Channel<'_>, dst: &mut [u32]) -> bool {
     // Read the length before `dst` is handed to the DMA. Deriving the timeout
     // from DMASZ instead would read a counter the hardware has already begun
     // decrementing, shortening the budget by however long the arming took.
@@ -267,35 +258,36 @@ where
         .ctrctl()
         .modify(|w| w.set_en(true));
 
-    // Bounded wait -- same principle as setup_opa1_pga's RDY wait: never
-    // block forever on external hardware. Busy-polling keeps the CPU awake
-    // (and SWD reachable) even if a capture never completes, rather than
-    // `.await`, which would let the executor's idle loop put the CPU in WFE
-    // and (on this MCU+probe combo) block SWD entirely.
+    // Bounded wait -- same principle as setup_opa1_pga's RDY wait: never block
+    // forever on external hardware.
     //
-    // Checks DMASZ directly, NOT `xfer.is_running()` (req() && en()). Per the
-    // TRM (5.3, DMACTL[j].DMAREQ): "Software-controlled DMA start. DMAREQ is
-    // reset automatically" -- REQ is a one-shot kickoff pulse for
-    // hardware-triggered channels, not an in-progress flag, so it self-clears
-    // almost immediately after arming while EN and the real
-    // hardware-triggered transfer keep going. DMASZ == 0 is the
-    // TRM-documented actual completion signal for single transfer mode.
+    // Completion is read off DMASZ, not `xfer.is_running()` (req() && en()),
+    // which is also why awaiting `xfer` itself is not an option: its `Future`
+    // resolves on `!is_running()`. Per the TRM (5.3, DMACTL[j].DMAREQ),
+    // "Software-controlled DMA start. DMAREQ is reset automatically" -- REQ is
+    // a one-shot kickoff pulse for hardware-triggered channels, not an
+    // in-progress flag, so it self-clears almost immediately after arming while
+    // EN and the real hardware-triggered transfer keep going. The future would
+    // therefore come back ready with the frame barely started. DMASZ == 0 is
+    // the TRM-documented completion signal for single transfer mode.
     //
-    // Timed in cycles, not poll iterations -- a bare iteration-count loop is
-    // uncalibratable (each poll is a volatile MMIO read plus a fence, whose
-    // real cost on this core is opaque). The budget is 5x the frame's own
-    // duration, so it scales with the frame instead of being a constant that
-    // silently becomes a 25x wait for the 40 ms probe.
-    let budget_ms = len * 5 / (SAMPLE_HZ / 1000);
-    let mut captured = false;
-    poll();
-    for _ in 0..budget_ms {
-        if pac::DMA.chan(0).sz().read().size() == 0 {
-            captured = true;
+    // The waiting is done on timers rather than a spin, so the core is idle for
+    // the frame instead of running flat out across it -- the samples arrive by
+    // TIM+ADC+DMA and need no CPU at all. One sleep covers the frame's own
+    // nominal duration, then 1 ms steps cover the rest of the budget. Total
+    // budget is 5x the frame duration, so it scales with the frame instead of
+    // being a constant that silently becomes a 25x wait for the 40 ms probe.
+    let frame_ms = u64::from(len / (SAMPLE_HZ / 1000));
+    Timer::after_millis(frame_ms).await;
+
+    let drained = || pac::DMA.chan(0).sz().read().size() == 0;
+    let mut captured = drained();
+    for _ in 0..frame_ms * 4 {
+        if captured {
             break;
         }
-        poll();
-        cortex_m::asm::delay(32_000); // ~1 ms at 32 MHz
+        Timer::after_millis(1).await;
+        captured = drained();
     }
     if !captured {
         xfer.request_pause();
