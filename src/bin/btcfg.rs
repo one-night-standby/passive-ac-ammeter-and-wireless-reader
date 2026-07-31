@@ -164,43 +164,45 @@ async fn main(_spawner: Spawner) -> ! {
             FACTORY_BAUD_RATE,
             link::BT_BAUD_RATE
         );
-        // 已经改过是最常见的情况,直接去新波特率上确认一遍,省得白跑一趟。
-        let _ = bt.set_baudrate(link::BT_BAUD_RATE);
-        let _ = writeln!(&mut console, "\n[2] 改用 {} 复查", link::BT_BAUD_RATE);
-        if at(&mut console, &mut bt, "AT+UART").await == 0 {
-            let _ = writeln!(
-                &mut console,
-                "\n# 两个波特率都没反应:检查连线、供电,以及手机是否断开"
-            );
-        } else {
-            let _ = writeln!(
-                &mut console,
-                "\n# 模块已经在 {} 上,无需再改",
-                link::BT_BAUD_RATE
-            );
-        }
     } else {
         let _ = writeln!(&mut console, "\n[2] 改波特率");
         // 从常量拼指令,而不是把数字再写一遍:这条指令和固件用的波特率必须
         // 是同一个数,写两份就是让它们有机会分家。
         let mut command: heapless::String<24> = heapless::String::new();
         let _ = write!(command, "AT+UART={}", link::BT_BAUD_RATE);
-        // 手册说参数立即生效,所以这条的回应可能已经是新波特率发出的——
-        // 收不全是正常的,下一步的读回才是判据。
         at(&mut console, &mut bt, &command).await;
+    }
 
-        let _ = bt.set_baudrate(link::BT_BAUD_RATE);
-        Timer::after_millis(BOOT_MS).await;
+    // 模块断电重启。手册说参数立即生效,但那说的是模块内部;重启一次把双方
+    // 都摆回确定的起点,免得去猜是谁没跟上。
+    let _ = writeln!(&mut console, "\n[*] 模块断电重启");
+    power.set_low();
+    Timer::after_millis(300).await;
+    power.set_high();
+    Timer::after_millis(BOOT_MS).await;
 
-        let _ = writeln!(&mut console, "\n[3] 以 {} 读回验证", link::BT_BAUD_RATE);
-        if at(&mut console, &mut bt, "AT+UART").await == 0 {
-            let _ = writeln!(
-                &mut console,
-                "\n# 失败:新波特率上问不到模块,它可能还停在 9600"
-            );
-        } else {
-            let _ = writeln!(&mut console, "\n# 成功。改动掉电不丢失,烧回正式固件即可");
+    // 本机这一侧也换过去。返回值必须看:它失败的话下一步的「无回应」就不是
+    // 模块的问题,而是我们还在旧波特率上说话——两种原因症状完全一样。
+    let _ = writeln!(&mut console, "\n[3] 本机改到 {}", link::BT_BAUD_RATE);
+    match bt.set_baudrate(link::BT_BAUD_RATE) {
+        Ok(()) => {
+            let _ = writeln!(&mut console, "  set_baudrate OK");
         }
+        Err(_) => {
+            let _ = writeln!(&mut console, "  set_baudrate 失败——本机仍在旧波特率上");
+        }
+    }
+
+    let _ = writeln!(&mut console, "\n[4] 读回验证");
+    if at(&mut console, &mut bt, "AT+UART").await == 0 {
+        let _ = writeln!(
+            &mut console,
+            "\n# {} 上问不到模块。若上面 set_baudrate 是 OK,那就是模块没切过去;\n\
+             # 也检查手机是否还连着(连上后 AT 会被当数据转发)。",
+            link::BT_BAUD_RATE
+        );
+    } else {
+        let _ = writeln!(&mut console, "\n# 成功。改动掉电不丢失,烧回正式固件即可");
     }
 
     // 配置完就把射频断电,别让它在这块无所事事的固件下面一直耗着。
