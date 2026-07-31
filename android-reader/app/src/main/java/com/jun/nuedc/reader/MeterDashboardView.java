@@ -38,9 +38,13 @@ import java.util.Set;
  */
 public final class MeterDashboardView extends View {
     public interface Listener {
-        /** 读条走完,把这一帧落库(currentMa &lt; 0 表示离线记录)。调用方应同步刷新 setData。 */
+        /** 读到的这一次落库。只在真读到数时调用。调用方应同步刷新 setData。 */
         void onCaptureRecord(int address, int currentMa, String status,
                              String mac, String deviceName, int rssi);
+        /** 基本模式:向这台表要一次读数。电流表不会主动报数,不问就没有。 */
+        void onReadRequest(int address);
+        /** 要了但没答上来。不落库,只提示——这次读取没有结果,不是这台表不在。 */
+        void onReadFailed(int address);
         void onAutoModeChanged(boolean enabled);
         void onClearHistory();
         void onIntervalRequested();
@@ -52,10 +56,16 @@ public final class MeterDashboardView extends View {
     private static final int LOW_MA = 200;
     private static final int HIGH_MA = 2000;
     private static final int FULL_MA = 2200;
-    private static final long SILENT_MS = 1500;               // 连续无帧判为不再报数
-    private static final long STORE_MS = 700;                 // 读条时长:一定走完
+    /* 读条时长。它同时是「发出请求到落库」的窗口:电流表答一次要测量 260 ms
+       加链路时延,服务端的应答时限是 REPLY_TIMEOUT_MS,读条必须比它长,否则
+       读条走完时应答还在路上,存下去的就是上一次的值。 */
+    private static final long STORE_MS = 1400;
     private static final long ALERT_MS = 2200;                // 状态变化后的短暂提示
-    private static final long ALARM_RING_COOLDOWN_MS = 10_000; // 同一地址的响铃/震动冷却
+    /* 同一地址的响铃/震动去重窗口。不是「冷却」:每一次读数只要越限就该响,
+       包括电流表上按键触发、值没变的那一次。这里只挡同一次读数被重复触发
+       (比如同一帧被处理两遍),所以取得很短——两次真实读数之间的间隔,最快
+       也是人按一下按键的间隔。 */
+    private static final long ALARM_DEDUP_MS = 400;
     private static final int PAGE_SIZE = 6;
     private static final int CAP = MeterDatabase.MAX_STORED_READINGS;
     private static final String BLANK = "-.---";
@@ -387,12 +397,34 @@ public final class MeterDashboardView extends View {
         }
         Live m = live[address];
         m.everSeen = true;
-        m.frameMa = currentMa;
-        m.frameWallTs = wallTs;
+        m.silent = false;
+        // currentMa < 0 是保活心跳:它只说明这台表在场,不带读数。写进去会把
+        // 上一次真实读数冲掉,圆盘就会在每一拍心跳后闪成空值。
+        if (currentMa >= 0) {
+            m.frameMa = currentMa;
+            m.frameWallTs = wallTs;
+            // 每一次读数都判一次:越限就响,不要求状态发生变化。读数是稀疏
+            // 的——手动读一次、自动轮次一次、表上按一次键一次——每一次都是
+            // 一个独立的、值得被告知的事件。
+            String st = classifyStatus(currentMa);
+            if (MeterReading.LOW.equals(st) || MeterReading.HIGH.equals(st)) {
+                long alarmAt = SystemClock.uptimeMillis();
+                m.alertUntil = alarmAt + ALERT_MS;
+                alarmFeedback(address, alarmAt);
+            }
+        }
         m.lastAt = SystemClock.uptimeMillis();
         if (mac != null && !mac.isEmpty()) m.mac = mac;
         if (deviceName != null && !deviceName.isEmpty()) m.name = deviceName;
         m.rssi = rssi;
+    }
+
+    /** 问了没人答:做离线指示。不落库,记录里只该有真读数。 */
+    public void onOffline(int address) {
+        if (address < 0 || address >= SLOTS) {
+            return;
+        }
+        live[address].silent = true;
     }
 
     /* ══════════ 生命周期 ══════════ */
@@ -423,18 +455,33 @@ public final class MeterDashboardView extends View {
         lastModelAt = now;
         for (int i = 0; i < SLOTS; i++) {
             Live m = live[i];
-            m.silent = !m.everSeen || now - m.lastAt > SILENT_MS;
+            // silent 不再按「多久没收到帧」推断:电流表平时就不出声,那样推
+            // 出来的结果永远是全部离线。它现在由服务端的应答结果驱动——
+            // 收到帧清掉,问了没人答置上。
             if (!present(i)) {
                 m.status = null;
                 continue;
             }
-            String st = m.silent ? MeterReading.OFFLINE : classifyStatus(m.frameMa);
-            if (m.status != null && !m.status.equals(st)) {
-                m.alertUntil = now + ALERT_MS;                 // 只有变了才提示
-                // 报警走跳变沿:进入低限/超限才震动+振铃;离线只做视觉指示
-                if (MeterReading.LOW.equals(st) || MeterReading.HIGH.equals(st)) {
-                    alarmFeedback(i, now);
-                }
+            // frameMa < 0 是「在场但还没读过数」——心跳只说明它在,不带电流。
+            // 这不是一个电流档位:交给 classifyStatus 的话 -1 < 200 会被判成
+            // 低限,于是表一出现就先假报一次低限,而真正读到 0.064 A 时状态
+            // 已经是低限了,跳变沿不存在,该响的那次反而不响。
+            String st;
+            if (m.silent) {
+                st = MeterReading.OFFLINE;
+            } else if (m.frameMa < 0) {
+                st = null;
+            } else {
+                st = classifyStatus(m.frameMa);
+            }
+            // 首次读到就报,不要求之前有已知状态。旧模型下帧一直在流,状态几拍
+            // 就稳定了,漏掉第一次无关紧要;现在读数是问一次来一个,第一次往往
+            // 就是唯一一次。
+            // 这里只管视觉:状态变了闪一下。声音和震动挂在读数到达上,不挂在
+            // 状态跳变上——越限的读数即使和上一次一样也要报,而这个循环每 60 ms
+            // 跑一次,拿它当触发源只会变成按帧率响铃。
+            if (st != null && !st.equals(m.status)) {
+                m.alertUntil = now + ALERT_MS;
             }
             m.status = st;
         }
@@ -501,7 +548,7 @@ public final class MeterDashboardView extends View {
         return sel;
     }
 
-    /* ══════════ 存一帧 ══════════ */
+    /* ══════════ 点一下:发请求,等应答,存这一次 ══════════ */
     private void capture(int addr) {
         if (pendingAddr >= 0) {
             return;
@@ -510,13 +557,18 @@ public final class MeterDashboardView extends View {
         pendingAddr = addr;
         pendingFrom = now;
         pendingUntil = now + STORE_MS;
+        if (listener != null) {
+            listener.onReadRequest(addr);                       // 先问,读条走完时才有得存
+        }
     }
 
     private void commitPending() {
         int addr = pendingAddr;
         pendingAddr = -1;
         Live m = live[addr];
-        boolean hasFrame = present(addr) && m.everSeen && !m.silent;
+        // 还要求真的收到过读数:一台只在心跳、这次读取又没答上来的表,
+        // 在场但没有可存的数,不能把上一次的值当成这一次的结果。
+        boolean hasFrame = present(addr) && m.everSeen && !m.silent && m.frameMa >= 0;
         int ma = hasFrame ? m.frameMa : -1;
         String status = hasFrame ? classifyStatus(ma) : MeterReading.OFFLINE;
         boolean willFly = allScope || panelAddr == addr;       // 出现在当前筛选里,才有得飞
@@ -533,6 +585,15 @@ public final class MeterDashboardView extends View {
                 name = last.deviceName;
                 rssi = last.rssi;
             }
+        }
+        if (!hasFrame) {
+            // 这次没读到数就什么都不存。离线不是读数——记录里只该有真读到的
+            // 值,否则 30 条的空间会被「没读到」填满,历史和趋势也跟着变形。
+            // 但要说出来:静悄悄什么都不发生,和「存了一条」在界面上分不出。
+            if (listener != null) {
+                listener.onReadFailed(addr);
+            }
+            return;
         }
         if (listener != null) {
             expectCaptureRefresh = true;
@@ -975,12 +1036,12 @@ public final class MeterDashboardView extends View {
         }
     }
 
-    /** 进入报警的沿:震动两下 + 响一声系统铃(走闹钟音量,静音通知也听得见)。 */
+    /** 一次越限读数:震动两下 + 响一声系统铃(走闹钟音量,静音通知也听得见)。 */
     private void alarmFeedback(int addr, long now) {
         if (now < alarmMuteUntil[addr]) {
-            return;                                            // 阈值附近游走的表,别把铃打成连发
+            return;                                            // 同一次读数被重复处理时去个重
         }
-        alarmMuteUntil[addr] = now + ALARM_RING_COOLDOWN_MS;
+        alarmMuteUntil[addr] = now + ALARM_DEDUP_MS;
         vibrateEffect(VibrationEffect.createWaveform(new long[]{0, 120, 80, 120}, -1));
         try {
             if (alarmRingtone == null) {
@@ -1048,7 +1109,7 @@ public final class MeterDashboardView extends View {
         fill.setColor(dot);
         canvas.drawCircle(29, SB_CY, 3, fill);
         String link = known > 0
-                ? "HC-42 透传 · " + alive + "/" + known + " 台在报数"
+                ? "HC-42 透传 · 已知 " + known + " 台"
                 : connectionDetail;
         text(canvas, link, 40, SB_CY + 4.1f, 11.5f, INK2, Paint.Align.LEFT, sans, 0, 1);
         text(canvas, minuteFormat.format(new Date()), 924, SB_CY + 4.1f, 11.5f, INK2,
@@ -1243,7 +1304,7 @@ public final class MeterDashboardView extends View {
 
         String sub;
         if (measuring) {
-            sub = "抓这一帧";
+            sub = "读这一台";
         } else if (autoMode) {
             int s = Math.max(0, (int) Math.ceil(remain));
             sub = String.format(Locale.CHINA, "%02d:%02d", s / 60, s % 60);
@@ -1257,7 +1318,7 @@ public final class MeterDashboardView extends View {
             MeterReading lastStored = firstRecordFor(focus);
             sub = lastStored != null
                     ? "上次存 " + clockFormat.format(new Date(lastStored.timestamp))
-                    : "点一下存一帧";
+                    : "点一下读一次";
         }
         text(canvas, sub, cx, DIAL_Y + HUB_SUB_BASE, 10.5f, INK3, Paint.Align.CENTER, mono, 0, 1);
         canvas.restore();
@@ -1280,7 +1341,7 @@ public final class MeterDashboardView extends View {
 
     /* ── 采集模式开关 ── */
     private void drawFoot(Canvas canvas, long now) {
-        String note = autoMode ? intervalNote() : "点中心存一帧";
+        String note = autoMode ? intervalNote() : "点中心读一次";
         float noteW = measure(note, 11.5f, sans, 0);
         float groupW = TOGGLE_W + 12 + noteW;
         float left = LEFT_CENTER - groupW / 2f;
@@ -1730,6 +1791,9 @@ public final class MeterDashboardView extends View {
     }
 
     private static String statusLabel(String status) {
+        // null = 在场但还没读过数。不能落进「正常」:没读过就不知道正不正常,
+        // 显示成绿色的正常是这个界面唯一会主动骗人的地方。
+        if (status == null) return "未读";
         if (MeterReading.LOW.equals(status)) return "低限";
         if (MeterReading.HIGH.equals(status)) return "超限";
         if (MeterReading.OFFLINE.equals(status)) return "离线";
@@ -1737,6 +1801,7 @@ public final class MeterDashboardView extends View {
     }
 
     private static int statusColor(String status) {
+        if (status == null) return INK3;
         if (MeterReading.LOW.equals(status)) return C_LOW;
         if (MeterReading.HIGH.equals(status)) return C_HIGH;
         if (MeterReading.OFFLINE.equals(status)) return C_OFF;

@@ -111,6 +111,8 @@ mod dac;
 mod range;
 #[path = "../sampler.rs"]
 mod sampler;
+#[path = "../vref.rs"]
+mod vref;
 
 use range::{DAC_MAX, Gain, g_nominal, probe_stats};
 use sampler::{
@@ -647,6 +649,12 @@ async fn main(_spawner: Spawner) -> ! {
 
     set_hiz(PINCM_PA18);
     set_hiz(PINCM_PA16);
+    // The window this bin measures is the ADC's, and the ADC's endpoints are
+    // now the 2.5 V reference rather than the supply -- so the reference has to
+    // be up before the first conversion, exactly as in the main firmware. The
+    // DAC drives this sweep against the same reference, which is what keeps
+    // commanded code and measured code on one scale.
+    let vref_ready = vref::init();
     init_adc1_event();
     init_timer();
 
@@ -667,9 +675,21 @@ async fn main(_spawner: Spawner) -> ! {
         "# rail_lo,low: PSEL=EXTPIN1 MSEL=DAC12OUT -> Vout = G*Vin+(1-G)*Vdac"
     );
     let _ = writeln!(s, "# cfgbase GBW=HIGHGAIN RRI=1, same as the firmware");
+    // Stated rather than assumed: every number below is in codes against this
+    // reference, so a sweep taken while it never settled is a page of plausible
+    // nonsense and the reader has to be able to tell.
     let _ = writeln!(
         s,
-        "# adc ADC1 ch1 = PA16 = OPA1_OUT, 12-bit, VDDA/VSSA ref, {} averaged",
+        "# vref 2.5V internal, READY={}",
+        if vref_ready {
+            "yes"
+        } else {
+            "NO -- readings below are void"
+        }
+    );
+    let _ = writeln!(
+        s,
+        "# adc ADC1 ch1 = PA16 = OPA1_OUT, 12-bit, 2.5V VREF, {} averaged",
         AVG_N
     );
     let _ = writeln!(

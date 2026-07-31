@@ -19,23 +19,32 @@ const PWREN_KEY_DISABLE: u32 = 0x2600_0000;
 const CTL0_ENABLE: u32 = 1 << 0;
 const CTL0_RES_12BIT: u32 = 1 << 8;
 const CTL1_AMPEN: u32 = 1 << 0;
+/// REFSP: VREF+ as VR+, which with the VREF module enabled is its 2.5 V output.
+/// The DAC has to share the ADC's reference or the two stop sharing a scale,
+/// and `range::dac_code_for` solves for a DAC code directly in ADC codes -- it
+/// is the one place where "both converters are 12-bit against the same
+/// reference" is load-bearing rather than incidental.
+const CTL1_REFSP_VREF: u32 = 1 << 8;
 const CTL1_REFSN_VSSA: u32 = 1 << 9;
 const CTL1_OPS_OUT0: u32 = 1 << 24;
 
-/// Power up and route the DAC to PA15 (DAC_OUT), 12-bit, VDDA reference.
+/// Power up and route the DAC to PA15 (DAC_OUT), 12-bit, 2.5 V reference.
+/// `vref::init` must have run first: this selects that module's output, and
+/// selecting a reference that is not up yields a DAC that settles to the wrong
+/// voltage without saying so.
 pub fn init() {
     unsafe {
         write_volatile((DAC0_BASE + PWREN) as *mut u32, PWREN_KEY_ENABLE);
         cortex_m::asm::delay(16);
         write_volatile(
             (DAC0_BASE + CTL1) as *mut u32,
-            CTL1_AMPEN | CTL1_REFSN_VSSA | CTL1_OPS_OUT0,
+            CTL1_AMPEN | CTL1_REFSP_VREF | CTL1_REFSN_VSSA | CTL1_OPS_OUT0,
         );
         write_volatile((DAC0_BASE + CTL0) as *mut u32, CTL0_RES_12BIT | CTL0_ENABLE);
     }
 }
 
-/// Set the 12-bit output code (`0..=4095`), Vout = code / 4096 * VDDA.
+/// Set the 12-bit output code (`0..=4095`), Vout = code / 4096 * VREF.
 pub fn set(code: u16) {
     unsafe {
         write_volatile((DAC0_BASE + DATA0) as *mut u32, code as u32 & 0xFFF);
