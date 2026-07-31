@@ -449,10 +449,24 @@ public final class MeterDashboardView extends View {
                 m.status = null;
                 continue;
             }
-            String st = m.silent ? MeterReading.OFFLINE : classifyStatus(m.frameMa);
-            if (m.status != null && !m.status.equals(st)) {
-                m.alertUntil = now + ALERT_MS;                 // 只有变了才提示
-                // 报警走跳变沿:进入低限/超限才震动+振铃;离线只做视觉指示
+            // frameMa < 0 是「在场但还没读过数」——心跳只说明它在,不带电流。
+            // 这不是一个电流档位:交给 classifyStatus 的话 -1 < 200 会被判成
+            // 低限,于是表一出现就先假报一次低限,而真正读到 0.064 A 时状态
+            // 已经是低限了,跳变沿不存在,该响的那次反而不响。
+            String st;
+            if (m.silent) {
+                st = MeterReading.OFFLINE;
+            } else if (m.frameMa < 0) {
+                st = null;
+            } else {
+                st = classifyStatus(m.frameMa);
+            }
+            // 首次读到就报,不要求之前有已知状态。旧模型下帧一直在流,状态几拍
+            // 就稳定了,漏掉第一次无关紧要;现在读数是问一次来一个,第一次往往
+            // 就是唯一一次。
+            if (st != null && !st.equals(m.status)) {
+                m.alertUntil = now + ALERT_MS;
+                // 进入低限/超限才震动+振铃;离线只做视觉指示。
                 if (MeterReading.LOW.equals(st) || MeterReading.HIGH.equals(st)) {
                     alarmFeedback(i, now);
                 }
@@ -1765,6 +1779,9 @@ public final class MeterDashboardView extends View {
     }
 
     private static String statusLabel(String status) {
+        // null = 在场但还没读过数。不能落进「正常」:没读过就不知道正不正常,
+        // 显示成绿色的正常是这个界面唯一会主动骗人的地方。
+        if (status == null) return "未读";
         if (MeterReading.LOW.equals(status)) return "低限";
         if (MeterReading.HIGH.equals(status)) return "超限";
         if (MeterReading.OFFLINE.equals(status)) return "离线";
@@ -1772,6 +1789,7 @@ public final class MeterDashboardView extends View {
     }
 
     private static int statusColor(String status) {
+        if (status == null) return INK3;
         if (MeterReading.LOW.equals(status)) return C_LOW;
         if (MeterReading.HIGH.equals(status)) return C_HIGH;
         if (MeterReading.OFFLINE.equals(status)) return C_OFF;
