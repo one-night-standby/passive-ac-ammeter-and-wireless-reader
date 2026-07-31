@@ -15,6 +15,7 @@ import android.bluetooth.BluetoothGattDescriptor;
 import android.bluetooth.BluetoothGattService;
 import android.bluetooth.BluetoothManager;
 import android.bluetooth.BluetoothProfile;
+import android.bluetooth.BluetoothStatusCodes;
 import android.bluetooth.le.BluetoothLeScanner;
 import android.bluetooth.le.ScanCallback;
 import android.bluetooth.le.ScanResult;
@@ -28,6 +29,8 @@ import android.os.Looper;
 import android.os.SystemClock;
 import android.util.Log;
 
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayDeque;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -37,13 +40,19 @@ import java.util.TreeSet;
 import java.util.UUID;
 
 /**
- * 链路自治的帧流服务:发现覆盖范围内的所有 HC-42 就全部接入,断了退避重连,
- * 每一帧都广播给界面。前端的任何操作都不影响通信 —— 手动/自动只决定存不存库:
- * 手动存档在界面侧完成;自动模式在这里按周期把各表「此刻的最新帧」快照落库
- * (1.5 秒内有帧存值,否则存离线),语义与界面原型的 autoRound 一致。
+ * 请求-应答式读表服务。
  *
- * 并发模型:回调驱动 + 每台表一个链路状态机。已建立的连接并行收数,
- * 但同一时刻只发起一条新链(多数机型的协议栈按序建链,并发发起容易 133)。
+ * <p>电流表平时不出声:题目 2(2) 两个模式都写死「不操作电流表」,所以读数只能由
+ * 读表器要。一次读表 = 往 FFE1 写一行 {@code MEAS,ADDR=n},等它把帧发回来。
+ * 「没有帧」因此是常态而不是故障,连接健康与否只看 GATT 状态,不看数据流。
+ *
+ * <p>离线的判据跟着变成「问了不答」。这不是凑合:电流表靠负载电流取电,
+ * 4.3 说的「负载断开」就是表掉电,掉电的表答不上话,两者物理上是同一件事。
+ * 离线只广播给界面指示,<b>不落库</b>——4.4 要的是读数记录,不是缺席记录。
+ *
+ * <p>并发模型:回调驱动 + 每台表一条链路状态机,同一时刻只发起一条新链
+ * (多数机型的协议栈按序建链,并发发起容易 133),每条链上同一时刻只有一个
+ * 未完成的请求。
  */
 public final class MeterPollingService extends Service {
     public static final String ACTION_CONNECT_BASIC =
@@ -54,13 +63,19 @@ public final class MeterPollingService extends Service {
             "com.jun.nuedc.reader.action.STOP_AUTO";
     public static final String ACTION_UPDATE_INTERVAL =
             "com.jun.nuedc.reader.action.UPDATE_INTERVAL";
+    /** 基本模式的一对一手动读取,带 EXTRA_ADDRESS。 */
+    public static final String ACTION_READ_NOW =
+            "com.jun.nuedc.reader.action.READ_NOW";
     public static final String ACTION_READING =
             "com.jun.nuedc.reader.event.READING";
     public static final String ACTION_STATE =
             "com.jun.nuedc.reader.event.STATE";
-    /** 实时帧:帧一直在流,只进界面不落库。 */
+    /** 一次应答带回来的帧:只进界面,落不落库由采集模式决定。 */
     public static final String ACTION_FRAME =
             "com.jun.nuedc.reader.event.FRAME";
+    /** 问了没人答:界面据此做离线指示。刻意不落库,见 onReplyMissing。 */
+    public static final String ACTION_OFFLINE =
+            "com.jun.nuedc.reader.event.OFFLINE";
 
     public static final String EXTRA_ADDRESS = "address";
     public static final String EXTRA_CURRENT_MA = "current_ma";
@@ -80,16 +95,12 @@ public final class MeterPollingService extends Service {
     private static final long SCAN_ON_MS = 8_000L;             // 扫 8 秒歇 12 秒,避开系统节流
     private static final long SCAN_OFF_MS = 12_000L;
     private static final long PUMP_MS = 1_000L;
-    private static final long FRESH_MS = 1_500L;               // 与界面的静默判定一致
     private static final long RETRY_MS = 1_500L;
     private static final long RETRY_SLOW_MS = 10_000L;         // 连败三次后放慢,别拖累别的链
     private static final int RETRY_SLOW_AFTER = 3;
-    /* 表数超过手机控制器的并发上限时轮流连:满员后把驻留最久的一台轮出去,
-       让排队的接入。多数手机支持 ~7 条并发 GATT,取保守值。 */
-    private static final int MAX_ACTIVE_LINKS = 7;
-    private static final long ROTATE_DWELL_MS = 4_000L;        // 每台至少驻留这么久且拿到帧才轮出
-    private static final long PARKED_FRESH_MS = 120_000L;      // 轮歇中的表:上一帧在此窗口内即算在场
-                                                               // (16 台满轮转最坏 ~60-80 s,留余量)
+    /* 同时保持的连接数。一台电流表靠 4 位编码开关轮流扮演 16 个地址,现场最多
+       两台实表,所以不需要原来那套「满员轮歇」的并发调度。 */
+    private static final int MAX_ACTIVE_LINKS = 2;
 
     private static final UUID SERVICE_UUID =
             UUID.fromString("0000ffe0-0000-1000-8000-00805f9b34fb");
@@ -97,6 +108,9 @@ public final class MeterPollingService extends Service {
             UUID.fromString("0000ffe1-0000-1000-8000-00805f9b34fb");
     private static final UUID CLIENT_CONFIG_UUID =
             UUID.fromString("00002902-0000-1000-8000-00805f9b34fb");
+
+    /** `askingAddr` 的空值:这条链没有未完成的请求。 */
+    private static final int NOT_ASKING = Integer.MIN_VALUE;
 
     private static final int LINK_IDLE = 0;
     private static final int LINK_CONNECTING = 1;
@@ -111,12 +125,14 @@ public final class MeterPollingService extends Service {
         BluetoothGatt gatt;
         final MeterFrameParser parser = new MeterFrameParser();
         int state = LINK_IDLE;
-        long lastDataAt;                                       // elapsedRealtime,任意通知都算
+        BluetoothGattCharacteristic pipe;                      // FFE1,收帧也发命令
         int address = -1;                                      // 帧里报出来的编码开关地址
         int lastMa = -1;
-        long lastFrameAt;                                      // elapsedRealtime
-        long subscribedAt;                                     // elapsedRealtime,本次会话订阅时刻
-        boolean parked;                                        // 健康,只是被轮出去让位
+        /** 这条链上正在等应答的地址;-1 表示广播问「你是几号」,MIN_VALUE 表示没在等。 */
+        int askingAddr = NOT_ASKING;
+        /** 这个请求是自动轮次发的还是手动发的。挂在链路上而不是做成全局状态:
+            轮次进行中来一次手动读取,全局状态会被冲掉,那一轮就再也推不动。 */
+        boolean askingForRound;
         int failures;
         long nextAttemptAt;
 
@@ -130,6 +146,9 @@ public final class MeterPollingService extends Service {
 
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final Map<String, MeterLink> links = new LinkedHashMap<>();
+    private final Map<String, Runnable> replyTimeouts = new HashMap<>();
+    private final ArrayDeque<Integer> roundQueue = new ArrayDeque<>();
+    private int roundStored;
 
     private BluetoothAdapter adapter;
     private BluetoothLeScanner scanner;
@@ -251,12 +270,16 @@ public final class MeterPollingService extends Service {
             autoRound();                                       // 一键启动:立刻先存一轮
         } else if (ACTION_STOP_AUTO.equals(action)) {
             autoMode = false;
+            roundQueue.clear();
             handler.removeCallbacks(autoRoundRunnable);
             handler.removeCallbacks(countdownTick);
             nextCycleAtElapsedMs = 0L;
             startLinks();                                      // 链路照常在线,只是不再定时落库
-            broadcastState("CONNECTED", "自动存档已停止，帧流保持在线");
-            updateNotification(streamingText());
+            broadcastState("CONNECTED", "自动采集已停止，连接保持");
+            updateNotification(linkText());
+        } else if (ACTION_READ_NOW.equals(action)) {
+            startLinks();
+            readNow(intent.getIntExtra(EXTRA_ADDRESS, -1));
         } else if (ACTION_UPDATE_INTERVAL.equals(action)) {
             if (autoMode) {
                 broadcastState(
@@ -376,18 +399,18 @@ public final class MeterPollingService extends Service {
         }
     }
 
-    /** 每秒一拍:看门狗 + 建链队列(同一时刻只发起一条)+ 满员轮歇。 */
+    /**
+     * 每秒一拍:建链队列,同一时刻只发起一条。
+     *
+     * <p>这里<b>没有</b>数据看门狗。旧版本 6 秒收不到帧就断链重连,那建立在
+     * 「电流表持续报数」上;现在空闲不发帧是常态,那套看门狗会把每条健康的链
+     * 每 6 秒判死一次,永远连不稳。链路死活只由 GATT 状态回调决定。
+     */
     private void pumpLinks() {
         if (!running) {
             return;
         }
         long now = SystemClock.elapsedRealtime();
-        for (MeterLink link : links.values()) {
-            if (link.state == LINK_SUBSCRIBED
-                    && now - link.lastDataAt > ReaderPreferences.FRAME_TIMEOUT_MS) {
-                linkDown(link, "数据超时");
-            }
-        }
         if (connectingLink == null) {
             // 排队最久的先上(nextAttemptAt 最小的到期链路)
             MeterLink waiting = null;
@@ -397,20 +420,16 @@ public final class MeterPollingService extends Service {
                     waiting = link;
                 }
             }
-            if (waiting != null) {
-                if (subscribedCount() < MAX_ACTIVE_LINKS) {
-                    connect(waiting);
-                } else {
-                    parkOldest(now);                           // 满员:轮出驻留最久的,下一拍连它
-                }
+            if (waiting != null && subscribedCount() < MAX_ACTIVE_LINKS) {
+                connect(waiting);
             }
         }
         int count = subscribedCount();
         if (count != lastSubscribedCount) {
             lastSubscribedCount = count;
-            broadcastState(count > 0 ? "CONNECTED" : "SCANNING", streamingText());
+            broadcastState(count > 0 ? "CONNECTED" : "SCANNING", linkText());
             if (!autoMode) {
-                updateNotification(streamingText());
+                updateNotification(linkText());
             }
         }
         handler.postDelayed(pump, PUMP_MS);
@@ -483,6 +502,7 @@ public final class MeterPollingService extends Service {
             linkDown(link, "未找到HC-42的FFE0/FFE1服务");
             return;
         }
+        link.pipe = characteristic;
         try {
             if (!gatt.setCharacteristicNotification(characteristic, true)) {
                 linkDown(link, "无法启用FFE1通知");
@@ -514,36 +534,83 @@ public final class MeterPollingService extends Service {
         }
         link.state = LINK_SUBSCRIBED;
         link.failures = 0;
-        link.parked = false;
-        link.subscribedAt = SystemClock.elapsedRealtime();
-        link.lastDataAt = link.subscribedAt;
         if (connectingLink == link) {
             connectingLink = null;                             // 释放建链槽,轮到下一台
             handler.removeCallbacks(connectTimeout);
         }
+        // 刚连上还不知道对面是几号——地址在电流表的编码开关上,一台表会轮流
+        // 扮演 16 个地址中的一个。发一次不带 ADDR 的广播问它自报家门。
+        ask(link, -1, false);
     }
 
-    /** 满员轮歇:把驻留最久、且这次会话已经拿到过帧的链轮出去,排到队尾。 */
-    private void parkOldest(long now) {
-        MeterLink oldest = null;
-        for (MeterLink link : links.values()) {
-            if (link.state != LINK_SUBSCRIBED
-                    || now - link.subscribedAt < ROTATE_DWELL_MS
-                    || link.lastFrameAt < link.subscribedAt) {
-                continue;                                      // 还没坐热或还没出数,先不动
-            }
-            if (oldest == null || link.subscribedAt < oldest.subscribedAt) {
-                oldest = link;
-            }
+    /* ══════════ 请求-应答 ══════════ */
+
+    /**
+     * 往 FFE1 写一行命令。{@code addr < 0} 发广播 {@code MEAS}(用于发现),
+     * 否则发 {@code MEAS,ADDR=n}——轮询已知地址必须带 ADDR,否则回来的帧属于
+     * 哪个请求就说不清了:同一台设备在不同时刻是不同的表。
+     */
+    private boolean ask(MeterLink link, int addr, boolean forRound) {
+        if (link.state != LINK_SUBSCRIBED || link.pipe == null) {
+            return false;
         }
-        if (oldest == null) {
-            return;
+        String line = addr < 0
+                ? "MEAS\n"
+                : String.format(Locale.ROOT, "MEAS,ADDR=%d\n", addr);
+        byte[] payload = line.getBytes(StandardCharsets.US_ASCII);
+        boolean sent;
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                sent = link.gatt.writeCharacteristic(
+                        link.pipe,
+                        payload,
+                        BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
+                ) == BluetoothStatusCodes.SUCCESS;
+            } else {
+                link.pipe.setWriteType(
+                        BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE);
+                link.pipe.setValue(payload);
+                sent = link.gatt.writeCharacteristic(link.pipe);
+            }
+        } catch (SecurityException exception) {
+            sent = false;
         }
-        closeGatt(oldest);
-        oldest.state = LINK_IDLE;
-        oldest.parked = true;
-        oldest.failures = 0;
-        oldest.nextAttemptAt = now;                            // 立即到期,但排在等更久的后面
+        if (!sent) {
+            Log.w(TAG, link.mac + " 写 MEAS 失败");
+            return false;
+        }
+        link.askingAddr = addr;
+        link.askingForRound = forRound;
+        link.parser.reset();                                   // 半行残渣不该算进这次应答
+        handler.postDelayed(replyTimeoutFor(link), ReaderPreferences.REPLY_TIMEOUT_MS);
+        return true;
+    }
+
+    /** 每条链一个超时 runnable,便于单独撤销。 */
+    private Runnable replyTimeoutFor(MeterLink link) {
+        Runnable existing = replyTimeouts.get(link.mac);
+        if (existing != null) {
+            handler.removeCallbacks(existing);
+        }
+        Runnable timeout = () -> {
+            if (link.askingAddr == NOT_ASKING) {
+                return;
+            }
+            int addr = link.askingAddr;
+            boolean forRound = link.askingForRound;
+            link.askingAddr = NOT_ASKING;
+            onReplyMissing(link, addr, forRound);
+        };
+        replyTimeouts.put(link.mac, timeout);
+        return timeout;
+    }
+
+    private void clearReplyTimeout(MeterLink link) {
+        Runnable timeout = replyTimeouts.get(link.mac);
+        if (timeout != null) {
+            handler.removeCallbacks(timeout);
+        }
+        link.askingAddr = NOT_ASKING;
     }
 
     private void handleData(BluetoothGatt gatt, BluetoothGattCharacteristic characteristic,
@@ -552,16 +619,24 @@ public final class MeterPollingService extends Service {
         if (link == null || !CHARACTERISTIC_UUID.equals(characteristic.getUuid())) {
             return;
         }
-        link.lastDataAt = SystemClock.elapsedRealtime();
-        List<MeterFrameParser.ParsedFrame> frames = link.parser.feed(value);
-        if (frames.isEmpty()) {
-            return;
+        for (MeterFrameParser.ParsedFrame frame : link.parser.feed(value)) {
+            link.address = frame.address;
+            if (frame.hasReading()) {
+                boolean forRound = link.askingForRound;
+                link.lastMa = frame.currentMa;
+                clearReplyTimeout(link);
+                broadcastFrame(frame, link);
+                onReplyArrived(frame.address, frame.currentMa, link, forRound);
+            } else if (frame.isFault()) {
+                // 表答了,但说这次读数不可信。和「没人应答」必须分开:一个是表
+                // 有毛病,一个是表不在,读表器指示的东西不一样。
+                boolean forRound = link.askingForRound;
+                clearReplyTimeout(link);
+                broadcastState("METER_FAULT", String.format(
+                        Locale.CHINA, "%d号表读数异常(%s)", frame.address, frame.flag));
+                onReplyMissing(link, frame.address, forRound);
+            }
         }
-        MeterFrameParser.ParsedFrame frame = frames.get(frames.size() - 1);
-        link.address = frame.address;
-        link.lastMa = frame.currentMa;
-        link.lastFrameAt = link.lastDataAt;
-        broadcastFrame(frame, link);
     }
 
     private void linkDown(MeterLink link, String reason) {
@@ -572,7 +647,15 @@ public final class MeterPollingService extends Service {
         }
         closeGatt(link);
         link.state = LINK_IDLE;
-        link.parked = false;                                   // 真失败,不算轮歇
+        link.pipe = null;
+        // 链断了,这条链上没送到的请求也就没了应答。当作没人答处理,
+        // 界面才不会一直挂在「读取中」。
+        if (link.askingAddr != NOT_ASKING) {
+            int pending = link.askingAddr;
+            boolean forRound = link.askingForRound;
+            clearReplyTimeout(link);
+            onReplyMissing(link, pending, forRound);
+        }
         link.failures++;
         link.nextAttemptAt = SystemClock.elapsedRealtime()
                 + (link.failures >= RETRY_SLOW_AFTER ? RETRY_SLOW_MS : RETRY_MS);
@@ -604,71 +687,122 @@ public final class MeterPollingService extends Service {
         }
     }
 
-    /* ══════════ 自动存档:快照各表此刻的最新帧,与原型 autoRound 一致 ══════════ */
+    /* ══════════ 采集轮次:逐台问,答了才存 ══════════ */
+
+    /**
+     * 一轮自动采集。对<b>注册表里的每一个地址</b>发一次 MEAS,逐台串行——
+     * 一条链上同一时刻只能有一个未完成的请求,而电流表在测量期间收到的命令会
+     * 直接丢弃,所以抢着发只会被吞掉。
+     *
+     * <p>2 分钟的周期对 16 个地址 × 最坏 2 秒超时绰绰有余。
+     */
     private void autoRound() {
         if (!autoMode) {
             return;
         }
-        long nowUp = SystemClock.elapsedRealtime();
-        long wall = System.currentTimeMillis();
-
-        // 地址 → 新鲜帧的链路(同地址取最近报数的那条链)。
-        // 正在流的 1.5 s 内算新鲜;被轮歇让位的健康链放宽到一个轮转周期,
-        // 否则表比连接上限多时会把轮歇中的表误记成离线。
-        Map<Integer, MeterLink> fresh = new HashMap<>();
+        TreeSet<Integer> targets = new TreeSet<>(database.registeredMeters().keySet());
         for (MeterLink link : links.values()) {
-            if (link.address < 0 || link.lastFrameAt <= 0) {
-                continue;
-            }
-            long age = nowUp - link.lastFrameAt;
-            boolean usable = age <= FRESH_MS || (link.parked && age <= PARKED_FRESH_MS);
-            if (!usable) {
-                continue;
-            }
-            MeterLink prev = fresh.get(link.address);
-            if (prev == null || link.lastFrameAt > prev.lastFrameAt) {
-                fresh.put(link.address, link);
+            if (link.address >= 0) {
+                targets.add(link.address);
             }
         }
-        // 已登记 ∪ 在报数:每轮一表一条,有帧存值,没帧存离线
-        Map<Integer, String[]> registered = database.registeredMeters();
-        TreeSet<Integer> addrs = new TreeSet<>(registered.keySet());
-        addrs.addAll(fresh.keySet());
+        roundQueue.clear();
+        roundQueue.addAll(targets);
+        roundStored = 0;
+        pumpRound();
+    }
 
-        int stored = 0;
-        for (int addr : addrs) {
-            MeterLink link = fresh.get(addr);
-            MeterReading reading;
-            if (link != null) {
-                reading = database.insertReading(new MeterReading(
-                        0, wall, addr, link.lastMa,
-                        MeterReading.classify(
-                                link.lastMa,
-                                ReaderPreferences.DEFAULT_LOW_THRESHOLD_MA,
-                                ReaderPreferences.DEFAULT_HIGH_THRESHOLD_MA
-                        ),
-                        link.mac, link.name, link.rssi, "AUTO"
-                ));
-            } else {
-                String[] meta = registered.get(addr);
-                reading = database.insertReading(new MeterReading(
-                        0, wall, addr, -1, MeterReading.OFFLINE,
-                        meta[0], meta[1], -127, "AUTO"
-                ));
-            }
-            broadcastReading(reading);
-            stored++;
+    /** 队列里的下一个地址。空了就收尾并排下一轮。 */
+    private void pumpRound() {
+        Integer next = roundQueue.poll();
+        if (next == null) {
+            finishRound();
+            return;
         }
-        broadcastState(
-                "AUTO_WAIT",
-                String.format(
-                        Locale.CHINA,
-                        "本轮存档%d台，%s后再存一轮",
-                        stored,
-                        preferences.pollingIntervalText()
-                )
-        );
+        MeterLink link = idleSubscribedLink();
+        if (link == null) {
+            // 一条链都没有:这一轮问不了,不必逐个记离线——离线本来就不落库。
+            roundQueue.clear();
+            finishRound();
+            return;
+        }
+        if (!ask(link, next, true)) {
+            onReplyMissing(link, next, true);
+        }
+    }
+
+    private void finishRound() {
+        if (!autoMode) {
+            return;
+        }
+        broadcastState("AUTO_WAIT", String.format(
+                Locale.CHINA, "本轮存档%d台，%s后再采一轮",
+                roundStored, preferences.pollingIntervalText()));
         scheduleRound(preferences.pollingIntervalMs());
+    }
+
+    /** 有应答:落库并广播。只有这条路径写数据库。 */
+    private void onReplyArrived(int addr, int currentMa, MeterLink link, boolean forRound) {
+        // 手动读取不在这里落库:界面的读条走完时由 onCaptureRecord 存,
+        // 存的来源标成 MANUAL。这里只管自动轮次。
+        if (forRound && autoMode) {
+            MeterReading reading = database.insertReading(new MeterReading(
+                    0, System.currentTimeMillis(), addr, currentMa,
+                    MeterReading.classify(
+                            currentMa,
+                            ReaderPreferences.DEFAULT_LOW_THRESHOLD_MA,
+                            ReaderPreferences.DEFAULT_HIGH_THRESHOLD_MA
+                    ),
+                    link.mac, link.name, link.rssi, "AUTO"
+            ));
+            roundStored++;
+            broadcastReading(reading);
+            pumpRound();
+        }
+    }
+
+    /**
+     * 没等到应答。广播离线让界面指示,<b>不写数据库</b>。
+     *
+     * <p>题目 4.3 要的是离线「指示」,4.4 要的是读数「记录」——缺席不是读数。
+     * 何况一台表轮流扮演 16 个地址,注册表里多数地址在任一时刻都不在场,
+     * 逐条记下去只会把 30 条记录的空间填满假离线。
+     */
+    private void onReplyMissing(MeterLink link, int addr, boolean forRound) {
+        if (addr >= 0) {
+            Intent intent = eventIntent(ACTION_OFFLINE);
+            intent.putExtra(EXTRA_ADDRESS, addr);
+            intent.putExtra(EXTRA_TIMESTAMP, System.currentTimeMillis());
+            sendBroadcast(intent);
+        }
+        if (forRound && autoMode) {
+            pumpRound();
+        }
+    }
+
+    /** 已订阅且此刻没有未完成请求的链。 */
+    private MeterLink idleSubscribedLink() {
+        for (MeterLink link : links.values()) {
+            if (link.state == LINK_SUBSCRIBED && link.askingAddr == NOT_ASKING) {
+                return link;
+            }
+        }
+        return null;
+    }
+
+    /** 基本模式:一对一手动读一台。不排轮次,直接问。 */
+    private void readNow(int addr) {
+        MeterLink link = idleSubscribedLink();
+        if (link == null) {
+            broadcastState("ERROR", subscribedCount() > 0
+                    ? "电流表正在应答上一次请求，请稍候"
+                    : "没有已连接的电流表");
+            onReplyMissing(null, addr, false);
+            return;
+        }
+        if (!ask(link, addr, false)) {
+            onReplyMissing(link, addr, false);
+        }
     }
 
     private void scheduleRound(long delayMs) {
@@ -693,7 +827,7 @@ public final class MeterPollingService extends Service {
         updateNotification(String.format(
                 Locale.CHINA,
                 "%s · %d秒后自动存档",
-                streamingText(),
+                linkText(),
                 remainingSeconds
         ));
         long untilNextSecond = remainingMs - (remainingSeconds - 1L) * 1_000L;
@@ -714,10 +848,11 @@ public final class MeterPollingService extends Service {
         return count;
     }
 
-    private String streamingText() {
+    /** 连上几台,而不是几台在报数——没有表会主动报数。 */
+    private String linkText() {
         int count = subscribedCount();
         return count > 0
-                ? String.format(Locale.CHINA, "%d台在报数", count)
+                ? String.format(Locale.CHINA, "已连接%d台电流表", count)
                 : "正在搜索电流表";
     }
 

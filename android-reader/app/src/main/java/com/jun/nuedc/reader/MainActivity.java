@@ -45,6 +45,11 @@ public final class MainActivity extends Activity implements MeterDashboardView.L
                 );
                 return;
             }
+            if (MeterPollingService.ACTION_OFFLINE.equals(action)) {
+                dashboard.onOffline(
+                        intent.getIntExtra(MeterPollingService.EXTRA_ADDRESS, -1));
+                return;
+            }
             if (MeterPollingService.ACTION_READING.equals(action)) {
                 refreshDashboard();
                 return;
@@ -126,6 +131,15 @@ public final class MainActivity extends Activity implements MeterDashboardView.L
                 "MANUAL"
         ));
         refreshDashboard();
+    }
+
+    /** 基本模式的一对一读取:题目 2(2) 不允许碰电流表,读数只能由读表器要。 */
+    @Override
+    public void onReadRequest(int address) {
+        Intent intent = new Intent(this, MeterPollingService.class);
+        intent.setAction(MeterPollingService.ACTION_READ_NOW);
+        intent.putExtra(MeterPollingService.EXTRA_ADDRESS, address);
+        startService(intent);
     }
 
     @Override
@@ -238,6 +252,7 @@ public final class MainActivity extends Activity implements MeterDashboardView.L
     private void registerEventReceiver() {
         IntentFilter filter = new IntentFilter();
         filter.addAction(MeterPollingService.ACTION_FRAME);
+        filter.addAction(MeterPollingService.ACTION_OFFLINE);
         filter.addAction(MeterPollingService.ACTION_READING);
         filter.addAction(MeterPollingService.ACTION_STATE);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {

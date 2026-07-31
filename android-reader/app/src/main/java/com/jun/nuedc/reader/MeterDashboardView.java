@@ -41,6 +41,8 @@ public final class MeterDashboardView extends View {
         /** 读条走完,把这一帧落库(currentMa &lt; 0 表示离线记录)。调用方应同步刷新 setData。 */
         void onCaptureRecord(int address, int currentMa, String status,
                              String mac, String deviceName, int rssi);
+        /** 基本模式:向这台表要一次读数。电流表不会主动报数,不问就没有。 */
+        void onReadRequest(int address);
         void onAutoModeChanged(boolean enabled);
         void onClearHistory();
         void onIntervalRequested();
@@ -52,8 +54,10 @@ public final class MeterDashboardView extends View {
     private static final int LOW_MA = 200;
     private static final int HIGH_MA = 2000;
     private static final int FULL_MA = 2200;
-    private static final long SILENT_MS = 1500;               // 连续无帧判为不再报数
-    private static final long STORE_MS = 700;                 // 读条时长:一定走完
+    /* 读条时长。它同时是「问出去到落库」的窗口:电流表答一次要测量 260 ms
+       加链路时延,服务端的应答时限是 2 秒,读条必须比它长,否则读条走完时
+       应答还在路上,存下去的就是上一次的值。 */
+    private static final long STORE_MS = 2400;
     private static final long ALERT_MS = 2200;                // 状态变化后的短暂提示
     private static final long ALARM_RING_COOLDOWN_MS = 10_000; // 同一地址的响铃/震动冷却
     private static final int PAGE_SIZE = 6;
@@ -387,12 +391,21 @@ public final class MeterDashboardView extends View {
         }
         Live m = live[address];
         m.everSeen = true;
+        m.silent = false;
         m.frameMa = currentMa;
         m.frameWallTs = wallTs;
         m.lastAt = SystemClock.uptimeMillis();
         if (mac != null && !mac.isEmpty()) m.mac = mac;
         if (deviceName != null && !deviceName.isEmpty()) m.name = deviceName;
         m.rssi = rssi;
+    }
+
+    /** 问了没人答:做离线指示。不落库,记录里只该有真读数。 */
+    public void onOffline(int address) {
+        if (address < 0 || address >= SLOTS) {
+            return;
+        }
+        live[address].silent = true;
     }
 
     /* ══════════ 生命周期 ══════════ */
@@ -423,7 +436,9 @@ public final class MeterDashboardView extends View {
         lastModelAt = now;
         for (int i = 0; i < SLOTS; i++) {
             Live m = live[i];
-            m.silent = !m.everSeen || now - m.lastAt > SILENT_MS;
+            // silent 不再按「多久没收到帧」推断:电流表平时就不出声,那样推
+            // 出来的结果永远是全部离线。它现在由服务端的应答结果驱动——
+            // 收到帧清掉,问了没人答置上。
             if (!present(i)) {
                 m.status = null;
                 continue;
@@ -510,6 +525,9 @@ public final class MeterDashboardView extends View {
         pendingAddr = addr;
         pendingFrom = now;
         pendingUntil = now + STORE_MS;
+        if (listener != null) {
+            listener.onReadRequest(addr);                       // 先问,读条走完时才有得存
+        }
     }
 
     private void commitPending() {
@@ -1048,7 +1066,7 @@ public final class MeterDashboardView extends View {
         fill.setColor(dot);
         canvas.drawCircle(29, SB_CY, 3, fill);
         String link = known > 0
-                ? "HC-42 透传 · " + alive + "/" + known + " 台在报数"
+                ? "HC-42 透传 · 已知 " + known + " 台"
                 : connectionDetail;
         text(canvas, link, 40, SB_CY + 4.1f, 11.5f, INK2, Paint.Align.LEFT, sans, 0, 1);
         text(canvas, minuteFormat.format(new Date()), 924, SB_CY + 4.1f, 11.5f, INK2,
