@@ -687,9 +687,12 @@ public final class MeterPollingService extends Service {
                 // 「此刻谁在场」——而这正是拨码开关改了之后唯一会变的东西。
                 long now = SystemClock.elapsedRealtime();
                 Long previous = aliveAt.put(frame.address, now);
+                // 每一拍都刷在场状态,不只在「新出现」时刷。只在跳变时广播的话,
+                // 界面的离线标记一旦被别的原因置上(比如一次读取超时),后面
+                // 再多的心跳也清不掉它,那台表会一直显示离线。
+                broadcastPresence(frame.address, link);
                 if (previous == null || now - previous > ALIVE_WINDOW_MS) {
-                    broadcastPresence(frame.address, link);    // 新出现的地址
-                    kickRoundIfIdle();
+                    kickRoundIfIdle();                         // 刚回来的地址,补一轮
                 }
                 continue;
             }
@@ -850,7 +853,10 @@ public final class MeterPollingService extends Service {
      * 逐条记下去只会把 30 条记录的空间填满假离线。
      */
     private void onReplyMissing(MeterLink link, int addr, boolean forRound) {
-        if (addr >= 0) {
+        // 在场与否由心跳说了算,不由一次读取的成败说了算。一台正在心跳的表
+        // 只是这次没答上来(测量中、命令被丢、链路忙),它并没有不在——把它
+        // 标成离线会让界面和记录都说谎。
+        if (addr >= 0 && !isAlive(addr)) {
             Intent intent = eventIntent(ACTION_OFFLINE);
             intent.putExtra(EXTRA_ADDRESS, addr);
             intent.putExtra(EXTRA_TIMESTAMP, System.currentTimeMillis());
@@ -859,6 +865,13 @@ public final class MeterPollingService extends Service {
         if (forRound && autoMode) {
             pumpRound();
         }
+    }
+
+    /** 这个地址此刻还在心跳吗。 */
+    private boolean isAlive(int addr) {
+        Long last = aliveAt.get(addr);
+        return last != null
+                && SystemClock.elapsedRealtime() - last <= ALIVE_WINDOW_MS;
     }
 
     /** 已订阅且此刻没有未完成请求的链。 */

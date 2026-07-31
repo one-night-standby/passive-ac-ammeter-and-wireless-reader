@@ -558,6 +558,11 @@ public final class MeterDashboardView extends View {
                 rssi = last.rssi;
             }
         }
+        if (!hasFrame) {
+            // 这次没读到数就什么都不存。离线不是读数——记录里只该有真读到的
+            // 值,否则 30 条的空间会被「没读到」填满,历史和趋势也跟着变形。
+            return;
+        }
         if (listener != null) {
             expectCaptureRefresh = true;
             listener.onCaptureRecord(addr, ma, status, mac, name, rssi);

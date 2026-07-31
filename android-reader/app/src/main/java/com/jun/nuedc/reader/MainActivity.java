@@ -119,6 +119,9 @@ public final class MainActivity extends Activity implements MeterDashboardView.L
     @Override
     public void onCaptureRecord(int address, int currentMa, String status,
                                 String mac, String deviceName, int rssi) {
+        if (currentMa < 0) {
+            return;                                            // 没读到数不落库,第二道防线
+        }
         database.insertReading(new MeterReading(
                 0,
                 System.currentTimeMillis(),
