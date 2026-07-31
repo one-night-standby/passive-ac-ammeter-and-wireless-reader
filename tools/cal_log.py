@@ -11,11 +11,13 @@ The reference reading is taken *when the frame arrives*, not on a timer: the
 meter reports one measurement per press, and the current that matters is the
 one flowing while that measurement was taken.
 
-    pip install bleak            # required
-    pip install pyvisa           # only for --dmm visa://...
+    pip install bleak                     # BLE
+    pip install pyvisa pyvisa-py pyusb    # the DMM over USB
+    brew install libusb                   # what pyusb talks to on macOS
 
-    ./tools/cal_log.py --list
-    ./tools/cal_log.py --dmm tcp://192.168.1.50 --out cal-x32.csv
+    ./tools/cal_log.py --list        # 有哪些蓝牙设备
+    ./tools/cal_log.py --list-dmm    # 有哪些仪器
+    ./tools/cal_log.py --out cal-x32.csv
 
 Keys while running:
 
@@ -57,6 +59,13 @@ CHAR_UUID = "0000ffe1-0000-1000-8000-00805f9b34fb"
 # MeterPollingService.isMeterCandidate so the two agree on what a meter is.
 NAME_HINTS = ("HC-42", "HC42", "METER", "AMMETER", "BYJX_")
 
+# What the multimeter calls itself in `*IDN?`. The bench has more than one
+# Siglent instrument on USB and their resource strings differ only by product
+# ID and serial, so picking by position would eventually send `CONF:CURR:AC`
+# to the oscilloscope. Asking each candidate who it is costs one exchange and
+# cannot be got wrong by reordering a USB hub.
+DMM_IDN_HINT = "SDM"
+
 # One row per logged frame. `raw` is last because it is the wide one, and it is
 # always written even when nothing parsed: a frame this script did not
 # understand is still evidence, and losing it would mean repeating the bench
@@ -64,6 +73,7 @@ NAME_HINTS = ("HC-42", "HC42", "METER", "AMMETER", "BYJX_")
 CSV_FIELDS = [
     "time",
     "dmm_a",
+    "lag_ms",
     "rms_lsb",
     "gain",
     "current_ma",
@@ -140,6 +150,46 @@ def split_lines(pending):
             out.append(line)
 
 
+async def drain_burst(lines, window):
+    """Collect the lines that belong with one already-taken line.
+
+    One measurement goes out as more than one frame -- the reader's
+    `METER_TEST` and the bench's `METER_CAL` -- and at 9600 baud those take
+    over a hundred milliseconds to clock out, so they arrive as a burst rather
+    than together. Logging them as separate rows would mean half the CSV has
+    the RMS and the other half has the amps, and each would carry its own
+    reference reading taken at a different instant. They belong in one row.
+
+    Bounded by a fixed window rather than by a frame count, because the number
+    of frames per reading is the firmware's business, not this script's.
+    """
+    out = []
+    deadline = time.monotonic() + window
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return out
+        try:
+            out.append(await asyncio.wait_for(lines.get(), remaining))
+        except asyncio.TimeoutError:
+            return out
+
+
+def merge_frame(row, extra):
+    """Fold a later frame of the same burst into the row being built.
+
+    Later values win on collision. The frames of one reading disagree only on
+    fields they share by coincidence (ADDR), and a disagreement there means the
+    burst caught two different meters, which the `extra` column preserves for
+    whoever has to work that out.
+    """
+    for key, value in extra.items():
+        if key == "extra":
+            row["extra"] = f"{row.get('extra', '')},{value}".strip(",")
+        else:
+            row[key] = value
+
+
 class NullDmm:
     """No reference instrument: log the meter alone."""
 
@@ -202,10 +252,16 @@ class TcpDmm:
 
 
 class VisaDmm:
-    """Same instrument over VISA, for a USB-TMC cable instead of the LAN port.
+    """The SDM3055X-E over its USB port, which enumerates as USB-TMC.
 
-    pyvisa is blocking, so every exchange goes through the default executor to
-    keep the BLE notifications flowing while the DMM integrates.
+    pyvisa is blocking, so every exchange goes through a worker thread to keep
+    the BLE notifications flowing while the DMM integrates -- an AC current
+    reading is hundreds of milliseconds, and a frame arriving inside that
+    window must not be delayed by it.
+
+    `resource=None` means "find it": there is one instrument on the bench, and
+    typing its serial number into a command line is a step that only exists to
+    be got wrong.
     """
 
     def __init__(self, resource, conf_cmd, read_cmd, timeout):
@@ -213,15 +269,29 @@ class VisaDmm:
         self.conf_cmd = conf_cmd
         self.read_cmd = read_cmd
         self.timeout = timeout
-        self.label = f"visa://{resource}"
+        self.label = f"visa://{resource}" if resource else "usb"
         self._inst = None
 
     async def open(self):
-        import pyvisa
+        try:
+            import pyvisa
+        except ImportError:
+            raise RuntimeError(
+                "需要 pyvisa: pip install pyvisa pyvisa-py pyusb"
+                "\n  只收蓝牙不接万用表的话用 --dmm none"
+            ) from None
 
         rm = pyvisa.ResourceManager()
-        self._inst = rm.open_resource(self.resource)
+        resource = self.resource
+        if resource is None:
+            resource = discover_dmm(rm)
+            self.label = f"visa://{resource}"
+        self._inst = rm.open_resource(resource)
         self._inst.timeout = int(self.timeout * 1000)
+        # Deterministic rather than whatever this pyvisa backend defaults to:
+        # a stray CR on the wire is the kind of thing that works on one machine
+        # and silently truncates a reply on the next.
+        self._inst.write_termination = "\n"
         idn = await self._query("*IDN?")
         print(f"[dmm] {idn}")
         if self.conf_cmd:
@@ -242,12 +312,88 @@ class VisaDmm:
 def make_dmm(spec, conf_cmd, read_cmd, timeout):
     if spec in (None, "", "none"):
         return NullDmm()
+    if spec == "usb":
+        return VisaDmm(None, conf_cmd, read_cmd, timeout)
     if spec.startswith("visa://"):
         return VisaDmm(spec[len("visa://") :], conf_cmd, read_cmd, timeout)
+    # A bare VISA resource string, pasted straight out of --list-dmm.
+    if "::" in spec and not spec.startswith("tcp://"):
+        return VisaDmm(spec, conf_cmd, read_cmd, timeout)
     if spec.startswith("tcp://"):
         spec = spec[len("tcp://") :]
     host, _, port = spec.partition(":")
     return TcpDmm(host, int(port or 5025), conf_cmd, read_cmd, timeout)
+
+
+def usb_resources(rm):
+    """USB instruments only.
+
+    pyvisa-py also probes for LAN instruments during `list_resources`, which on
+    a bench with no network produces nothing but warnings about the optional
+    packages that probe would have used. Suppressed rather than left to
+    scroll: a warning that is always there is a warning nobody reads.
+    """
+    import warnings
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        found = list(rm.list_resources())
+    return [r for r in found if r.upper().startswith("USB")], found
+
+
+def identify(rm, resource):
+    """`*IDN?` on one resource, or the reason it could not be asked."""
+    try:
+        inst = rm.open_resource(resource)
+        inst.timeout = 3000
+        inst.write_termination = "\n"
+        try:
+            return inst.query("*IDN?").strip()
+        finally:
+            inst.close()
+    except Exception as exc:
+        return f"(问不出来: {exc})"
+
+
+def discover_dmm(rm):
+    """The one USB instrument that says it is a multimeter."""
+    usb, found = usb_resources(rm)
+    if not usb:
+        raise RuntimeError(
+            "没找到 USB 仪器。VISA 看到的是: "
+            + (", ".join(found) or "(空)")
+            + "\n  macOS 上通常缺 libusb: brew install libusb"
+        )
+    if len(usb) == 1:
+        return usb[0]
+
+    matches = [r for r in usb if DMM_IDN_HINT in identify(rm, r).upper()]
+    if len(matches) == 1:
+        return matches[0]
+    raise RuntimeError(
+        f"USB 上有 {len(usb)} 台仪器，认出 {len(matches)} 台像万用表的"
+        f"（按 *IDN? 里的 {DMM_IDN_HINT}）。用 --list-dmm 看清楚，然后 --dmm <资源名> 指定：\n  "
+        + "\n  ".join(usb)
+    )
+
+
+def list_dmm():
+    """Print what VISA can see, with each instrument's own answer to who it is,
+    so a resource string can be copied rather than guessed."""
+    try:
+        import pyvisa
+    except ImportError:
+        print("需要 pyvisa: pip install pyvisa pyvisa-py pyusb")
+        return 1
+    rm = pyvisa.ResourceManager()
+    usb, found = usb_resources(rm)
+    if not found:
+        print("VISA 没看到任何仪器。macOS 上通常缺 libusb: brew install libusb")
+        return 1
+    for resource in found:
+        who = identify(rm, resource) if resource in usb else ""
+        print(f"  {resource}\n      {who}")
+    return 0
 
 
 class Keyboard:
@@ -372,8 +518,16 @@ async def run(args):
 
     def on_notify(_sender, data):
         pending.extend(data)
+        now = time.monotonic()
         for line in split_lines(pending):
-            lines.put_nowait(line)
+            lines.put_nowait((now, line))
+
+    async def read_dmm():
+        try:
+            return await dmm.read()
+        except Exception as exc:  # keep the run alive; log the gap
+            print(f"  ! 万用表读数失败: {exc}")
+            return None
 
     with Keyboard(on_key):
         async with BleakClient(address) as client:
@@ -383,7 +537,7 @@ async def run(args):
 
             while not state["quit"]:
                 try:
-                    line = await asyncio.wait_for(lines.get(), 0.2)
+                    arrived, line = await asyncio.wait_for(lines.get(), 0.2)
                 except asyncio.TimeoutError:
                     continue
 
@@ -400,16 +554,40 @@ async def run(args):
                     state["dropped"] += 1
                     continue
 
-                try:
-                    amps = await dmm.read()
-                except Exception as exc:  # keep the run alive; log the gap
-                    print(f"  ! 万用表读数失败: {exc}")
-                    amps = None
+                # Trigger the reference *before* waiting on the rest of the
+                # burst, not after: every millisecond between the meter's
+                # measurement window and the DMM's is a millisecond the load
+                # had to change in, and the burst collection below is free
+                # while the DMM integrates.
+                dmm_task = asyncio.create_task(read_dmm())
+                for _, more in await drain_burst(lines, args.burst_window):
+                    if args.echo:
+                        print(f"  < {more}")
+                    extra = parse_frame(more)
+                    if extra is None:
+                        if not args.echo:
+                            print(f"  ? 无法解析: {more}")
+                    else:
+                        merge_frame(row, extra)
+                    line = f"{line} | {more}"
+                amps = await dmm_task
 
                 row["time"] = datetime.now().isoformat(timespec="milliseconds")
                 row["dmm_a"] = "" if amps is None else f"{amps:.6g}"
+                # How far the reference reading trails the frame that asked for
+                # it. A row whose lag is a large fraction of the meter's period
+                # was paired across a gap the bench should know about.
+                row["lag_ms"] = f"{(time.monotonic() - arrived) * 1000:.0f}"
                 row["raw"] = line
                 log.write(row)
+
+                # The meter free-runs; if it outpaces the DMM, frames queue up
+                # and every later pairing drifts further from its own
+                # measurement. Said out loud rather than absorbed silently,
+                # because the symptom in the data is just a slow calibration
+                # drift that looks like the front end.
+                if lines.qsize():
+                    print(f"  ! 积压 {lines.qsize()} 行，万用表跟不上电流表的节奏")
 
                 shown = " ".join(
                     f"{f}={row[f]}" for f in ("rms_lsb", "gain", "current_ma") if row.get(f)
@@ -437,9 +615,15 @@ def main():
     ap.add_argument("--list", action="store_true", help="只扫描并列出设备，不连接")
     ap.add_argument("--scan-timeout", type=float, default=8.0, help="扫描秒数（默认 8）")
     ap.add_argument(
+        "--list-dmm", action="store_true", help="列出 VISA 能看到的仪器，不连接"
+    )
+    ap.add_argument(
         "--dmm",
-        default="none",
-        help="万用表：tcp://IP[:5025]、visa://<资源名>、或 none（默认 none，只收蓝牙）",
+        default="usb",
+        help=(
+            "万用表：usb（默认，自动找 USB-TMC 仪器）、"
+            "直接粘 VISA 资源名、tcp://IP[:5025]、或 none 只收蓝牙"
+        ),
     )
     ap.add_argument(
         "--dmm-conf",
@@ -457,9 +641,17 @@ def main():
         default=time.strftime("cal-%Y%m%d-%H%M%S.csv"),
         help="CSV 输出路径，存在则追加",
     )
+    ap.add_argument(
+        "--burst-window",
+        type=float,
+        default=0.15,
+        help="同一次读数的多行帧合并窗口，秒（默认 0.15，与万用表积分并行不额外耗时）",
+    )
     ap.add_argument("--echo", action="store_true", help="打印收到的每一行原文")
     args = ap.parse_args()
 
+    if args.list_dmm:
+        return list_dmm()
     if args.list:
         asyncio.run(find_device(args.name, args.scan_timeout))
         return 0

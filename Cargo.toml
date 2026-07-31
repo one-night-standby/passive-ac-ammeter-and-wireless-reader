@@ -23,6 +23,12 @@ path = "src/bin/oparails.rs"
 test = false
 bench = false
 
+[[bin]]
+name = "stream"
+path = "src/bin/stream.rs"
+test = false
+bench = false
+
 [dependencies]
 embassy-mspm0 = { git = "https://github.com/ozongzi/embassy", rev = "f6daf50db52bb90e7dbee2314a04eee77b46b03b", features = ["mspm0g3507pm", "rt", "time-driver-any", "unstable-pac"] }
 embassy-executor = { git = "https://github.com/ozongzi/embassy", rev = "f6daf50db52bb90e7dbee2314a04eee77b46b03b", features = ["platform-cortex-m", "executor-thread"] }
