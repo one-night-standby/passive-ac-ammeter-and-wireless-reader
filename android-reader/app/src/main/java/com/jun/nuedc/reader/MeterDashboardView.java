@@ -198,6 +198,7 @@ public final class MeterDashboardView extends View {
     private long bumpStart = -1;
     private int pendingAddr = -1;
     private long pendingFrom, pendingUntil;
+    private String cachedVersion;
     private int holdAddr = -1;
     private int holdMa;
     private long holdUntil;
@@ -1055,6 +1056,10 @@ public final class MeterDashboardView extends View {
                 }
             }
             if (alarmRingtone != null) {
+                // 先停再播。Ringtone.play() 在正在播放时不会重头开始,而是
+                // 直接被吞掉——默认通知音有一两秒,读数可能来得更快,于是
+                // 「响一次吞一次」。停一下才能保证每一次越限都听得见。
+                alarmRingtone.stop();
                 alarmRingtone.play();
             }
         } catch (Exception ignored) {
@@ -1108,9 +1113,11 @@ public final class MeterDashboardView extends View {
         int dot = connectionError ? C_HIGH : (alive > 0 ? C_OK : C_HIGH);
         fill.setColor(dot);
         canvas.drawCircle(29, SB_CY, 3, fill);
-        String link = known > 0
-                ? "HC-42 透传 · 已知 " + known + " 台"
-                : connectionDetail;
+        // 版本号常驻状态栏。迭代快的时候「手机上装的到底是哪个包」是个真问题:
+        // 报警行为改过好几轮,而所有 APK 长得一模一样,凭现象反推装了哪版会
+        // 把人引到错误的方向去。
+        String link = (known > 0 ? "HC-42 透传 · 已知 " + known + " 台" : connectionDetail)
+                + "  v" + appVersion();
         text(canvas, link, 40, SB_CY + 4.1f, 11.5f, INK2, Paint.Align.LEFT, sans, 0, 1);
         text(canvas, minuteFormat.format(new Date()), 924, SB_CY + 4.1f, 11.5f, INK2,
                 Paint.Align.RIGHT, sans, 0, 1);
@@ -1788,6 +1795,22 @@ public final class MeterDashboardView extends View {
 
     private static String fmtHub(int ma) {
         return String.format(Locale.US, "%.3f", clamp(ma / 1000f, 0f, 9.999f));
+    }
+
+    /** 应用版本,取不到就留空——它是辅助信息,不该因为取不到而影响别的显示。 */
+    private String appVersion() {
+        if (cachedVersion == null) {
+            cachedVersion = "";
+            try {
+                cachedVersion = getContext()
+                        .getPackageManager()
+                        .getPackageInfo(getContext().getPackageName(), 0)
+                        .versionName;
+            } catch (Exception ignored) {
+                // 保持空串
+            }
+        }
+        return cachedVersion;
     }
 
     private static String statusLabel(String status) {

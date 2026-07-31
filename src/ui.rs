@@ -1,5 +1,9 @@
 //! The local readout: an SSD1306 that is dark except for the second after a
 //! reading, and that is allowed to be absent.
+//!
+//! Nothing here looks at the supply. `main` does not reach its first reading
+//! until the rail has come up, so by the time a panel exists to bring up it is
+//! already being driven off a rail that was measured good.
 
 use core::fmt::Write as _;
 
@@ -18,10 +22,14 @@ pub const DISPLAY_ON_MS: u64 = 1_000;
 
 /// How many times the SSD1306 may be brought up before this power cycle gives
 /// up on it. A failed attempt is retried on a later reading rather than being
-/// remembered as final, because the reading most likely to fail is the first
-/// one -- it lands while the harvested rail is still weak. The cap is what
-/// keeps a display that is simply absent from costing a bus transaction on
-/// every reading for the rest of the power cycle.
+/// remembered as final: this is a bit-banged bus with no arbitration, and one
+/// bad transaction says less than four do. The cap is what keeps a display that
+/// is simply absent from costing a bus transaction on every reading for the
+/// rest of the power cycle.
+///
+/// Four is enough to conclude something from because every one of them is made
+/// on a supply that was measured good before the firmware got this far. A weak
+/// rail cannot spend them.
 const OLED_INIT_ATTEMPTS: u8 = 4;
 
 /// A leading marker means the reading below it is not to be believed, and says

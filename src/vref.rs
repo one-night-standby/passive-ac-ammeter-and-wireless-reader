@@ -74,7 +74,10 @@ pub fn init() -> bool {
         write_volatile((VREF_BASE + CLKSEL) as *mut u32, CLKSEL_BUSCLK);
 
         // BUFCONFIG (bit 7) stays clear, which is the 2.5 V output; setting it
-        // would select 1.4 V.
+        // would select 1.4 V. Nothing writes it: one reference voltage for the
+        // whole program is what keeps CVREF from ever having to be pulled
+        // *down*, which the buffer cannot do and TRM 23.2.1 handles with a
+        // 100 us GPIO discharge on PA23.
         write_volatile((VREF_BASE + CTL0) as *mut u32, CTL0_ENABLE0);
 
         for _ in 0..READY_TRIES {
