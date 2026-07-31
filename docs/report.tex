@@ -224,6 +224,19 @@ $V_{\mathrm{L}}$，线性稳压交付负载的是电荷，故容量下限为
 $V_{\mathrm{L}}$ 不得低于 LDO 压差加 3.3\,V。该式给出的是容量下限，实际取值以窗口内
 $V_{\mathrm{H}}$、$V_{\mathrm{L}}$ 实测波形校核。
 
+式（4）描述的是储能电压已经建立之后的一次测量。冷启动阶段储能电压自零升起，其间既不
+具备完成一次测量的能量，稳压输出也尚未进入稳压区。固件据此设开机门限：上电后先测
+$V_{\mathrm{DD}}$，达到 3.3\,V 才开始工作。测量借用 ADC0 的内部电源监测通道，该通道
+不占引脚——选中它即断开外部输入并接到片内 $V_{\mathrm{DD}}/3$ 分压，与 ADC 共用同一
+片内 2.5\,V 基准，故满量程为 $3\times2.5=7.5$\,V、分辨力 1.83\,mV，门限对应的码值为
+\begin{equation}
+  D_{\mathrm{th}}=\frac{V_{\mathrm{th}}}{3}\cdot\frac{2^{12}}{V_{\mathrm{ref}}}
+  =\frac{3.3}{3}\cdot\frac{4096}{2.5}=1802 .
+\end{equation}
+2.5\,V 基准要求 $V_{\mathrm{DD}}\geq2.7$\,V，低于判决点，故判决本身落在基准的规格
+范围内；供电更低时基准随供电下降，商值增大使读数偏高而非偏低，不会把未达门限的供电
+误判为已达。
+
 对增益为 $G$ 的同相偏置放大电路，输出为
 \begin{equation}
   V_{\mathrm{o}}=G V_{\mathrm{i}}+(1-G)V_{\mathrm{DAC}} .
@@ -314,9 +327,16 @@ $R_{\mathrm{s}}$ 上的压降随次级电流变化；任一只关断支路即断
 \subheading{3．软件设计}
 
 程序上电后先把 PA26/PA8 置为取电空闲态，PB17 拉低使蓝牙断电，OLED 不发送初始化命令，
-随后不等请求先完成一次测量——读表器一连上就有数可读。这次测量结束后才把 PB17 置高、
-等待 350\,ms 并初始化 UART2：模块的启动电流是本固件中最大的单笔负载，不应落在供电
-刚建立的时刻。
+随后停下来等电源：每 20\,ms 用 ADC0 读一次 $V_{\mathrm{DD}}$，不到 3.3\,V 就不往下
+走。这一步之前除电源指示 LED 外没有任何模拟模块使能、蓝牙也未上电，储能电容的充电
+不被负载打断；基准和 ADC0 本身也是读完即掉电，仅占 1.5\% 的占空比。等待不设超时——
+供电达不到 3.3\,V 时，稳压输出尚未进入稳压区，OLED 与蓝牙模块都不在额定供电条件下，
+停在这里等待比出一个不可信的读数、或让欠压的外设动作更合理，此时电源指示 LED 仍在
+闪烁，与死机可区分。
+
+电压到位后不等请求先完成一次测量——读表器一连上就有数可读。这次测量结束后才把 PB17
+置高、等待 350\,ms 并初始化 UART2：模块的启动电流是本固件中最大的单笔负载，不应落在
+供电刚建立的时刻。
 
 此后主循环等待三件事之一：S2 下降沿、蓝牙收到 \texttt{MEAS}、2\,s 心跳定时到期。前两
 者完全等价，走同一条测量路径；心跳只发一帧保活并继续等待。测量期间到达的请求两者
@@ -721,14 +741,15 @@ B 表误差/\% & \placeholder & \placeholder & \placeholder & \placeholder & \pl
   % 主流程在左，一次测量的子流程在右。两列之间不连线：测量由主流程调用两次
   % （上电自测和收到触发），画成子流程比拉两条回线清楚。
   \node[lb] (b1) at (0, 0)     {上电：PA26=1，PA8=0\\ PB17=0，OLED 不初始化};
-  \node[lb] (b2) at (0,-1.65)  {上电自测一次\\ 执行测量子流程};
-  \node[lb] (b3) at (0,-3.30)  {PB17=1，等 350\,ms\\ 初始化 UART2};
-  \node[lb] (b4) at (0,-4.95)  {发读数帧与调试帧\\ OLED 显示 1\,s 后熄屏};
-  \node[lb] (b5) at (0,-6.60)  {清空积压请求，等待触发};
-  \node[decision] (d6) at (0,-8.40) {触发来源？};
-  \node[lb,text width=2.8cm] (b7) at (-5.20,-8.40)
+  \node[decision] (d0) at (0,-1.90) {ADC0 读 $V_{\mathrm{DD}}$\\ $\geq3.3$\,V？};
+  \node[lb] (b2) at (0,-3.85)  {上电自测一次\\ 执行测量子流程};
+  \node[lb] (b3) at (0,-5.50)  {PB17=1，等 350\,ms\\ 初始化 UART2};
+  \node[lb] (b4) at (0,-7.15)  {发读数帧与调试帧\\ OLED 显示 1\,s 后熄屏};
+  \node[lb] (b5) at (0,-8.80)  {清空积压请求，等待触发};
+  \node[decision] (d6) at (0,-10.60) {触发来源？};
+  \node[lb,text width=2.8cm] (b7) at (-5.20,-10.60)
     {发 \texttt{IMHERE} 保活帧};
-  \node[lb] (b8) at (0,-10.15) {执行测量子流程};
+  \node[lb] (b8) at (0,-12.35) {执行测量子流程};
 
   \node[rb,rounded corners=8pt] (m0) at (9.00, 0)    {子流程：一次测量};
   \node[rb] (m1) at (9.00,-1.55)  {PA26=0，PA8=1，等 20\,ms 建立};
@@ -739,15 +760,19 @@ B 表误差/\% & \placeholder & \placeholder & \placeholder & \placeholder & \pl
   \node[rb] (m6) at (9.00,-9.80)  {Hann 加权真有效值\\ 分档标定表插值};
   \node[rb,rounded corners=8pt] (m7) at (9.00,-11.30) {返回读数};
 
-  \draw[line] (b1)--(b2);
+  \draw[line] (b1)--(d0);
+  \draw[line] (d0.south)--node[right]{是}(b2.north);
+  % 否分支绕回判决自身：等待没有超时，供电不到 3.3 V 就一直停在这一步。
+  \draw[line] (d0.west)--node[above]{否，等 20\,ms}(-4.60,-1.90)--(-4.60,-0.95)
+              --(0,-0.95)--(d0.north);
   \draw[line] (b2)--(b3);
   \draw[line] (b3)--(b4);
   \draw[line] (b4)--(b5);
   \draw[line] (b5)--(d6);
   \draw[line] (d6.west)--node[above]{2\,s 心跳}(b7.east);
-  \draw[line] (b7.north)--(-5.20,-6.60)--(b5.west);
+  \draw[line] (b7.north)--(-5.20,-8.80)--(b5.west);
   \draw[line] (d6.south)--node[right]{S2 或 \texttt{MEAS}}(b8.north);
-  \draw[line] (b8.east)--(3.90,-10.15)--(3.90,-4.95)--(b4.east);
+  \draw[line] (b8.east)--(3.90,-12.35)--(3.90,-7.15)--(b4.east);
   \draw[line] (m0)--(m1);
   \draw[line] (m1)--(m2);
   \draw[line] (m2)--(m3);
