@@ -15,6 +15,7 @@ const CTL1: u32 = 0x1110;
 const DATA0: u32 = 0x1200;
 
 const PWREN_KEY_ENABLE: u32 = 0x2600_0001;
+const PWREN_KEY_DISABLE: u32 = 0x2600_0000;
 const CTL0_ENABLE: u32 = 1 << 0;
 const CTL0_RES_12BIT: u32 = 1 << 8;
 const CTL1_AMPEN: u32 = 1 << 0;
@@ -38,5 +39,19 @@ pub fn init() {
 pub fn set(code: u16) {
     unsafe {
         write_volatile((DAC0_BASE + DATA0) as *mut u32, code as u32 & 0xFFF);
+    }
+}
+
+/// Release DAC_OUT and drop the module out of the power domain.
+///
+/// CTL1 is cleared before PWREN so the pin is let go deliberately rather than
+/// as a side effect of the block losing power: OPS=0 opens both output
+/// switches, and AMPEN=0 with AMPHIZ=0 leaves the disabled output buffer in
+/// high impedance rather than pulled to ground (TRM 20.2.4).
+pub fn power_down() {
+    unsafe {
+        write_volatile((DAC0_BASE + CTL0) as *mut u32, 0);
+        write_volatile((DAC0_BASE + CTL1) as *mut u32, 0);
+        write_volatile((DAC0_BASE + PWREN) as *mut u32, PWREN_KEY_DISABLE);
     }
 }

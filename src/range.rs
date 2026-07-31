@@ -362,6 +362,30 @@ pub fn setup_opa1_pga(gain: Gain, dac_code: u16) {
     }
 }
 
+/// Turn the amplifier off and take its bias reference with it, consumer before
+/// source: the ladder bottom is tied to DAC12OUT, so the OPA stops before the
+/// voltage it is referred to goes away.
+///
+/// This is what actually unloads PA18 between measurements. The IOMUX has the
+/// pin high-Z the whole time (`sampler::set_hiz`), but that says nothing about
+/// the analog side: an enabled OPA1 with PSEL=EXTPIN1 connects the pin to the
+/// amplifier's input through the P-MUX and draws input bias current there.
+/// Clearing PWREN is what breaks that connection.
+///
+/// Clearing PWREN also resets the block, so `setup_opa1_pga` has to run again
+/// before the next frame -- it writes every field it depends on, starting from
+/// its own reset assert.
+pub fn power_down_opa1() {
+    let opa = pac::OPA1;
+    opa.ctl().write(|w| w.set_enable(false));
+    opa.gprcm().pwren().write(|w| {
+        w.set_key(pac::opa::vals::PwrenKey::KEY);
+        w.set_enable(false);
+    });
+
+    dac::power_down();
+}
+
 /// Select a measurement range: ADC channel, and for the PGA ranges the gain
 /// step and bias pivot too.
 ///
@@ -375,12 +399,14 @@ pub fn setup_opa1_pga(gain: Gain, dac_code: u16) {
 /// `Range::Direct` reaches unity by leaving the OPA out of the path rather
 /// than by driving GAIN to 0x0.
 ///
-/// `Direct` deliberately leaves the OPA running. Powering it down would save
-/// current -- 1(2) scores low-power operation -- but it would owe an OPA
-/// enable wait on the way back, and `Direct` is only ever selected when the
-/// input's DC makes amplification impossible, which is a fault condition
-/// rather than a normal operating point. Not worth the latency on a path that
-/// should never be hot.
+/// `Direct` deliberately leaves the OPA running for the rest of the cycle.
+/// Powering it down here would save a little current -- 1(2) scores low-power
+/// operation -- but it would owe an OPA enable wait if the measurement frame
+/// or a later probe wanted the amplifier back, and `Direct` is only ever
+/// selected when the input's DC makes amplification impossible, which is a
+/// fault condition rather than a normal operating point. Not worth the latency
+/// on a path that should never be hot. The idle current it would have saved is
+/// taken by `power_down_opa1` at the end of the cycle regardless.
 ///
 /// Returns whether the analog path actually changed, so the caller can skip
 /// the settle delay when it did not.

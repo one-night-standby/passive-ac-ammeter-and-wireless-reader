@@ -115,7 +115,7 @@ mod sampler;
 use range::{DAC_MAX, Gain, g_nominal, probe_stats};
 use sampler::{
     ADC_CH_OPA_OUT, ADC_CH_RAW_IN, ADC_MASK, PINCM_PA16, PINCM_PA18, PROBE_BUF, capture,
-    init_adc1_event, init_timer, set_adc_channel, set_analog,
+    init_adc1_event, init_timer, set_adc_channel, set_hiz,
 };
 
 bind_interrupts!(struct Irqs {
@@ -645,8 +645,8 @@ fn report(s: &mut Serial<'_>, pass: u32, m: &Measurement) {
 async fn main(_spawner: Spawner) -> ! {
     let p = embassy_mspm0::init(Default::default());
 
-    set_analog(PINCM_PA18);
-    set_analog(PINCM_PA16);
+    set_hiz(PINCM_PA18);
+    set_hiz(PINCM_PA16);
     init_adc1_event();
     init_timer();
 

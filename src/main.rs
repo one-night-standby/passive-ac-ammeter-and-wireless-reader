@@ -43,11 +43,12 @@ use cal::lsb_to_amps;
 use dsp::{coarse_pivot, rms_lsb};
 use oled::Oled;
 use range::{
-    DAC_MAX, Gain, Range, apply_range, next_range, over_range, probe_stats, setup_opa1_pga,
+    Gain, OUT_CENTER, Range, apply_range, dac_code_for, next_range, over_range, power_down_opa1,
+    probe_stats, setup_opa1_pga,
 };
 use sampler::{
     ADC_CH_RAW_IN, BUF, PINCM_PA16, PINCM_PA18, PROBE_BUF, capture, init_adc1_event, init_timer,
-    set_adc_channel, set_analog,
+    set_adc_channel, set_hiz,
 };
 
 bind_interrupts!(struct Irqs {
@@ -85,20 +86,10 @@ async fn main(_spawner: Spawner) -> ! {
     // least to spare.
     let mut afe_enable = Output::new(p.PA8, Level::Low);
 
-    set_analog(PINCM_PA18);
-    set_analog(PINCM_PA16);
-    // Starting range only, and deliberately the pessimistic end of the
-    // ladder: x2 cannot clip anything a higher step would have handled. The
-    // starting DAC code is mid-scale for the same reason -- not because the
-    // input is expected there, but because it is the choice that assumes
-    // least. Neither survives the first cycle: the probe reads the input at
-    // unity gain, and `next_range`/`dac_code_for` derive both from what it
-    // actually measured. Convergence takes one cycle rather than several,
-    // because the probe's numbers are input-referred and so do not depend on
-    // which range happens to be selected while it runs.
-    setup_opa1_pga(Gain::X2, (DAC_MAX / 2) as u16);
-    init_adc1_event();
-    init_timer();
+    // The idle state of the two analog pins, and the state they are left in
+    // after every cycle. Nothing else in this firmware touches PINCM40/PINCM38.
+    set_hiz(PINCM_PA18);
+    set_hiz(PINCM_PA16);
 
     let mut dma = Channel::new(p.DMA_CH0, Irqs);
     // `None` leaves PB2/PB3 in their reset state until the first reading
@@ -110,9 +101,22 @@ async fn main(_spawner: Spawner) -> ! {
     // low when pressed; unlike S1/PA18, it does not disturb the ADC input.
     let mut trigger = Input::new(p.PB21, Pull::Up);
 
-    // Survives across cycles: it is where the next `next_range` starts from,
-    // and one cycle ago is a better guess than the ladder's pessimistic end.
+    // Survive across cycles because the analog blocks do not: everything below
+    // is powered down between readings, so each cycle rebuilds the front end
+    // from these two numbers rather than from whatever the registers held.
+    //
+    // `range` is where the next `next_range` starts from, and one cycle ago is
+    // a better guess than the ladder's pessimistic end. `mean_in_last` is the
+    // input DC the pivot is placed against. The initial pair is the choice that
+    // assumes least -- x2 cannot clip anything a higher step would have
+    // handled, and centre is the placement furthest from both rails -- and
+    // neither survives the first cycle: the probe reads the input at unity
+    // gain, and `next_range`/`dac_code_for` derive both from what it actually
+    // measured. Convergence takes one cycle rather than several, because the
+    // probe's numbers are input-referred and so do not depend on which range
+    // happens to be selected while it runs.
     let mut range = Range::Pga(Gain::X2);
+    let mut mean_in_last = OUT_CENTER;
 
     loop {
         // Idle here, and this is also where a press made during the previous
@@ -121,6 +125,25 @@ async fn main(_spawner: Spawner) -> ! {
         trigger.wait_for_falling_edge().await;
 
         afe_enable.set_high();
+
+        // The analog blocks come up inside the front end's own settling window,
+        // so bringing them back costs no latency of its own: the DAC's turn-on
+        // (datasheet 7.17.5, 6.9 us max) and OPA1's enable time (7.19.2, 6 us
+        // max at GBW=HIGHGAIN) are microseconds against AFE_SETTLE_MS here.
+        // Each is a full bring-up, not a resume: the end of every cycle clears
+        // PWREN on all four blocks, and that resets every register in them.
+        //
+        // The gain and the pivot are last cycle's, so a cycle whose probe fails
+        // still measures at a setting that was right rather than at a blind
+        // mid-scale one. The probe replaces both a few milliseconds from now.
+        let gain = match range {
+            Range::Pga(g) => g,
+            Range::Direct => Gain::X2,
+        };
+        setup_opa1_pga(gain, dac_code_for(gain, mean_in_last));
+        init_adc1_event();
+        init_timer();
+
         Timer::after_millis(AFE_SETTLE_MS).await;
 
         // Both reset every press: one press is one independent reading, so a
@@ -147,6 +170,7 @@ async fn main(_spawner: Spawner) -> ! {
             let (mean_in, pp_in, railed) = probe_stats(unsafe { &*core::ptr::addr_of!(PROBE_BUF) });
             input_bad = railed;
             if !railed {
+                mean_in_last = mean_in;
                 range = next_range(range, mean_in, pp_in);
                 range_over = over_range(range, mean_in, pp_in);
                 if apply_range(range, mean_in) {
@@ -169,9 +193,18 @@ async fn main(_spawner: Spawner) -> ! {
         // returning, so nothing else touches BUF concurrently.
         let framed = capture(&mut dma, unsafe { &mut *core::ptr::addr_of_mut!(BUF) }).await;
 
-        // Everything below this line works out of BUF. The front end has no
-        // reader left, so it comes down before the arithmetic rather than
-        // after the display.
+        // Everything below this line works out of BUF, so the whole signal
+        // chain comes down here rather than after the display: the front end
+        // has no reader left, and the reader has nothing left to read.
+        //
+        // Order is downstream first. The converter and its sample clock stop,
+        // then the amplifier and its bias reference, then the external circuit
+        // -- so nothing is ever driving into a block that has just lost power.
+        // What this leaves on PA18 is the pad alone: the IOMUX has held it
+        // high-Z since boot, and with OPA1 and ADC1 out of the power domain
+        // there is no longer an analog mux on the other side of it either.
+        sampler::power_down();
+        power_down_opa1();
         afe_enable.set_low();
 
         // BUF holds 800 hardware-timed samples at 4 kHz (TIM+ADC+DMA, zero CPU

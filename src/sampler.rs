@@ -48,12 +48,18 @@ pub const PINCM_PA16: usize = 37; // OPA1_OUT (also ADC1 ch 1), datasheet PINCM3
 pub const ADC_CH_OPA_OUT: u8 = 1; // PA16
 pub const ADC_CH_RAW_IN: u8 = 3; // PA18
 
-pub fn set_analog(pincm: usize) {
-    pac::IOMUX.pincm(pincm).modify(|w| {
-        w.set_pf(0);
-        w.set_pipu(false);
-        w.set_pipd(false);
-    });
+/// Put a pin in the IOMUX's default high-impedance state: no peripheral
+/// function selected, input buffer disconnected, both pull resistors off. TRM
+/// 8.2 asks for exactly this on any pin an analog peripheral is using, and once
+/// those peripherals are powered down it is also what leaves the pin loaded by
+/// nothing but pad leakage.
+///
+/// The whole register is written rather than modified: high-Z is an absolute
+/// state, not an adjustment to whatever the register happens to hold.
+pub fn set_hiz(pincm: usize) {
+    pac::IOMUX
+        .pincm(pincm)
+        .write_value(pac::iomux::regs::Pincm(0));
 }
 
 pub const N: usize = 800;
@@ -210,6 +216,33 @@ pub fn init_timer() {
         .modify(|w| w.set_evt_cfg(1, vals::EvtCfg::HARDWARE));
     tim.gen_event(0).imask().modify(|w| w.set_z(true));
     tim.fpub(0).write(|w| w.set_chanid(EVT_CH_ADC1));
+}
+
+/// Drop the sample clock and the converter out of the power domain, in that
+/// order: TIMG6 stops publishing before ADC1 stops listening, so no conversion
+/// can be left half-started by the power-down itself.
+///
+/// The point is what it takes off the input pin. ADC1 selects its channel with
+/// an analog mux inside the block, so as long as the block is powered the
+/// selected pin still sees that mux and the sample-and-hold behind it; only
+/// clearing PWREN disconnects it. Clearing PWREN also resets every register in
+/// both blocks, so `init_adc1_event` and `init_timer` have to run again before
+/// the next frame -- both write every field they depend on.
+pub fn power_down() {
+    pac::TIMG6
+        .counterregs(0)
+        .ctrctl()
+        .modify(|w| w.set_en(false));
+    pac::TIMG6.gprcm(0).pwren().write(|w| {
+        w.set_key(pac::tim::vals::PwrenKey::KEY);
+        w.set_enable(false);
+    });
+
+    pac::ADC1.ctl0().modify(|w| w.set_enc(false));
+    pac::ADC1.gprcm(0).pwren().write(|w| {
+        w.set_key(pac::adc::vals::PwrenKey::KEY);
+        w.set_enable(false);
+    });
 }
 
 /// One hardware-timed capture of `dst.len()` samples from whichever channel
