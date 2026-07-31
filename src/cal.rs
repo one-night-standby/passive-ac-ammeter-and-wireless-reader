@@ -40,11 +40,23 @@ use crate::range::{Gain, Range};
 /// the range changes. The step in use at 2 A additionally needs a point past
 /// 2 A, so the over-limit alarm region is interpolated rather than
 /// extrapolated.
-/// `CAL_X1` is the `Direct` range. It only gets selected when the input's own
-/// DC leaves no room to amplify, so on a front end that biases near mid-rail
-/// it will never be entered and can stay empty; fill it only if the bench
-/// actually shows `x1` on the OLED.
-pub static CAL_X1: &[(f32, f32)] = &[];
+/// `CAL_X1` is the `Direct` range, and on this front end it is the range the
+/// bench actually runs in: every reading below came off the OLED showing `x1`.
+///
+/// Two gaps this span does not cover. The top point is 2.03 A, so the `> 2 A`
+/// alarm region 2(3) has to watch is extrapolated off the last segment rather
+/// than interpolated -- it wants a point past 2 A. And 0.191 A to 0.530 A is
+/// one segment carrying most of the decade where the CT's ratio error is
+/// worst, which is the opposite of the "denser at the bottom" above.
+pub static CAL_X1: &[(f32, f32)] = &[
+    (18.34, 0.0755),
+    (35.81, 0.191),
+    (129.07, 0.530),
+    (144.41, 0.707),
+    (185.5, 1.040),
+    (269.18, 1.505),
+    (441.4, 2.030),
+];
 
 pub static CAL_X2: &[(f32, f32)] = &[];
 
@@ -76,16 +88,23 @@ pub fn cal_for(range: Range) -> &'static [(f32, f32)] {
 
 /// Fallback scale used only while a step's table has fewer than two entries,
 /// so an uncalibrated build still reads approximately right on every step.
-/// Fitted at one point, at x4; other steps are extrapolated by the nominal
-/// ratio, which is precisely the approximation the tables exist to replace.
+/// With `CAL_X1` filled, that means the five PGA steps -- which is also where
+/// this constant is weakest: it is fitted at x1 and reaches the others by the
+/// nominal ladder ratio, precisely the approximation the per-range tables
+/// exist to replace.
 ///
-/// Written to the shortest decimal that round-trips through f32. The bench
-/// fit produced 0.003433733774564919, but f32 stores 0.0034337337128818035
-/// either way -- the extra digits were never in the binary, only in the
-/// source, where they implied a precision this constant does not have.
-pub const CAL_FALLBACK_A_PER_LSB: f32 = 0.0034337337;
+/// Fitted to the `CAL_X1` points above, by least squares on *relative* error
+/// (a reading is judged as a percentage) and through the origin (the only
+/// shape `lsb_to_amps` can use here). It lands within 15.5% at every one of
+/// those points, which is what a single straight line is worth on this data.
+/// A fallback, not a calibration.
+///
+/// Written to the shortest decimal that round-trips through f32, so the source
+/// does not imply a precision this constant does not have.
+pub const CAL_FALLBACK_A_PER_LSB: f32 = 0.0047436945;
 
-pub const CAL_FALLBACK_GAIN: f32 = 4.0;
+/// The gain `CAL_FALLBACK_A_PER_LSB` was fitted at.
+pub const CAL_FALLBACK_GAIN: f32 = 1.0;
 
 /// Both columns of a CAL table must increase together. Checked at compile
 /// time because the tables are typed in by hand, one pair per bench reading,

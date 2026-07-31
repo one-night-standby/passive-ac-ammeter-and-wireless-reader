@@ -3,11 +3,12 @@
 
 //! "Passive" AC ammeter, circuit A: one reading per press of S2.
 //!
-//! The cycle is: S2 raises PA8 to power the external sampling circuit, the
-//! probe and measurement frames run, PA8 drops again before any arithmetic
-//! starts, and the result is shown for `DISPLAY_ON_MS` before the panel goes
-//! dark. Presses that land inside a cycle are dropped, not queued. Between
-//! cycles nothing runs -- the executor idles on the S2 edge.
+//! The cycle is: S2 switches the external circuit into its measuring state
+//! (PA8 high, PA26 low), the probe and measurement frames run, the pair goes
+//! back to idle before any arithmetic starts, and the result is shown for
+//! `DISPLAY_ON_MS` before the panel goes dark. Presses that land inside a
+//! cycle are dropped, not queued. Between cycles nothing runs -- the executor
+//! idles on the S2 edge.
 //!
 //! This file is the wiring and the measurement period; the substance lives in
 //! the four modules below.
@@ -23,7 +24,7 @@ use embassy_mspm0::bind_interrupts;
 use embassy_mspm0::dma::{self, Channel};
 use embassy_mspm0::gpio::{Input, Level, Output, Pull};
 use embassy_mspm0::peripherals;
-use embassy_time::Timer;
+use embassy_time::{Duration, Timer};
 use embedded_graphics::mono_font::MonoTextStyle;
 use embedded_graphics::mono_font::ascii::FONT_9X15;
 use embedded_graphics::pixelcolor::BinaryColor;
@@ -55,8 +56,8 @@ bind_interrupts!(struct Irqs {
     DMA => dma::InterruptHandler<peripherals::DMA_CH0>;
 });
 
-/// Settling allowed after PA8 powers the external sampling circuit, before the
-/// probe frame starts.
+/// Settling allowed after the external circuit is switched into its measuring
+/// state, before the probe frame starts.
 ///
 /// What survives into the measurement frame is a *decaying* offset, and
 /// `rms_lsb` subtracts the frame's own weighted mean -- that removes a constant
@@ -76,15 +77,70 @@ const DISPLAY_ON_MS: u64 = 1_000;
 /// for the rest of the power cycle.
 const OLED_INIT_ATTEMPTS: u8 = 4;
 
+/// Blink rate of the power-on indicator, in blinks per second.
+const BLINK_HZ: u64 = 3;
+
+/// Power-on indicator on the LaunchPad's red LED1 (PA0, jumper J4).
+///
+/// It says the firmware is alive, which is the one thing the OLED cannot: the
+/// panel is dark except for the second after a reading, and a dark panel looks
+/// the same whether the board is unpowered, stuck before the first press, or
+/// simply idle. Blinking rather than steady, because a steady LED cannot tell
+/// a running executor from a hung one.
+///
+/// Runs as its own task so it keeps its rate through a measurement cycle,
+/// which holds the main loop for a few hundred milliseconds at a stretch.
+/// Toggling is twice per blink, hence the doubled rate.
+#[embassy_executor::task]
+async fn blink(mut led: Output<'static>) -> ! {
+    let half_period = Duration::from_hz(2 * BLINK_HZ);
+    loop {
+        led.toggle();
+        Timer::after(half_period).await;
+    }
+}
+
 #[embassy_executor::main]
-async fn main(_spawner: Spawner) -> ! {
+async fn main(spawner: Spawner) -> ! {
     let p = embassy_mspm0::init(Default::default());
 
-    // Active-high enable for the external sampling circuit. This pin needs a
-    // physical pull-down: between power-on and this line it is an input, not a
-    // driven low, and that window is exactly when the harvested supply has the
-    // least to spare.
+    // First thing after the clocks, so the indicator is up before anything
+    // that can fail or block: from here on, a dark LED means the firmware
+    // never got this far.
+    //
+    // The task pool is one deep and this is its only spawn, so the token
+    // cannot come back `Err`. Handled rather than unwrapped anyway: an
+    // indicator that failed to start is a reason to run without it, not a
+    // reason to halt a meter that is otherwise fine.
+    if let Ok(token) = blink(Output::new(p.PA0, Level::Low)) {
+        spawner.spawn(token);
+    }
+
+    // The external circuit's two control lines, driven as one complementary
+    // pair: measuring is PA8 high with PA26 low, idle is the reverse. They are
+    // never set independently, which is why `measuring()` below takes a single
+    // bool -- a state where both say "measure" or neither does is not a state
+    // this circuit has, and the pair should not be able to express one.
+    //
+    // Both pins need a physical resistor holding their idle level: between
+    // power-on and this line they are inputs, not driven outputs, so PA8 needs
+    // a pull-down and PA26 a pull-up. That window is exactly when the
+    // harvested supply has the least to spare, and it is also long -- it
+    // covers the whole boot, not just these two statements.
     let mut afe_enable = Output::new(p.PA8, Level::Low);
+    let mut afe_enable_n = Output::new(p.PA26, Level::High);
+    // Leaving is the mirror of entering, so the circuit passes through the
+    // same intermediate state in both directions rather than a different one
+    // each way.
+    let mut set_measuring = |measuring: bool| {
+        if measuring {
+            afe_enable.set_high();
+            afe_enable_n.set_low();
+        } else {
+            afe_enable_n.set_high();
+            afe_enable.set_low();
+        }
+    };
 
     // The idle state of the two analog pins, and the state they are left in
     // after every cycle. Nothing else in this firmware touches PINCM40/PINCM38.
@@ -124,7 +180,7 @@ async fn main(_spawner: Spawner) -> ! {
         // events before it arms, so only edges from here on count.
         trigger.wait_for_falling_edge().await;
 
-        afe_enable.set_high();
+        set_measuring(true);
 
         // The analog blocks come up inside the front end's own settling window,
         // so bringing them back costs no latency of its own: the DAC's turn-on
@@ -205,7 +261,7 @@ async fn main(_spawner: Spawner) -> ! {
         // there is no longer an analog mux on the other side of it either.
         sampler::power_down();
         power_down_opa1();
-        afe_enable.set_low();
+        set_measuring(false);
 
         // BUF holds 800 hardware-timed samples at 4 kHz (TIM+ADC+DMA, zero CPU
         // involvement per sample).
