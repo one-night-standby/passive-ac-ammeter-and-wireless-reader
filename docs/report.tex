@@ -1,0 +1,765 @@
+\documentclass[12pt,a4paper]{article}
+
+\usepackage{fontspec}
+\usepackage{xeCJK}
+\usepackage[a4paper,top=3cm,bottom=2.54cm,left=3.175cm,right=3.175cm,
+            footskip=1.15cm]{geometry}
+\usepackage{fancyhdr}
+\usepackage{caption}
+\usepackage{amsmath,amssymb}
+\usepackage{array,tabularx,longtable}
+\usepackage{enumitem}
+\usepackage{tikz}
+\usepackage[american]{circuitikz}
+\usepackage{float}
+\usepackage{xcolor}
+\usetikzlibrary{arrows.meta,positioning,shapes.geometric,fit}
+
+% 中文统一为宋体，西文和数字统一为 Times New Roman。
+% 宋体用 macOS 自带的 Songti SC，Windows/Overleaf 上可换成 SimSun。
+\setmainfont{Times New Roman}
+\setmonofont{Times New Roman}
+\setCJKmainfont[AutoFakeBold=2.5]{Songti SC}
+\setCJKsansfont[AutoFakeBold=2.5]{Songti SC}
+\setCJKmonofont{Songti SC}
+
+\newcommand{\xiaosi}{\fontsize{12bp}{22bp}\selectfont}
+\newcommand{\wuhao}{\fontsize{10.5bp}{15bp}\selectfont}
+\newcommand{\placeholder}{\textcolor{gray}{待实测}}
+
+\setlength{\parindent}{2em}
+\setlength{\parskip}{0pt}
+\setlength{\tabcolsep}{4pt}
+\renewcommand{\arraystretch}{1.35}
+\setlist{nosep}
+
+\pagestyle{fancy}
+\fancyhf{}
+\renewcommand{\headrulewidth}{0pt}
+\fancyfoot[R]{\wuhao\thepage}
+
+\captionsetup{
+  font={small},
+  labelfont=normalfont,
+  labelsep=space,
+  justification=centering,
+  singlelinecheck=true,
+  skip=3pt
+}
+\renewcommand{\figurename}{图}
+\renewcommand{\tablename}{表}
+
+\newcommand{\mainheading}[1]{%
+  \par\vspace{7.8pt}\noindent{\fontsize{16bp}{22bp}\selectfont\bfseries #1}\par
+  \vspace{4pt}}
+\newcommand{\subheading}[1]{%
+  \par\vspace{2pt}\noindent{\fontsize{14bp}{22bp}\selectfont\bfseries #1}\par}
+\newcommand{\thirdheading}[1]{%
+  \par\noindent{\xiaosi\bfseries #1}\par}
+
+\tikzset{
+  block/.style={draw,align=center,minimum height=8mm,minimum width=20mm},
+  decision/.style={draw,diamond,aspect=2,align=center,inner sep=1pt},
+  line/.style={-{Latex[length=2mm]},thin}
+}
+
+\begin{document}
+\xiaosi
+
+% 参考报告中摘要单独成页，不显示页码。
+\thispagestyle{empty}
+\begin{center}
+  {\fontsize{16bp}{22bp}\selectfont\bfseries 摘要}
+\end{center}
+
+本工程由电流互感取能与传感模块、SS16 桥式整流及储能模块、MOS 管分时开关、
+可编程增益测量模块、MSPM0G3507 控制模块、本地显示与蓝牙通信模块、Android 无线
+读表器组成。空闲期以取电储能为主，测量窗口由 PA26/PA8 控制 PMOS、NMOS 接入传感
+前端；控制器完成自动量程和真有效值计算，手机端完成远程读取、报警、记录与趋势显示。
+
+\noindent\textbf{关键词：}无源电流表；MSPM0G3507；真有效值；自动量程；低功耗；BLE
+
+\clearpage
+\setcounter{page}{1}
+
+\mainheading{一、\quad 系统方案论证与比较}
+
+\subheading{1．取能与传感方案的论证与选择}
+
+方案一：使用两组独立次级线圈分别驱动取电电路和传感电路。该方案中两条通道互相
+隔离，调试较为直观，但两组绕组同时占用磁芯窗口，绕制工作量较大，匝数和耦合差异
+还会引入一致性误差。
+
+方案二：使用一组带抽头的次级线圈，并以受控 MOS 开关对取电和传感进行分时复用。
+空闲期断开传感前端，使互感器输出优先经 SS16 全桥向储能电容充电；进入测量窗口后，
+PA26 拉低使 PMOS 导通、PA8 拉高使 NMOS 导通，传感前端接入并由储能节点维持系统
+供电。该方案减少重复绕组，且避免传感负载在冷启动阶段持续占用取能功率。
+
+综上所述，本系统采用方案二。次级绕组总计 270 匝并设抽头。
+经不同抽头组合测试，最终以 170 匝有效绕组完成取电；取电与传感不再作为两个持续
+并联负载，而由 MOS 开关限定传感支路的接入时间。
+
+\subheading{2．整流及稳压电源方案的论证与选择}
+
+\par\vspace{58mm}
+
+\subheading{3．电流有效值测量及量程方案的论证与选择}
+
+方案一：采用外部偏置与外部运算放大电路。由独立基准电路将交流采样信号偏置到 ADC
+输入范围中点，再经外部运放进行放大。该方案电路独立，调试直观，但需增加运放、偏置基准
+及增益切换器件，占用电路板面积，同时会带来额外静态功耗。
+
+方案二：采用 MSPM0G3507 内部 OPA 和 DAC。DAC 产生可调偏置，内部 OPA 完成信号放大，
+通过软件配置 1、2、4、8、16、32 倍增益，并根据采样幅值自动切换量程。该方案外围器件少、
+功耗较低，且偏置和增益可由程序协同调整。综合考虑无源取能条件下的功耗和硬件规模，本设计
+选择方案二，并使用 ADC 采样数据计算真有效值。
+
+\mainheading{二、\quad 理论分析与计算}
+
+\subheading{1．电流互感器与绕组参数分析}
+
+电流互感器原边串入被测交流线路，原边匝数满足 $N_1\leq5$，副边匝数为 $N_2$，
+其结构示意如图 \ref{fig:ct_structure} 所示。
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[line cap=round,line join=round,font=\wuhao,
+    >={Latex[length=2mm]}]
+  \def\Ro{1.32}\def\Ri{0.84}      % 磁环内外半径
+  \def\Rm{1.08}\def\Ra{0.40}      % 绕线中线半径与绕线半径（\Ra 大于半壁厚）
+
+  % 绕线是绕在环截面上的螺线。设绕过截面的相位为 p，其正视投影的半径为
+  % \Rm+\Ra*cos(p)：p=0 在最外、p=180 在最内，p 在 0~180 之间位于环前面，
+  % 180~360 位于环背面。据此先整条画出，再用不透明的磁环盖住背面那半，
+  % 最后把前面那半重画——遮挡由磁环自身完成，整条线始终是连续的一根。
+  \newcommand{\coilpath}[3]{% #1 起始角 #2 终止角 #3 匝数
+    \pgfmathsetmacro{\kk}{#3*360/(#2-#1)}%
+    \draw[thick,domain=#1:#2,samples=460,variable=\t,smooth]
+      plot ({(\Rm+\Ra*cos(\kk*(\t-#1)))*cos(\t)},
+            {(\Rm+\Ra*cos(\kk*(\t-#1)))*sin(\t)});}
+  \newcommand{\coilfront}[3]{% 同上，只画位于环前面的半匝
+    \pgfmathsetmacro{\kk}{#3*360/(#2-#1)}%
+    \pgfmathsetmacro{\jmax}{#3-1}%
+    \foreach \j in {0,...,\jmax}{%
+      \pgfmathsetmacro{\ta}{#1+\j*360/\kk}%
+      \pgfmathsetmacro{\tb}{#1+(\j*360+180)/\kk}%
+      \draw[thick,domain=\ta:\tb,samples=40,variable=\t,smooth]
+        plot ({(\Rm+\Ra*cos(\kk*(\t-#1)))*cos(\t)},
+              {(\Rm+\Ra*cos(\kk*(\t-#1)))*sin(\t)});}}
+
+  \coilpath{130}{230}{5}          % 原边整条
+  \coilpath{-70}{70}{9}           % 副边整条
+
+  \fill[black!10,even odd rule] (0,0) circle (\Ro) (0,0) circle (\Ri);
+  \draw[thick] (0,0) circle (\Ro);
+  \draw[thick] (0,0) circle (\Ri);
+
+  \coilfront{130}{230}{5}         % 环前面的半匝重画
+  \coilfront{-70}{70}{9}
+
+  % 原边引线，接在螺线两端（相位 0，位于最外）
+  \draw[thick] (130:{\Rm+\Ra}) -- (-2.60,1.10);
+  \draw[thick] (230:{\Rm+\Ra}) -- (-2.60,-1.10);
+  \draw[thick,->] (-3.40,1.10) -- (-2.60,1.10);
+  \node[above] at (-3.00,1.14) {$i_1$};
+  \node[left] at (-2.65,-1.10) {被测线路};
+  \node at (-1.55,-1.95) {$N_1=5$};
+
+  % 副边引线
+  \draw[thick,rounded corners=2pt] (70:{\Rm+\Ra}) -- (2.15,1.32) -- (2.15,0.52)
+    -- (3.00,0.52) node[right] {AC1};
+  \draw[thick,rounded corners=2pt] (-70:{\Rm+\Ra}) -- (2.15,-1.32) -- (2.15,-0.52)
+    -- (3.00,-0.52) node[right] {AC2};
+  \node at (1.60,-1.95) {$N_2=270$};
+
+  \draw[thin] (-90:1.08) -- (0,-2.48);
+  \node[below] at (0,-2.48) {磁环};
+\end{tikzpicture}
+\caption{电流互感器结构示意图}
+\label{fig:ct_structure}
+\end{figure}
+
+忽略励磁电流与损耗时，原、副边安匝近似平衡，即
+\begin{equation}
+  N_1 I_1=N_2 I_2 ,
+\end{equation}
+因此副边电流为
+\begin{equation}
+  I_2=\frac{N_1}{N_2}I_1 .
+\end{equation}
+增加副边匝数能够提高低电流时的感应电压，但同时会增加绕组电阻和分布参数。为兼顾
+取能和调试，次级采用 270 匝带抽头结构。试验时分别比较不同有效匝数
+下的整流电压、带载稳定性和启动能力，最终选取 170 匝有效绕组供电。
+
+\subheading{2．桥式整流与储能分析}
+
+取电支路由四只 SS16 肖特基二极管组成全桥，整流输出记为节点 $A$，电路如图
+\ref{fig:ss16_bridge} 所示。储能电容不仅承担冷启动蓄能，还要在采集支路接入期间维持
+MCU 和模拟前端供电。
+
+节点 $A$ 与储能电容之间另串一只肖特基 $D_5$，这是分时复用得以成立的前提：采集支路
+接入时把 $A$ 拉低，若无 $D_5$，储能电容会经采集支路反向放电，冷启动积攒的能量在第
+一次测量中即被耗尽。$D_5$ 使能量只能单向流入电容，采集期间系统由电容独立维持。选肖
+特基同样是为了压低正向压降——低电压下这一项对可用能量的影响最直接。
+
+\begin{figure}[H]
+\centering
+\begin{circuitikz}[line cap=round,line join=round,font=\wuhao]
+  \coordinate (w) at (-1.85,0);
+  \coordinate (e) at ( 1.85,0);
+  \coordinate (n) at ( 0, 1.60);
+  \coordinate (sth) at ( 0,-1.60);
+
+  \draw (w) to[D,l=$D_1$]  (n);
+  \draw (e) to[D,l_=$D_2$] (n);
+  \draw (sth) to[D,l=$D_3$]  (w);
+  \draw (sth) to[D,l_=$D_4$] (e);
+
+  \draw (w) -- (-3.05,0) node[left] {AC1};
+  \draw (e) -- ( 2.85,0) node[right] {AC2};
+
+  % 整流输出节点 A：采集支路与储能支路在此分开
+  \draw (n) -- (0,2.45) -- (2.35,2.45);
+  \node[circ] at (2.35,2.45) {};
+  \node[below] at (1.30,2.38) {$A$};
+  % 采集支路自节点 A 向上引出，避开桥体与交流引线
+  \draw (2.35,2.45) -- (2.35,3.55);
+  \node[above,align=center] at (2.35,3.60)
+    {至电流采集支路（图~\ref{fig:afe_mos_switch}）};
+
+  % 储能支路：串联肖特基隔离，防止采集支路接入时电容倒灌
+  \draw (2.35,2.45) to[D*,l=$D_5$] (4.55,2.45);
+  \draw (4.55,2.45) -- (5.35,2.45);
+  \draw (5.35,2.45) to[C,l_=$C_{\mathrm{s}}$] (5.35,-2.45);
+  \draw (5.35,2.45) -- (6.55,2.45) node[right] {$V_{\mathrm{R}}$};
+  \draw (sth) -- (0,-2.45) -- (5.35,-2.45);
+  \draw (5.35,-2.45) -- (6.15,-2.45) node[ground] {};
+  \node[above left] at (0,2.45) {$+$};
+  \node[below left] at (0,-2.45) {$-$};
+\end{circuitikz}
+\caption{整流、隔离与储能电路}
+\label{fig:ss16_bridge}
+\end{figure}
+
+桥式整流每半周均有两只二极管串联导通。若互感器次级瞬时电压为 $u_2(t)$，单只
+SS16 的正向压降为 $V_{\mathrm{F}}$，则整流后的近似瞬时电压为
+\begin{equation}
+  u_{\mathrm{r}}(t)=\max\left(|u_2(t)|-2V_{\mathrm{F}},\,0\right).
+\end{equation}
+由式（3）可知，输入电压越低，二极管压降对可用能量的影响越明显，故选用肖特基桥。
+储能电容需要同时满足 MCU 完成一次探测、正式采样、计算及外设开启过程中的能量需求。
+最低启动电流应在电容完全放电的条件下实测，不能仅由空载整流电压判断。
+
+\subheading{3．取电与传感分时切换分析}
+
+采集支路自节点 $A$ 取出，由 PMOS 高边与 NMOS 低边双端把关，采样电阻 $R_{\mathrm{s}}$
+串于两者之间，PMOS 漏极与 $R_{\mathrm{s}}$ 的交点送 PA18 供 ADC 采样，原理如图
+\ref{fig:afe_mos_switch} 所示。两只 MOS 同时导通时支路成回路，$R_{\mathrm{s}}$ 上的
+压降随互感器次级电流变化；任一只关断即整条支路断开，不在测量窗口内不消耗取能功率。
+
+PA26 控制 PMOS 栅极并由 10\,k$\Omega$ 电阻上拉至 $A$，PA8 控制 NMOS 栅极并由
+10\,k$\Omega$ 电阻下拉至地。上电至 MCU 接管 GPIO 之前引脚是输入而非驱动输出，两只
+电阻在这段窗口内使支路保持断开——而这段窗口恰好是储能电压最弱、最经不起额外负载的
+时候。
+
+\begin{figure}[H]
+\centering
+\begin{circuitikz}[line cap=round,line join=round,
+    >={Latex[length=2mm]},font=\wuhao]
+  % 支路自整流输出节点 A 取电，两端各由一只 MOS 把关
+  \draw (0,3.45) node[above] {整流输出 $A$} -- (0,2.95);
+  \node[pmos] (QP) at (0,2.45) {};
+  \draw (QP.S) -- (0,2.95);
+  \node[right=1mm of QP] {$Q_{\mathrm{P}}$};
+
+  \draw (QP.D) -- (0,1.55);
+  \draw (0,1.55) to[R,l_=$R_{\mathrm{s}}$] (0,0.05);
+  \node[right] at (0.45,0.80) {采样电阻};
+
+  \node[nmos] (QN) at (0,-0.45) {};
+  \draw (QN.D) -- (0,0.05);
+  \draw (QN.S) -- (0,-1.55) node[ground] {};
+  \node[right=1mm of QN] {$Q_{\mathrm{N}}$};
+
+  % 采样节点送 ADC
+  \node[circ] at (0,1.55) {};
+  \draw[->] (0,1.55) -- (3.05,1.55) node[right] {PA18（ADC）};
+
+  % 栅极驱动与失效安全电阻:MCU 接管之前两只电阻使支路保持断开
+  \draw (QP.G) -- (-3.30,2.45) node[left] {PA26};
+  \draw (-2.10,2.45) to[R,l=$10\,\mathrm{k}\Omega$] (-2.10,3.45) -- (0,3.45);
+  \draw (QN.G) -- (-3.30,-0.45) node[left] {PA8};
+  \draw (-2.10,-0.45) to[R,l_=$10\,\mathrm{k}\Omega$] (-2.10,-1.55) -- (0,-1.55);
+\end{circuitikz}
+\caption{电流采集支路与双端 MOS 开关}
+\label{fig:afe_mos_switch}
+\end{figure}
+
+\begin{table}[H]
+\centering
+\caption{取电与传感分时控制状态}
+\label{tab:afe_switch_state}
+\wuhao
+\begin{tabularx}{0.90\textwidth}{|>{\centering\arraybackslash}p{23mm}|
+>{\centering\arraybackslash}p{17mm}|>{\centering\arraybackslash}p{17mm}|
+>{\centering\arraybackslash}p{25mm}|X|}
+\hline
+工作状态 & PA26 & PA8 & MOS 状态 & 能量与信号路径\\ \hline
+空闲/取电 & 高 & 低 & PMOS、NMOS 均关断 & 传感前端隔离，互感器输出优先用于整流储能\\ \hline
+测量/传感 & 低 & 高 & PMOS、NMOS 均导通 & 传感前端接入，储能节点维持 MCU 和采样电路供电\\ \hline
+\end{tabularx}
+\end{table}
+
+测量触发后先切换为传感态，并预留 20\,ms 建立时间；随后进行 40\,ms 探测采样、
+最多 1\,ms 换档建立及 200\,ms 正式采样。测量结束后先关闭 TIMG6/ADC1，再关闭
+OPA1/DAC12，最后恢复 PA26 高、PA8 低。若分时窗口内储能电压从 $V_{\mathrm{H}}$
+下降到 $V_{\mathrm{L}}$，则至少应满足
+\begin{equation}
+  \frac{1}{2}C_{\mathrm{s}}\left(V_{\mathrm{H}}^2-V_{\mathrm{L}}^2\right)
+  \geq \frac{E_{\mathrm{measure}}}{\eta} ,
+\end{equation}
+其中 $E_{\mathrm{measure}}$ 为一次约 260～261\,ms 测量窗口的能耗，$\eta$ 为稳压链路
+效率。该条件由 VRECT 与 3.3\,V 波形实测验证。
+
+\subheading{4．可编程增益与偏置计算}
+
+对增益为 $G$ 的同相偏置放大电路，其输出可表示为
+\begin{equation}
+  V_{\mathrm{o}}=G V_{\mathrm{i}}+(1-G)V_{\mathrm{DAC}} .
+\end{equation}
+若输入直流中心为 $V_{\mathrm{i,dc}}$，希望输出中心位于 ADC 中点 $V_{\mathrm{c}}$，
+则 $G>1$ 时的 DAC 电压为
+\begin{equation}
+  V_{\mathrm{DAC}}=\frac{G V_{\mathrm{i,dc}}-V_{\mathrm{c}}}{G-1}.
+\end{equation}
+固件以 12 位 ADC 的 2047 码为目标中心，探测阶段采集 160 点，时间为 40\,ms；
+正式阶段采集 800 点，时间为 200\,ms。目标峰峰值利用率设为满量程的 65\%，回差
+下、上限分别取 25\% 和 75\%。
+
+\subheading{5．真有效值及标定算法}
+
+定时器 TIMG6 以 4\,kHz 产生 ADC1 转换事件，DMA 将数据搬运至内存。对 $N$ 点
+采样序列 $x[n]$ 使用 Hann 权重 $w[n]$，其加权均值为
+\begin{equation}
+  \bar{x}_{w}=
+  \frac{\sum_{n=0}^{N-1}w[n]x[n]}{\sum_{n=0}^{N-1}w[n]} .
+\end{equation}
+去除直流分量后的有效值码宽为
+\begin{equation}
+ X_{\mathrm{rms}}=
+ \sqrt{\frac{\sum_{n=0}^{N-1}w[n]\left(x[n]-\bar{x}_{w}\right)^2}
+ {\sum_{n=0}^{N-1}w[n]}} .
+\end{equation}
+Hann 权重可降低采样记录没有覆盖整数工频周期时的边界影响。各量程分别保存标定点
+$(x_k,I_k)$。当 $x_k\leq X_{\mathrm{rms}}\leq x_{k+1}$ 时，采用
+\begin{equation}
+ I=I_k+\frac{X_{\mathrm{rms}}-x_k}{x_{k+1}-x_k}(I_{k+1}-I_k)
+\end{equation}
+进行分段线性插值。六档各有一张标定表；表中数据由台架比对写入，
+名义比例系数只可用于调试，不能作为 0.5\% 精度的证明。
+
+\mainheading{三、\quad 电路与程序设计}
+
+\subheading{1．系统框图}
+
+系统由电流互感器、SS16 桥式整流、储能与稳压、PMOS/NMOS 分时开关、可编程模拟
+前端、MSPM0G3507、OLED、受控供电的 HC-42 以及 Android 读表器组成。电流表 A、B
+结构相同且供能与测量链路相互独立，拆除任意一表不会影响另一表。硬件系统框图如图
+\ref{fig:system_v2} 所示。
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[node distance=5mm and 6mm,scale=0.61,transform shape]
+  \node[block] (line) {36\,V 交流线路\\0.1～2.2\,A};
+  \node[block,right=of line] (ct) {CT\\270 匝带抽头};
+  \node[block,right=of ct] (bridge) {SS16 全桥\\取电支路};
+  \node[block,right=of bridge] (power) {储能/稳压\\3.3\,V};
+  \node[block,below=of bridge] (sw) {PMOS/NMOS 开关\\PA26/PA8};
+  \node[block,right=of sw] (afe) {传感前端\\PA18/OPA1};
+  \node[block,right=of afe] (mcu) {MSPM0G3507\\RMS/量程/地址};
+  \node[block,below=of afe] (oled) {S2 按键\\OLED};
+  \node[block,right=of mcu] (ble) {PB17 电源控制\\HC-42};
+  \node[block,right=of ble] (app) {Android 读表器\\报警/存储/趋势};
+  \draw[line] (line)--(ct);
+  \draw[line] (ct)--(bridge);
+  \draw[line] (bridge)--(power);
+  \draw[line] (ct.south)|-(sw.west);
+  \draw[line] (sw)--(afe);
+  \draw[line] (afe)--(mcu);
+  \draw[line] (power.south)|-(mcu.north);
+  \draw[line] (mcu.south)|-(oled.east);
+  \draw[line] (mcu)--(ble);
+  \draw[line] (ble)--(app);
+  \node[draw,dashed,fit=(ct)(bridge)(power)(sw)(afe)(mcu)(oled)(ble),
+        label={[font=\wuhao]above:电流表 A（电流表 B 结构相同且独立）}] {};
+\end{tikzpicture}
+\caption{硬件系统框图}
+\label{fig:system_v2}
+\end{figure}
+
+\subheading{2．取能、整流与稳压电路设计}
+
+取能绕组采用 270 匝总绕组并设置抽头，最终选用其中 170 匝有效绕组为整流桥供电。
+四只 SS16 组成全桥，使正、负半周均向储能电容充电。空闲期传感前端被双端 MOS
+开关隔离，储能节点以较小负载积累能量；测量期则由储能电容承担约 260～261\,ms 的
+采样脉冲负载。DC-DC 与 LDO 的最终选型应依据最低启动电流、带载效率和输出纹波
+测试确定，原理图中应同时标出储能电容放电通路，便于每次启动试验前恢复相同初始状态。
+
+\subheading{3．模拟开关、模拟前端与控制器接口设计}
+
+PA26 驱动 PMOS 高边开关，栅极上拉后默认关断；PA8 驱动 NMOS 低边开关，栅极下拉后
+默认关断。测量时 PA26=0、PA8=1，两只 MOS 同时导通；测量结束恢复 PA26=1、PA8=0。
+两控制脚从不作为独立功能使用。模拟前端提供直通 X1 及 OPA 可编程增益 X2、X4、
+X8、X16、X32 六档，DAC 根据探测阶段的直流中心调整偏置。MSPM0G3507 的 ADC、
+OPA、OLED、按键、蓝牙电源、UART 和地址接口分配见附录表 \ref{tab:pins_v2}。
+
+\subheading{4．电流测量程序设计}
+
+程序上电后先把 PA26/PA8 置为取电空闲态，同时将 PB17 拉低并保持 OLED 未初始化。
+每次触发时先接入传感前端，等待 20\,ms 后采集 160 点探测记录，根据峰峰值和直流中心
+选择增益及 DAC，再采集 800 点正式记录。完成采样后按 TIMG6/ADC1、OPA1/DAC12、
+外部 MOS 开关的顺序关断，再计算真有效值并查表。程序流程如图 \ref{fig:flow_v2} 所示。
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[node distance=4.5mm and 18mm,scale=0.80,transform shape]
+  \node[block] (boot) {上电/空闲取电\\PA26=1，PA8=0};
+  \node[block,below=of boot] (trigger) {S2 或无线周期触发\\PA26=0，PA8=1};
+  \node[block,below=of trigger] (wait) {初始化 DAC/OPA/ADC/TIMG6\\等待 20\,ms};
+  \node[block,below=of wait] (probe) {160 点/40\,ms 探测\\选择增益和 DAC};
+  \node[block,below=of probe] (sample) {800 点/200\,ms DMA 采样};
+  \node[block,below=of sample] (off) {关 ADC/TIMG6、OPA/DAC\\PA26=1，PA8=0};
+  \node[block,below=of off] (calc) {Hann 真有效值\\分档标定换算};
+  \node[decision,below=of calc] (mode) {固件入口？};
+  \node[block,left=of mode] (oled) {默认 main\\OLED 显示 1\,s};
+  \node[block,right=of mode] (send) {stream\\UART/BLE 发帧};
+  \draw[line] (boot)--(trigger);
+  \draw[line] (trigger)--(wait);
+  \draw[line] (wait)--(probe);
+  \draw[line] (probe)--(sample);
+  \draw[line] (sample)--(off);
+  \draw[line] (off)--(calc);
+  \draw[line] (calc)--(mode);
+  \draw[line] (mode)--node[above]{本地}(oled);
+  \draw[line] (mode)--node[above]{无线}(send);
+  \draw[line] (oled.south)|-(boot.west);
+  \draw[line] (send.south)|-(boot.east);
+\end{tikzpicture}
+\caption{电流测量与外设控制流程图}
+\label{fig:flow_v2}
+\end{figure}
+
+\subheading{5．OLED 与蓝牙电源控制设计}
+
+OLED 上电时不发送初始化命令。一次测量由两种请求触发：S2 下降沿，或蓝牙收到
+\texttt{MEAS}。两者完全等价、走同一条路径，测量期间再次到达的请求两者都丢弃而不排队。
+上电时另有一次不经请求的测量，使读表器一连上就有数可读。结果显示 1\,s 后熄屏。OLED 对比度命令设置为
+\texttt{0x81,0x0F}，空闲期不刷新屏幕。
+
+蓝牙模块不是仅延后 UART，而是由 PB17 控制外部 3.3\,V 负载开关。PB17 低电平时
+负载开关关闭，高电平时导通。无线固件先在蓝牙断电状态完成第一次测量，再将 PB17
+置高并等待 350\,ms，之后才初始化 UART2。蓝牙断电期间 UART 引脚保持未初始化，避免
+串口反向灌电。UART2 收发均需初始化：读数由读表器请求产生，请求经 RX 进入。
+仅计算固件固定时序，蓝牙最早约在 $20+40+200+350=610$\,ms 后具备通信条件；若
+发生换档还需增加约 1\,ms，实际启动时间还包括互感取能和储能电压建立时间。
+
+\subheading{6．无线通信与 Android 读表器设计}
+
+题目 2(2) 规定基本模式与自动模式下均不得操作电流表，因此读数由读表器请求产生，
+电流表不主动上报测量值。链路为 HC-42 透传串口（FFE0 服务、FFE1 通知特征），速率
+115200\,bit/s。透传链路不提供分包与长度字段，故采用面向行的 ASCII 协议，以换行作
+自同步定界符：接收端在任意位置接入或丢失字节后，都能在下一个换行重新对齐。
+
+读表器发出 \texttt{MEAS,ADDR=$n$}，仅编码开关为 $n$ 的电流表应答。命令带地址而非仅
+用广播，是因为一台电流表在不同时刻由编码开关赋予不同地址，仅凭连接无法确定对端身份；
+带地址后请求与应答一一对应，不会把某地址的应答记到另一地址名下。
+
+电流表空闲时每 2\,s 播发一次 \texttt{IMHERE,ADDR=$n$} 保活帧。该帧不含读数，也不唤醒
+任何模拟电路，其作用有二：编码开关改变时旧地址的心跳停止、新地址出现，读表器据此更新
+在场地址；负载断开后电流表随之失电，心跳消失，即为题目 2(3) 的离线判据，较等待一次
+请求超时更快。请求超时只说明本次未读到，不据此判定离线——正在心跳的电流表只是本次
+未及应答，并非不在。
+
+Android 应用扫描 8\,s、间歇 12\,s，连接名称符合 HC-42、HC42、METER、AMMETER 或
+BYJX\_ 前缀的设备。基本模式为一对一手动读取；自动模式一键启动，每 120\,s 对当前在场
+的地址依次请求，同一连接上同时只允许一个未完成请求。读数写入 SQLite，容量 1000 条，
+历史与趋势均超过题目要求的 30 条；离线与请求超时都不写入记录——记录用于保存读数，
+缺席不是读数。低于 0.2\,A 与高于 2.0\,A 的每一次读数都给出声音与振动提示，不以状态
+跳变为条件：读数稀疏，同一状态的相邻两次读数是两个独立事件。
+
+\mainheading{四、\quad 测试方案与测试结果}
+
+\subheading{1．系统测试方案}
+
+\thirdheading{（1）测试仪器}
+
+测试仪器如表 \ref{tab:instruments_v2} 所示。
+
+\begin{table}[H]
+\centering
+\caption{测试仪器列表}
+\label{tab:instruments_v2}
+\wuhao
+\begin{tabularx}{\textwidth}{|>{\centering\arraybackslash}p{10mm}|
+>{\centering\arraybackslash}p{32mm}|>{\centering\arraybackslash}p{27mm}|
+>{\centering\arraybackslash}p{10mm}|X|}
+\hline
+序号 & 仪器类别 & 仪器型号 & 数量 & 性能参数及用途\\ \hline
+1 & 交流电源 & 熙硕 STG-500W & 1 & 提供可调交流测试电源\\ \hline
+2 & 五位半万用表 & SIGLENT SDM3055X-E & 1 & 测量标准电流及电压\\ \hline
+3 & 数字示波器 & SIGLENT SDS2102X PLUS & 1 & 观察储能、采样及启动时序\\ \hline
+4 & Android 手机 & 通用 & 1 & 无线读取、报警和数据存储测试\\ \hline
+5 & 秒表 & 通用 & 1 & 记录系统启动及通信时间\\ \hline
+\end{tabularx}
+\end{table}
+
+\thirdheading{（2）测试方法}
+
+1、进行电流测量精度测试。
+
+（1）保持线路电压为 36\,V，依次设置 0.10、0.20、0.50、1.00、1.50 和
+2.00\,A，每点稳定后记录标准表与被测表读数。
+
+（2）每个电流点重复测试不少于 5 次，在量程重叠区增加测试点，并分别完成 A、B
+两表测试。
+
+（3）拆除电流表 B 后重复测试 A，比较误差变化，验证两表互不影响。
+
+2、进行取能与启动性能测试。
+
+（1）储能电容充分放电后，从较小电流逐步增加，记录能够稳定完成测量和发送的最低
+电流。
+
+（2）在代表电流点捕获储能电压建立、首次有效值生成和首帧到达时刻。
+
+（3）比较不同抽头组合的整流电压和带载稳定性，记录最终供电匝数。
+
+（4）同时观察 PA26、PA8、VRECT 和 3.3\,V：确认空闲态为 PA26=1、PA8=0，测量态
+为 PA26=0、PA8=1，并记录约 260～261\,ms 传感窗口内的储能电压跌落。
+
+3、进行本地显示和无线功能测试。
+
+（1）确认上电阶段 OLED 无驱动；单击 S2 后完成一次测量，显示 1\,s 后自动熄屏。
+
+（2）手机与电流表间距设为 5\,m，分别检查人工读取和 120\,s 周期搜索。
+
+（3）设置低限、正常、超限并中断一只表通信，检查报警；写入不少于 30 条记录，
+重启应用后检查历史和趋势数据。
+
+\subheading{2．测试结果与分析}
+
+\thirdheading{（1）供电绕组测试}
+
+次级绕组总计 270 匝并设抽头。通过不同抽头组合对比
+整流输出和带载稳定性后，最终选取 170 匝有效绕组供电。该结果已经用于当前取能方案。
+
+\begin{table}[H]
+\centering
+\caption{供电绕组抽头对比}
+\wuhao
+\begin{tabularx}{\textwidth}{|>{\centering\arraybackslash}p{28mm}|
+>{\centering\arraybackslash}p{35mm}|X|}
+\hline
+阶段 & 绕组结构 & 结果\\ \hline
+85 匝 & 单段次级绕组 & 感应电压和调节余量有限\\ \hline
+改进版 & 270 匝总绕组，每 50 匝预留抽头 & 可组合不同有效匝数进行测试\\ \hline
+最终方案 & 170 匝有效绕组供电 & 经抽头对比测试确定\\ \hline
+\end{tabularx}
+\end{table}
+
+\thirdheading{（2）电流测量精度测试}
+
+被测显示值 $I_{\mathrm{x}}$ 相对标准值 $I_{\mathrm{ref}}$ 的相对误差为
+\begin{equation}
+  \delta=
+  \frac{I_{\mathrm{x}}-I_{\mathrm{ref}}}{I_{\mathrm{ref}}}\times100\% .
+\end{equation}
+题目要求 0.1～2.0\,A 全量程内满足 $|\delta|\leq0.5\%$。当前尚未完成标准表对比和
+六档实物标定，故表 \ref{tab:accuracy_v2} 保留为测试记录模板，不填入推测数据。
+
+\begin{table}[H]
+\centering
+\caption{电流测量精度记录表}
+\label{tab:accuracy_v2}
+\wuhao
+\begin{tabular}{|c|c|c|c|c|c|c|}
+\hline
+标准值/A & 0.10 & 0.20 & 0.50 & 1.00 & 1.50 & 2.00\\ \hline
+A 表示值/A & \placeholder & \placeholder & \placeholder & \placeholder & \placeholder & \placeholder\\ \hline
+A 表误差/\% & \placeholder & \placeholder & \placeholder & \placeholder & \placeholder & \placeholder\\ \hline
+B 表示值/A & \placeholder & \placeholder & \placeholder & \placeholder & \placeholder & \placeholder\\ \hline
+B 表误差/\% & \placeholder & \placeholder & \placeholder & \placeholder & \placeholder & \placeholder\\ \hline
+\end{tabular}
+\end{table}
+
+\thirdheading{（3）标定表覆盖范围}
+
+X1 直采档写入 7 个实测标定点，覆盖 0.0755～2.030\,A，相邻点之间分段线性插值；
+X2、X4、X8、X16、X32 五档表由实物标定填入。X1 点中 0.191～0.530\,A 间隔较大，
+2.03\,A 以上由末段外推，全量程 0.5\% 需独立验收。标定数据由 BLE 与 SDM3055X-E
+同步采集工具生成，标准电流、RMS、量程和质量标志逐行写入 CSV。
+
+\mainheading{五、\quad 总结}
+
+本系统完成了``无源''交流电流表及无线读表器的总体方案、测量程序和手机端软件设计。
+取能与传感共用带抽头的次级绕组，抽头对比测试最终确定以 170 匝有效绕组供电。
+PA26 控制 PMOS 高边、PA8 控制 NMOS 低边，传感前端只在约 260～261\,ms 测量窗口
+接入；空闲期双管关断，互感器输出优先用于 SS16 整流储能。模拟模块和外部开关按顺序
+掉电，配合六档自动量程、DAC 偏置、DMA 和 Hann 加权真有效值算法降低无效功耗。
+OLED 采用一按一测并延后初始化，蓝牙采用 PB17 控制外部电源。Android 读表器能够
+完成地址识别、人工读取、周期搜索、异常报警、历史记录和趋势显示。
+
+硬件方面还需在相同互感器、储能电容和负载条件下比较 DC-DC 与 LDO 的最低启动电流、
+稳定效率和输出纹波，确定正式稳压方案；同时完善储能节点放电通路。还应实测 PMOS、
+NMOS 的导通压降、关断漏电及切换瞬态，确认传感窗口内 VRECT 和 3.3\,V 不低于系统
+工作门限，并避免 MOS 体二极管或输入保护网络形成反向供电路径。
+
+标定方面，X1 在 0.1～0.3\,A 区间和 2.0～2.2\,A 补点，X2～X32 五档各建立独立标定表。
+系统联调同时接入 A、B 两表，逐项验证地址设置、人工读取、120\,s 周期搜索、
+低限/超限/离线报警、30 条以上记录保存及 5\,m 通信距离。
+
+\clearpage
+\mainheading{附录}
+
+\subheading{1．题目指标落实对照}
+
+\begin{longtable}{|p{54mm}|p{82mm}|}
+\caption{题目要求与设计落实情况}\\
+\hline
+题目要求 & 设计落实\\ \hline
+\endfirsthead
+\hline
+题目要求 & 设计落实\\ \hline
+\endhead
+仅由电磁耦合供电，不能外接电源 & CT 取能，经 SS16 桥式整流、储能和稳压后供电；
+最终需实物验收\\ \hline
+原边匝数不超过 5 匝 & 结构设计约束 $N_1\leq5$，副边总计 270 匝并设置抽头\\ \hline
+0.1～2.0\,A，误差不超过 0.5\% & 六档自动量程与分段标定；精度待标准表实测\\ \hline
+A、B 两表独立，移除 B 不影响 A & 两表使用独立互感器、储能和测量链路\\ \hline
+4 位地址和串行接口 & PB0、PB6～PB8 设置低有效地址；UART2 连接 HC-42\\ \hline
+具有放电功能 & 测试前通过储能回路放电；硬件放电方式需在原理图和实物标注\\ \hline
+无线距离不小于 5\,m & HC-42 与 Android 手机通信；距离待现场验证\\ \hline
+人工启动 1 次读取 & App 提供人工触发下一次读取\\ \hline
+每 2\,min 自动搜索 & App 默认 120\,s 自动扫描并保存周期设置\\ \hline
+低限、超限和离线报警 & 阈值为 0.2\,A、2.0\,A；心跳消失判定离线\\ \hline
+不少于 30 条记录、掉电保存和趋势 & SQLite 保存 1000 条，历史和趋势显示均超过 30 条\\ \hline
+外形不超过 $12\times7\times5$\,cm & 作为 PCB、外壳和最终验收约束\\ \hline
+\end{longtable}
+
+\subheading{2．控制器接口}
+
+\begin{table}[H]
+\centering
+\caption{MSPM0G3507 主要接口分配}
+\label{tab:pins_v2}
+\wuhao
+\begin{tabularx}{\textwidth}{|>{\centering\arraybackslash}p{25mm}|
+>{\centering\arraybackslash}p{30mm}|X|}
+\hline
+引脚 & 功能 & 说明\\ \hline
+PA26 & PMOS 高边控制 & 低电平导通；10\,k$\Omega$ 上拉，上电默认关断\\ \hline
+PA8 & NMOS 低边控制 & 高电平导通；10\,k$\Omega$ 下拉，上电默认关断\\ \hline
+PA18 & ADC1 输入 & 电流采样原始通道\\ \hline
+PA16 & 模拟输入 & OPA 可编程增益输出通道\\ \hline
+PB2、PB3 & 软件 I\textsuperscript{2}C & OLED 的 SCL、SDA\\ \hline
+PB21 & S2 按键 & 下降沿触发一次测量，与蓝牙 \texttt{MEAS} 等价\\ \hline
+PB17 & 蓝牙电源使能 & 高电平导通外部负载开关，低电平关闭\\ \hline
+PB15 & UART2 TX & HC-42 串口发送，115200\,bit/s\\ \hline
+PB16 & UART2 RX & 接收读表器的 \texttt{MEAS} 请求\\ \hline
+PB0、PB6～PB8 & 地址输入 & 4 位低有效地址，范围 00～15\\ \hline
+\end{tabularx}
+\end{table}
+
+\begin{table}[H]
+\centering
+\caption{系统功能与指标检查表}
+\label{tab:check_v2}
+\wuhao
+\begin{tabularx}{\textwidth}{|p{40mm}|>{\centering\arraybackslash}p{22mm}|
+>{\raggedright\arraybackslash}X|}
+\hline
+检查项目 & 当前状态 & 说明\\ \hline
+固件格式、编译和静态检查 & 已完成 & \texttt{cargo fmt}、\texttt{cargo check} 和
+\texttt{cargo clippy -D warnings} 均通过\\ \hline
+OLED 上电关闭、一按一测 & 已实现 & S2 单击触发，显示 1\,s 后自动熄屏\\ \hline
+PMOS/NMOS 分时开关 & 已实现 & PA26 低、PA8 高进入传感态；反向电平恢复取电空闲态\\ \hline
+蓝牙受控供电 & 已实现 & PB17 低关闭、高导通，首次测量后开启\\ \hline
+供电绕组抽头对比 & 已完成 & 最终选取 170 匝有效绕组供电\\ \hline
+X1 七点标定 & 已完成 & 0.0755～2.030\,A；其余五档由实物标定填入\\ \hline
+0.1～2.0\,A、误差不超过 0.5\% & \placeholder & 需补齐各档标定并独立验证\\ \hline
+最低启动电流和启动时间 & \placeholder & 需在完全放电后测量\\ \hline
+5\,m 无线距离、双表和报警 & \placeholder & 需连接两只实物完成联调\\ \hline
+外形尺寸限制 & \placeholder & 装配外壳后测量\\ \hline
+\end{tabularx}
+\end{table}
+
+\subheading{3．通信协议}
+
+\noindent 读表器 $\to$ 电流表：
+\begin{center}
+\texttt{MEAS}\quad 或 \quad\texttt{MEAS,ADDR=dd}
+\end{center}
+前者为广播，后者仅地址匹配的电流表应答。命令刻意不与上报帧同前缀：两个方向共用同一条
+透传链路，若电流表认得出自己输出的语法，一次回环即可自触发。
+
+\noindent 电流表 $\to$ 读表器，读数帧：
+\begin{center}
+\texttt{METER\_TEST,ADDR=dd,CURRENT\_MA=iiii,STATUS=ssss\textbackslash r\textbackslash n}
+\end{center}
+
+（1）\texttt{ADDR}：十进制两位电表地址，00～15，取自 4 位编码开关。
+
+（2）\texttt{CURRENT\_MA}：电流有效值，单位为 mA。
+
+（3）\texttt{STATUS}：\texttt{NORMAL}、\texttt{LOW} 或 \texttt{HIGH}，按 0.2\,A 与
+2.0\,A 判定。此处没有 \texttt{OFFLINE}——离线是读表器根据心跳消失作出的判断，电流表
+无法报告自己不在。
+
+\noindent 电流表 $\to$ 读表器，保活帧与调试帧：
+\begin{center}
+\texttt{IMHERE,ADDR=15}\\[2pt]
+\texttt{METER\_CAL,ADDR=15,RMS=193.36,GAIN=1,FLAG=OK,MEAN=395,PP=662}
+\end{center}
+\texttt{IMHERE} 每 2\,s 一次，只声明在场。\texttt{METER\_CAL} 与读数帧同次产生，
+其中 \texttt{RMS}、\texttt{GAIN} 用于建立分档标定表，\texttt{MEAN}、\texttt{PP} 为探测
+帧测得的输入直流与峰峰值，\texttt{FLAG} 为本次读数的质量标志。
+
+读数不可信时（基准未就绪、输入越出转换窗口、采集帧未完成），电流表只发
+\texttt{METER\_CAL} 并在 \texttt{FLAG} 中给出原因，不发读数帧，避免把不可信的数值以正常
+状态送出。读表器据此把"表故障"与"表离线"区分开——二者若不加区分，在读表器看来完全
+一样。
+
+\clearpage
+\subheading{4．分档标定记录}
+
+\begin{table}[H]
+\centering
+\caption{分档标定原始记录表}
+\wuhao
+\begin{tabular}{|c|c|c|c|c|c|}
+\hline
+量程 & 标准电流/A & RMS 码宽 & 显示电流/A & 误差/\% & 温度/$^\circ$C\\ \hline
+X32 & 0.10 & & & &\\ \hline
+X32/X16 & 0.20 & & & &\\ \hline
+X16/X8 & 0.30 & & & &\\ \hline
+X8/X4 & 0.50 & & & &\\ \hline
+X4/X2 & 1.00 & & & &\\ \hline
+X2/X1 & 1.50 & & & &\\ \hline
+X1 & 2.00 & & & &\\ \hline
+\end{tabular}
+\end{table}
+
+\subheading{5．最终检查项目}
+
+（1）确认中文正文、标题和图表题全部使用宋体，英文和数字使用 Times New Roman。
+
+（2）确认摘要页无页码，正文从 1 开始且页码位于右下角。
+
+（3）确认 A、B 两表独立，地址设置正确，PB17 蓝牙电源逻辑为低关、高开。
+
+（4）确认 PA26 控制 PMOS 且低电平导通，PA8 控制 NMOS 且高电平导通；上电默认态
+由 10\,k$\Omega$ 上拉/下拉电阻保证两管关断。
+
+（5）确认正式提交前已用实测标定表替换调试比例系数，并填写全部待测数据。
+
+\end{document}

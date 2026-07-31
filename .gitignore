@@ -7,3 +7,13 @@ android-reader/**/build/
 __pycache__/
 *.pyc
 .venv/
+
+# LaTeX 中间文件；.tex 和成稿 .pdf 仍然跟踪
+*.aux
+*.fdb_latexmk
+*.fls
+*.log
+*.out
+*.toc
+*.xdv
+*.synctex.gz
