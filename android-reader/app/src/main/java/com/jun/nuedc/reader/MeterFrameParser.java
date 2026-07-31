@@ -23,6 +23,15 @@ public final class MeterFrameParser {
     private static final Pattern CAL_PATTERN = Pattern.compile(
             "^METER_CAL,ADDR=(\\d{1,2}),.*?FLAG=([A-Z_]+).*$"
     );
+    /**
+     * 保活心跳。电流表空闲时按 HEARTBEAT_MS 播一次自己的地址，不带读数，
+     * 也不开模拟部分。它有两个作用：拨码开关一动，旧地址的心跳停、新地址的
+     * 开始，读表器立刻知道身份变了；负载一断电流表跟着掉电，心跳随之消失，
+     * 那就是 4.3 说的离线，比等一次轮询超时快得多。
+     */
+    private static final Pattern ALIVE_PATTERN = Pattern.compile(
+            "^IMHERE,ADDR=(\\d{1,2})$"
+    );
 
     private final StringBuilder buffer = new StringBuilder();
 
@@ -68,7 +77,21 @@ public final class MeterFrameParser {
             if (address < 0 || address > 15 || currentMa < 0) {
                 return null;
             }
-            return new ParsedFrame(address, currentMa, matcher.group(3), null, trimmed);
+            return new ParsedFrame(address, currentMa, matcher.group(3), null, false, trimmed);
+        }
+
+        Matcher alive = ALIVE_PATTERN.matcher(trimmed);
+        if (alive.matches()) {
+            int address;
+            try {
+                address = Integer.parseInt(alive.group(1));
+            } catch (NumberFormatException ignored) {
+                return null;
+            }
+            if (address < 0 || address > 15) {
+                return null;
+            }
+            return new ParsedFrame(address, -1, null, null, true, trimmed);
         }
 
         Matcher cal = CAL_PATTERN.matcher(trimmed);
@@ -83,7 +106,7 @@ public final class MeterFrameParser {
                 return null;
             }
             // 电流留 -1：这一条本来就不带读数，填 0 会被当成一次真实的低限报警。
-            return new ParsedFrame(address, -1, null, cal.group(2), trimmed);
+            return new ParsedFrame(address, -1, null, cal.group(2), false, trimmed);
         }
         return null;
     }
@@ -100,13 +123,17 @@ public final class MeterFrameParser {
         public final String meterStatus;
         /** METER_CAL 的 FLAG；METER_TEST 帧为 null。OK 之外都表示这次读数不可信。 */
         public final String flag;
+        /** 保活心跳：只说明这个地址此刻在线，不是任何请求的应答。 */
+        public final boolean alive;
         public final String raw;
 
-        ParsedFrame(int address, int currentMa, String meterStatus, String flag, String raw) {
+        ParsedFrame(int address, int currentMa, String meterStatus, String flag,
+                    boolean alive, String raw) {
             this.address = address;
             this.currentMa = currentMa;
             this.meterStatus = meterStatus;
             this.flag = flag;
+            this.alive = alive;
             this.raw = raw;
         }
 

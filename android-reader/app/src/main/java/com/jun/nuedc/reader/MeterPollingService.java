@@ -96,6 +96,8 @@ public final class MeterPollingService extends Service {
     private static final long SCAN_OFF_MS = 12_000L;
     private static final long PUMP_MS = 1_000L;
     private static final long ROUND_RETRY_MS = 500L;           // 轮次撞上手动读取时的退让
+    /** 连续几拍心跳没来就算不在场。电流表 2 秒一拍,给三拍的余量。 */
+    private static final long ALIVE_WINDOW_MS = 7_000L;
     private static final long RETRY_MS = 1_500L;
     private static final long RETRY_SLOW_MS = 10_000L;         // 连败三次后放慢,别拖累别的链
     private static final int RETRY_SLOW_AFTER = 3;
@@ -148,6 +150,8 @@ public final class MeterPollingService extends Service {
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final Map<String, MeterLink> links = new LinkedHashMap<>();
     private final Map<String, Runnable> replyTimeouts = new HashMap<>();
+    /** 地址 → 最近一次心跳的 elapsedRealtime。谁在心跳,谁就在场。 */
+    private final Map<Integer, Long> aliveAt = new HashMap<>();
     private final ArrayDeque<Integer> roundQueue = new ArrayDeque<>();
     private int roundStored;
 
@@ -426,6 +430,7 @@ public final class MeterPollingService extends Service {
                 connect(waiting);
             }
         }
+        sweepAlive(now);
         int count = subscribedCount();
         if (count != lastSubscribedCount) {
             lastSubscribedCount = count;
@@ -435,6 +440,38 @@ public final class MeterPollingService extends Service {
             }
         }
         handler.postDelayed(pump, PUMP_MS);
+    }
+
+    /**
+     * 心跳停了就报离线。
+     *
+     * <p>这是 4.3 的判据落地的地方:电流表靠负载电流取电,负载一断它跟着掉电,
+     * 心跳随之消失。不落库——离线不是读数。
+     */
+    private void sweepAlive(long now) {
+        java.util.Iterator<Map.Entry<Integer, Long>> it = aliveAt.entrySet().iterator();
+        while (it.hasNext()) {
+            Map.Entry<Integer, Long> entry = it.next();
+            if (now - entry.getValue() > ALIVE_WINDOW_MS) {
+                int addr = entry.getKey();
+                it.remove();
+                Intent intent = eventIntent(ACTION_OFFLINE);
+                intent.putExtra(EXTRA_ADDRESS, addr);
+                intent.putExtra(EXTRA_TIMESTAMP, System.currentTimeMillis());
+                sendBroadcast(intent);
+            }
+        }
+    }
+
+    private void broadcastPresence(int addr, MeterLink link) {
+        Intent intent = eventIntent(ACTION_FRAME);
+        intent.putExtra(EXTRA_ADDRESS, addr);
+        intent.putExtra(EXTRA_CURRENT_MA, -1);                 // 心跳不带读数
+        intent.putExtra(EXTRA_TIMESTAMP, System.currentTimeMillis());
+        intent.putExtra(EXTRA_MAC, link.mac);
+        intent.putExtra(EXTRA_NAME, link.name);
+        intent.putExtra(EXTRA_RSSI, link.rssi);
+        sendBroadcast(intent);
     }
 
     private void connect(MeterLink link) {
@@ -540,9 +577,8 @@ public final class MeterPollingService extends Service {
             connectingLink = null;                             // 释放建链槽,轮到下一台
             handler.removeCallbacks(connectTimeout);
         }
-        // 刚连上还不知道对面是几号——地址在电流表的编码开关上,一台表会轮流
-        // 扮演 16 个地址中的一个。发一次不带 ADDR 的广播问它自报家门。
-        ask(link, -1, false);
+        // 不用问「你是几号」:电流表 2 秒一拍地播自己的地址,等一拍就知道了,
+        // 而且开关中途被拨动时这条路也照样跟得上。
     }
 
     /**
@@ -646,6 +682,17 @@ public final class MeterPollingService extends Service {
             if (solicited) {
                 clearReplyTimeout(link);
             }
+            if (frame.alive) {
+                // 心跳不是应答:不清超时、不推进轮次、不落库。它只回答
+                // 「此刻谁在场」——而这正是拨码开关改了之后唯一会变的东西。
+                long now = SystemClock.elapsedRealtime();
+                Long previous = aliveAt.put(frame.address, now);
+                if (previous == null || now - previous > ALIVE_WINDOW_MS) {
+                    broadcastPresence(frame.address, link);    // 新出现的地址
+                    kickRoundIfIdle();
+                }
+                continue;
+            }
             if (frame.hasReading()) {
                 link.lastMa = frame.currentMa;
                 broadcastFrame(frame, link);
@@ -724,10 +771,13 @@ public final class MeterPollingService extends Service {
         if (!autoMode) {
             return;
         }
-        TreeSet<Integer> targets = new TreeSet<>(database.registeredMeters().keySet());
-        for (MeterLink link : links.values()) {
-            if (link.address >= 0) {
-                targets.add(link.address);
+        // 只问此刻在心跳的地址。不用盲扫 0-15:不在场的地址扫过去只是 16 次
+        // 超时,而心跳已经把「谁在场」直接告诉我们了。
+        long now = SystemClock.elapsedRealtime();
+        TreeSet<Integer> targets = new TreeSet<>();
+        for (Map.Entry<Integer, Long> entry : aliveAt.entrySet()) {
+            if (now - entry.getValue() <= ALIVE_WINDOW_MS) {
+                targets.add(entry.getKey());
             }
         }
         roundQueue.clear();

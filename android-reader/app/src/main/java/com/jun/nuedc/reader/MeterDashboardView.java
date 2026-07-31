@@ -392,8 +392,12 @@ public final class MeterDashboardView extends View {
         Live m = live[address];
         m.everSeen = true;
         m.silent = false;
-        m.frameMa = currentMa;
-        m.frameWallTs = wallTs;
+        // currentMa < 0 是保活心跳:它只说明这台表在场,不带读数。写进去会把
+        // 上一次真实读数冲掉,圆盘就会在每一拍心跳后闪成空值。
+        if (currentMa >= 0) {
+            m.frameMa = currentMa;
+            m.frameWallTs = wallTs;
+        }
         m.lastAt = SystemClock.uptimeMillis();
         if (mac != null && !mac.isEmpty()) m.mac = mac;
         if (deviceName != null && !deviceName.isEmpty()) m.name = deviceName;
@@ -534,7 +538,9 @@ public final class MeterDashboardView extends View {
         int addr = pendingAddr;
         pendingAddr = -1;
         Live m = live[addr];
-        boolean hasFrame = present(addr) && m.everSeen && !m.silent;
+        // 还要求真的收到过读数:一台只在心跳、这次读取又没答上来的表,
+        // 在场但没有可存的数,不能把上一次的值当成这一次的结果。
+        boolean hasFrame = present(addr) && m.everSeen && !m.silent && m.frameMa >= 0;
         int ma = hasFrame ? m.frameMa : -1;
         String status = hasFrame ? classifyStatus(ma) : MeterReading.OFFLINE;
         boolean willFly = allScope || panelAddr == addr;       // 出现在当前筛选里,才有得飞

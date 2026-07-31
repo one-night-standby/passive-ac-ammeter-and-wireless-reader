@@ -45,6 +45,19 @@ const MAX_FRAME_MA: u32 = 9_999_999;
 /// resets rather than growing.
 const CMD_MAX: usize = 32;
 
+/// How often the meter announces itself while idle. Cheap enough to ignore:
+/// one 17-byte line is 18 ms of 9600-baud UART and no analog blocks at all,
+/// against the 1.22 mA the HC-42 already draws holding a full-speed connection
+/// (HC42.pdf 1.3).
+///
+/// It is what makes the reader's view of "who is out there" track the coded
+/// switch: one meter stands in for 16 addresses, and when the switch moves, the
+/// old address simply stops announcing and the new one starts. It also makes a
+/// disconnected load visible within a few seconds -- the meter loses power with
+/// it, so the announcements just stop -- which is exactly the offline condition
+/// of 2(3), and far quicker than waiting for a poll to time out.
+pub const HEARTBEAT_MS: u64 = 2_000;
+
 /// What a reader can ask for. One variant today, and the parser is written so
 /// that stays cheap to extend.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -180,6 +193,12 @@ impl Link {
             self.pending.clear();
         }
         None
+    }
+
+    /// "I am here, and I am meter n." Carries no reading on purpose: this is a
+    /// presence beat, not a measurement, and nothing analog wakes up for it.
+    pub fn send_alive(&mut self, addr: u8) {
+        let _ = writeln!(self, "IMHERE,ADDR={}", addr);
     }
 
     /// One reading, on the wire.

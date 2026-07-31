@@ -34,7 +34,7 @@
 //!   `led`     -- the power-on indicator
 
 use embassy_executor::Spawner;
-use embassy_futures::select::{Either, select};
+use embassy_futures::select::{Either3, select3};
 use embassy_mspm0::dma::{self, Channel};
 use embassy_mspm0::gpio::{Input, Level, Output, Pull};
 use embassy_mspm0::uart::BufferedInterruptHandler;
@@ -54,7 +54,7 @@ mod sampler;
 mod ui;
 mod vref;
 
-use link::{Address, Link};
+use link::{Address, HEARTBEAT_MS, Link};
 use meter::Meter;
 use ui::{DISPLAY_ON_MS, Panel};
 
@@ -70,6 +70,31 @@ bind_interrupts!(struct Irqs {
 static mut TX_BUF: [u8; 192] = [0; 192];
 
 static mut RX_BUF: [u8; 64] = [0; 64];
+
+/// Idle until something asks for a reading, announcing this meter's address
+/// every `HEARTBEAT_MS` in the meantime.
+///
+/// The beat is not a trigger -- it goes out and the wait resumes. Only the
+/// button and a `MEAS` command return from here, and which one did is not worth
+/// distinguishing: they are the same request.
+async fn wait_for_request(trigger: &mut Input<'static>, link: &mut Link, address: &Address) {
+    loop {
+        let addr = address.read();
+        match select3(
+            trigger.wait_for_falling_edge(),
+            link.wait_command(addr),
+            Timer::after_millis(HEARTBEAT_MS),
+        )
+        .await
+        {
+            Either3::First(()) | Either3::Second(_) => return,
+            // Re-read the switch on every beat rather than caching it: moving
+            // the switch is the one operation 2(2) allows during a run, so the
+            // address has to be able to change between two beats.
+            Either3::Third(()) => link.send_alive(address.read()),
+        }
+    }
+}
 
 #[embassy_executor::main]
 async fn main(spawner: Spawner) -> ! {
@@ -131,12 +156,8 @@ async fn main(spawner: Spawner) -> ! {
                 // buffered bytes where they are, which the discard below then
                 // clears. Which one won does not matter: the two are the same
                 // request.
-                let addr = address.read();
                 match &mut link {
-                    Some(link) => {
-                        let _: Either<(), link::Command> =
-                            select(trigger.wait_for_falling_edge(), link.wait_command(addr)).await;
-                    }
+                    Some(link) => wait_for_request(&mut trigger, link, &address).await,
                     // A radio that failed to open leaves the meter working off
                     // its button and its panel, which is strictly better than
                     // refusing to measure at all.
