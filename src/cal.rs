@@ -72,6 +72,12 @@ use crate::range::{Gain, Range};
 /// cluster in both RMS and probe mean. Both columns must ascend, so it could
 /// not be entered even if it were believed, and its shape is a mis-paired
 /// sample taken while the load was moving rather than a saturating front end.
+///
+/// STALE: these rows were taken with ADC1 converting against VDDA. The
+/// converter now runs on the 2.5 V VREF, so the same input produces a code
+/// larger by roughly VDDA/2.5, and the front end was rebiased for that window
+/// besides. Every number here is wrong until the bench is run again; it is kept
+/// only as the record of the configuration it was measured in.
 pub static CAL_X1: &[(f32, f32)] = &[
     (193.74, 0.5879),
     (200.27, 0.6044),

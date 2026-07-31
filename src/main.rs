@@ -36,6 +36,7 @@ mod oled;
 mod range;
 mod sampler;
 mod ui;
+mod vref;
 
 use meter::Meter;
 use ui::{DISPLAY_ON_MS, Panel};

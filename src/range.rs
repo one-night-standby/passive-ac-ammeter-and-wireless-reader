@@ -87,24 +87,26 @@ impl Range {
 }
 
 /// Window samples must stay inside, in ADC LSB. One window for every range,
-/// because there is only one limit here and everything shares it: the supply.
+/// because there is only one limit here and everything shares it: the ADC's
+/// reference.
 ///
-/// OPA1 runs off VDDA/VSSA, so those two voltages bound what its output can
-/// swing to. ADC1 is referenced to the same pair (`sampler::init_adc1_event`
-/// sets VRSEL to VDDA/VSSA), so its full scale `0..4095` *is* that same pair.
-/// The amplifier's rails and the converter's endpoints are not two limits to
-/// choose the tighter of -- they are one limit, measured in two units.
+/// ADC1 converts against the 2.5 V VREF (`sampler::init_adc1_event` sets
+/// VRSEL=2), so full scale `0..4095` is `0..2.5 V`. OPA1 still runs off
+/// VDDA/VSSA and can swing above that, which makes the converter the binding
+/// limit rather than the amplifier -- and a strictly cleaner one: past 2.5 V
+/// the code saturates at 4095 exactly, with no soft shoulder to model, while
+/// the amplifier is still in its linear region and not adding compression of
+/// its own. So a hard bound is the right model and `fits` owes no compression
+/// margin on top of `FILL_TARGET_PCT`.
 ///
-/// Clipping happens *at* those rails, not short of them, and the corner is
-/// sharp: driven past either end the output flattens within a LSB or two of the
-/// linear extrapolation. So a hard bound is the right model and `fits` owes no
-/// compression margin on top of `FILL_TARGET_PCT`. GBW=HIGHGAIN with RRI on is a
-/// rail-to-rail output stage behaving like one.
+/// The consequence worth stating plainly: an input driven past full scale is
+/// invisible to the samples as anything but a flat top. That is what
+/// `probe_stats`'s rail flag exists to catch, and why it is checked before the
+/// range arithmetic rather than after.
 ///
-/// Both ends sit on their rail to within the converter's own offset error, which
-/// is why full scale is the honest pair of numbers rather than something a few
-/// LSB inside it -- a tighter bound would be guarding a difference smaller than
-/// the uncertainty on measuring it.
+/// Full scale is the honest pair of numbers rather than something a few LSB
+/// inside it -- a tighter bound would be guarding a difference smaller than the
+/// uncertainty on measuring it.
 ///
 /// Re-measure with `src/bin/oparails.rs`, which drives OPA1 through its own muxes
 /// so the answer does not depend on what is wired to the input. It saturates each
@@ -177,9 +179,11 @@ pub const RERANGE_LO_PCT: i32 = 25;
 /// `fits` below do.
 ///
 /// Arithmetic is in raw codes, not volts. The DAC and the ADC are both 12-bit
-/// and both referenced to VDDA/VSSA, so their codes share one scale and VDDA
-/// cancels out of the expression entirely -- the placement does not care what
-/// the supply actually is.
+/// and both referenced to the same 2.5 V VREF, so their codes share one scale
+/// and the reference cancels out of the expression entirely -- the placement
+/// does not care what the reference actually is, only that one number serves
+/// both converters. Move either one onto a different reference and every DAC
+/// code this function returns is wrong by their ratio, silently.
 pub fn dac_code_for(gain: Gain, mean_in: i32) -> u16 {
     let g = g_nominal(gain);
     ((g * mean_in - OUT_CENTER) / (g - 1)).clamp(0, DAC_MAX) as u16
@@ -319,7 +323,9 @@ pub fn probe_stats(buf: &[u32]) -> (i32, u32, bool) {
 /// `gain` and `dac_code` are only the *starting* range; both are re-derived
 /// from the input every measurement period. See `dac_code_for`.
 pub fn setup_opa1_pga(gain: Gain, dac_code: u16) {
-    // The bias reference must be up and stable before the OPA turns on.
+    // The bias reference must be up and stable before the OPA turns on, and
+    // the DAC's own reference before that -- `vref::init`, which the caller
+    // runs first because its result is a fact about the whole reading.
     dac::init();
     dac::set(dac_code);
 
@@ -384,6 +390,7 @@ pub fn power_down_opa1() {
     });
 
     dac::power_down();
+    crate::vref::power_down();
 }
 
 /// Select a measurement range: ADC channel, and for the PGA ranges the gain

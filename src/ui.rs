@@ -31,6 +31,7 @@ const OLED_INIT_ATTEMPTS: u8 = 4;
 /// and entering it into a CAL table freezes the fiction into the instrument.
 fn marker(quality: Quality) -> &'static str {
     match quality {
+        Quality::RefBad => "R",
         Quality::InputBad => "!",
         Quality::OverRange => ">",
         Quality::Incomplete => "?",

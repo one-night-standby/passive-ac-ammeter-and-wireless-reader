@@ -40,6 +40,11 @@ const AFE_SETTLE_MS: u64 = 20;
 /// enum rather than three flags each consumer re-prioritises for itself.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Quality {
+    /// The 2.5 V reference never reported ready, so every code in the frame is
+    /// against an unsettled reference. Worst of the four because it is the only
+    /// one where the samples look entirely ordinary: they are a plausible
+    /// waveform, scaled by an unknown amount.
+    RefBad,
     /// The probe found the input pinned at an ADC end, so the signal is
     /// leaving `0..VDDA` and no internal gain or bias choice can recover it --
     /// that needs external conditioning.
@@ -72,6 +77,7 @@ pub struct Reading {
     /// are the previous cycle's rather than this one's.
     #[allow(dead_code)] // Read by bin/stream.rs, not by the panel.
     pub probe: Option<(i32, u32)>,
+    ref_bad: bool,
     input_bad: bool,
     range_over: bool,
     incomplete: bool,
@@ -79,7 +85,9 @@ pub struct Reading {
 
 impl Reading {
     pub fn quality(&self) -> Quality {
-        if self.input_bad {
+        if self.ref_bad {
+            Quality::RefBad
+        } else if self.input_bad {
             Quality::InputBad
         } else if self.range_over {
             Quality::OverRange
@@ -172,6 +180,13 @@ impl Meter {
         // The gain and the pivot are last cycle's, so a cycle whose probe fails
         // still measures at a setting that was right rather than at a blind
         // mid-scale one. The probe replaces both a few milliseconds from now.
+        //
+        // The reference goes first and everything downstream is measured
+        // against it: the DAC's bias, the ADC's full scale, and therefore both
+        // the window the autoranger fits into and the codes the RMS is formed
+        // from. Its 200 us settle (datasheet 7.15.2) hides inside AFE_SETTLE_MS
+        // like the rest.
+        let ref_bad = !crate::vref::init();
         let gain = match self.range {
             Range::Pga(g) => g,
             Range::Direct => Gain::X2,
@@ -235,7 +250,8 @@ impl Meter {
         //
         // Order is downstream first. The converter and its sample clock stop,
         // then the amplifier and its bias reference, then the external circuit
-        // -- so nothing is ever driving into a block that has just lost power.
+        // -- so nothing is ever driving into a block that has just lost power,
+        // and the 2.5 V reference outlives both of the blocks that use it.
         // What this leaves on PA18 is the pad alone: the IOMUX has held it
         // high-Z since boot, and with OPA1 and ADC1 out of the power domain
         // there is no longer an analog mux on the other side of it either.
@@ -256,6 +272,7 @@ impl Meter {
             rms,
             range: self.range,
             probe,
+            ref_bad,
             input_bad,
             range_over,
             incomplete: !probed || !framed,

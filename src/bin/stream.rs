@@ -46,6 +46,8 @@ mod meter;
 mod range;
 #[path = "../sampler.rs"]
 mod sampler;
+#[path = "../vref.rs"]
+mod vref;
 
 use meter::{Meter, Quality, Reading};
 
@@ -147,6 +149,7 @@ fn status(milliamps: u32) -> &'static str {
 
 fn flag(quality: Quality) -> &'static str {
     match quality {
+        Quality::RefBad => "REF_BAD",
         Quality::InputBad => "BAD_INPUT",
         Quality::OverRange => "OVER",
         Quality::Incomplete => "PARTIAL",
@@ -176,7 +179,7 @@ fn transmit(radio: &mut Radio<'_>, addr: u8, reading: &Reading) {
     let test_status = match quality {
         Quality::Good => Some(status(ma)),
         Quality::OverRange => Some("HIGH"),
-        Quality::InputBad | Quality::Incomplete => None,
+        Quality::RefBad | Quality::InputBad | Quality::Incomplete => None,
     };
     if let Some(test_status) = test_status {
         let _ = writeln!(

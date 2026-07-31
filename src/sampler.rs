@@ -156,7 +156,18 @@ pub fn init_adc1_event() {
 
     regs.memctl(0).modify(|w| {
         w.set_chansel(1); // PA16
-        w.set_vrsel(vals::Vrsel::from_bits(0)); // VDDA/VSSA
+        // VRSEL=2: internal reference (2.5 V from the VREF module, which
+        // `vref::init` must have brought up), VSS as the negative. TRM table
+        // 18-81.
+        //
+        // Not VRSEL=1, which routes the same reference through the VREF+ pin
+        // and is what datasheet 7.12.1 note 3 asks for to reach the specified
+        // offset error: that mode additionally needs VREF- tied to board
+        // ground, and the offset it buys does not survive to the reading
+        // anyway -- `dsp::rms_lsb` subtracts each frame's own weighted mean,
+        // so a constant offset in the conversion is gone before the RMS is
+        // formed. The mode with fewer hardware assumptions wins.
+        w.set_vrsel(vals::Vrsel::from_bits(2));
         w.set_stime(vals::Stime::SEL_SCOMP0);
         w.set_avgen(false);
         w.set_bcsen(false);
