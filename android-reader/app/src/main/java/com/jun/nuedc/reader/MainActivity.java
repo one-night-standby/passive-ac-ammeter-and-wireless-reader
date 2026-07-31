@@ -17,6 +17,7 @@ import android.widget.Toast;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 
 public final class MainActivity extends Activity implements MeterDashboardView.Listener {
     private static final int REQUEST_PERMISSIONS = 42;
@@ -115,7 +116,7 @@ public final class MainActivity extends Activity implements MeterDashboardView.L
         super.onDestroy();
     }
 
-    /** 读条走完:把界面抓到的这一帧同步落库,返回前界面即可拿到新数据起飞。 */
+    /** 这一次读到了:同步落库,返回前界面即可拿到新数据起飞。 */
     @Override
     public void onCaptureRecord(int address, int currentMa, String status,
                                 String mac, String deviceName, int rssi) {
@@ -134,6 +135,16 @@ public final class MainActivity extends Activity implements MeterDashboardView.L
                 "MANUAL"
         ));
         refreshDashboard();
+    }
+
+    /** 要了但没答上来:说一声。不落库,也不代表这台表离线。 */
+    @Override
+    public void onReadFailed(int address) {
+        Toast.makeText(
+                this,
+                String.format(Locale.CHINA, "%d号表无应答", address),
+                Toast.LENGTH_SHORT
+        ).show();
     }
 
     /** 基本模式的一对一读取:题目 2(2) 不允许碰电流表,读数只能由读表器要。 */

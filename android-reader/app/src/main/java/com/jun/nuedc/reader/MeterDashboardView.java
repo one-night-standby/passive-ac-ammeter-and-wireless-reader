@@ -38,11 +38,13 @@ import java.util.Set;
  */
 public final class MeterDashboardView extends View {
     public interface Listener {
-        /** 读条走完,把这一帧落库(currentMa &lt; 0 表示离线记录)。调用方应同步刷新 setData。 */
+        /** 读到的这一次落库。只在真读到数时调用。调用方应同步刷新 setData。 */
         void onCaptureRecord(int address, int currentMa, String status,
                              String mac, String deviceName, int rssi);
         /** 基本模式:向这台表要一次读数。电流表不会主动报数,不问就没有。 */
         void onReadRequest(int address);
+        /** 要了但没答上来。不落库,只提示——这次读取没有结果,不是这台表不在。 */
+        void onReadFailed(int address);
         void onAutoModeChanged(boolean enabled);
         void onClearHistory();
         void onIntervalRequested();
@@ -54,7 +56,7 @@ public final class MeterDashboardView extends View {
     private static final int LOW_MA = 200;
     private static final int HIGH_MA = 2000;
     private static final int FULL_MA = 2200;
-    /* 读条时长。它同时是「问出去到落库」的窗口:电流表答一次要测量 260 ms
+    /* 读条时长。它同时是「发出请求到落库」的窗口:电流表答一次要测量 260 ms
        加链路时延,服务端的应答时限是 2 秒,读条必须比它长,否则读条走完时
        应答还在路上,存下去的就是上一次的值。 */
     private static final long STORE_MS = 2400;
@@ -520,7 +522,7 @@ public final class MeterDashboardView extends View {
         return sel;
     }
 
-    /* ══════════ 存一帧 ══════════ */
+    /* ══════════ 点一下:发请求,等应答,存这一次 ══════════ */
     private void capture(int addr) {
         if (pendingAddr >= 0) {
             return;
@@ -561,6 +563,10 @@ public final class MeterDashboardView extends View {
         if (!hasFrame) {
             // 这次没读到数就什么都不存。离线不是读数——记录里只该有真读到的
             // 值,否则 30 条的空间会被「没读到」填满,历史和趋势也跟着变形。
+            // 但要说出来:静悄悄什么都不发生,和「存了一条」在界面上分不出。
+            if (listener != null) {
+                listener.onReadFailed(addr);
+            }
             return;
         }
         if (listener != null) {
@@ -1272,7 +1278,7 @@ public final class MeterDashboardView extends View {
 
         String sub;
         if (measuring) {
-            sub = "抓这一帧";
+            sub = "读这一台";
         } else if (autoMode) {
             int s = Math.max(0, (int) Math.ceil(remain));
             sub = String.format(Locale.CHINA, "%02d:%02d", s / 60, s % 60);
@@ -1286,7 +1292,7 @@ public final class MeterDashboardView extends View {
             MeterReading lastStored = firstRecordFor(focus);
             sub = lastStored != null
                     ? "上次存 " + clockFormat.format(new Date(lastStored.timestamp))
-                    : "点一下存一帧";
+                    : "点一下读一次";
         }
         text(canvas, sub, cx, DIAL_Y + HUB_SUB_BASE, 10.5f, INK3, Paint.Align.CENTER, mono, 0, 1);
         canvas.restore();
@@ -1309,7 +1315,7 @@ public final class MeterDashboardView extends View {
 
     /* ── 采集模式开关 ── */
     private void drawFoot(Canvas canvas, long now) {
-        String note = autoMode ? intervalNote() : "点中心存一帧";
+        String note = autoMode ? intervalNote() : "点中心读一次";
         float noteW = measure(note, 11.5f, sans, 0);
         float groupW = TOGGLE_W + 12 + noteW;
         float left = LEFT_CENTER - groupW / 2f;
