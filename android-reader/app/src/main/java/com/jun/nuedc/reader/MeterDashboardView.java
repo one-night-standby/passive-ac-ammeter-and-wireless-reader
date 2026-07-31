@@ -57,9 +57,9 @@ public final class MeterDashboardView extends View {
     private static final int HIGH_MA = 2000;
     private static final int FULL_MA = 2200;
     /* 读条时长。它同时是「发出请求到落库」的窗口:电流表答一次要测量 260 ms
-       加链路时延,服务端的应答时限是 2 秒,读条必须比它长,否则读条走完时
-       应答还在路上,存下去的就是上一次的值。 */
-    private static final long STORE_MS = 2400;
+       加链路时延,服务端的应答时限是 REPLY_TIMEOUT_MS,读条必须比它长,否则
+       读条走完时应答还在路上,存下去的就是上一次的值。 */
+    private static final long STORE_MS = 1400;
     private static final long ALERT_MS = 2200;                // 状态变化后的短暂提示
     private static final long ALARM_RING_COOLDOWN_MS = 10_000; // 同一地址的响铃/震动冷却
     private static final int PAGE_SIZE = 6;

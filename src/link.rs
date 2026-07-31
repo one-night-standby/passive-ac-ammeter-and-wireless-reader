@@ -23,10 +23,16 @@ use crate::meter::{Quality, Reading};
 /// separates "supply up" from "pin driven".
 const BT_SETTLE_MS: u64 = 350;
 
-/// HC-42 factory default (`AT+UART`, HC42.pdf 5.3.5). Changing it means
-/// changing the module too, and a module that disagrees is silent rather than
-/// wrong, which is the failure this constant exists to avoid.
-const BT_BAUD_RATE: u32 = 9_600;
+/// Not the HC-42's factory 9600: at that rate one reading's two frames are 110
+/// bytes and 115 ms of pure wire time, which lands directly in how long a
+/// reader waits for an answer. 115200 makes the same frames 9.6 ms and costs
+/// nothing else -- the module supports up to 230400 (HC42.pdf 5.3.5).
+///
+/// **The module must be set to match**, with `AT+UART=115200`; `bin/btcfg.rs`
+/// does it and reads the value back. A module left at 9600 is not slow, it is
+/// silent, which is the failure this constant exists to make visible: change it
+/// here and the meter goes mute until the module is changed too.
+pub const BT_BAUD_RATE: u32 = 115_200;
 
 /// Alarm thresholds from 2(3), in mA. The phone classifies again from its own
 /// preferences; sending our own classification means a meter read by anything

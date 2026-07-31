@@ -24,6 +24,12 @@ test = false
 bench = false
 
 [[bin]]
+name = "btcfg"
+path = "src/bin/btcfg.rs"
+test = false
+bench = false
+
+[[bin]]
 name = "stream"
 path = "src/bin/stream.rs"
 test = false
