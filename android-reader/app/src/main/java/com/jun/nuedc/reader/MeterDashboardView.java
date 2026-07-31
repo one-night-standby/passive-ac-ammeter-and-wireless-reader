@@ -1055,6 +1055,10 @@ public final class MeterDashboardView extends View {
                 }
             }
             if (alarmRingtone != null) {
+                // 先停再播。Ringtone.play() 在正在播放时不会重头开始,而是
+                // 直接被吞掉——默认通知音有一两秒,读数可能来得更快,于是
+                // 「响一次吞一次」。停一下才能保证每一次越限都听得见。
+                alarmRingtone.stop();
                 alarmRingtone.play();
             }
         } catch (Exception ignored) {
