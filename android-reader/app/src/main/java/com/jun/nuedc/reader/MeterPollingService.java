@@ -673,6 +673,11 @@ public final class MeterPollingService extends Service {
         }
         for (MeterFrameParser.ParsedFrame frame : link.parser.feed(value)) {
             link.address = frame.address;
+            // 任何一帧都是在场的证据,不只是心跳。一次读数前后电流表要静默
+            // 一段(测量 260 ms 加显示 1 s,下一拍最迟 3.3 s 才来),期间它照
+            // 样在答读数——只认心跳的话,正在正常工作的表会被扫成离线。
+            long heard = SystemClock.elapsedRealtime();
+            Long lastHeard = aliveAt.put(frame.address, heard);
             // 电流表上电时会不请自来地发一帧。那不是任何请求的应答,不能拿它
             // 推进轮次,也不能按上一次请求的身份落库——否则一次重启就会凭空
             // 多存一条、并且把轮次队列多弹一个地址出去。
@@ -685,13 +690,11 @@ public final class MeterPollingService extends Service {
             if (frame.alive) {
                 // 心跳不是应答:不清超时、不推进轮次、不落库。它只回答
                 // 「此刻谁在场」——而这正是拨码开关改了之后唯一会变的东西。
-                long now = SystemClock.elapsedRealtime();
-                Long previous = aliveAt.put(frame.address, now);
-                // 每一拍都刷在场状态,不只在「新出现」时刷。只在跳变时广播的话,
+                // 每一拍都广播在场,不只在「新出现」时广播。只在跳变时发的话,
                 // 界面的离线标记一旦被别的原因置上(比如一次读取超时),后面
                 // 再多的心跳也清不掉它,那台表会一直显示离线。
                 broadcastPresence(frame.address, link);
-                if (previous == null || now - previous > ALIVE_WINDOW_MS) {
+                if (lastHeard == null || heard - lastHeard > ALIVE_WINDOW_MS) {
                     kickRoundIfIdle();                         // 刚回来的地址,补一轮
                 }
                 continue;
