@@ -9,6 +9,11 @@
 //! and puts everything back to sleep. The result goes out over the radio and
 //! onto the panel, which stays lit for `DISPLAY_ON_MS` and then goes dark.
 //!
+//! Power-on takes one reading unasked, before the radio is up, and reports it
+//! the moment the port opens. So the meter always has a number to give, and a
+//! reader that connects before anyone has pressed anything is not told the
+//! meter is silent when it is merely idle.
+//!
 //! Requests that land inside a cycle are dropped, not queued, from either
 //! source: `wait_for_falling_edge` clears pending edges before it arms, and
 //! `Link::discard_pending` throws away buffered command bytes at the same
@@ -87,16 +92,22 @@ async fn main(spawner: Spawner) -> ! {
     let mut panel = Panel::new();
     let address = Address::new(p.PB0, p.PB6, p.PB7, p.PB8);
 
-    // The radio comes up before the first reading rather than after it, which
-    // is the opposite of what the board notes suggest for the harvested rail --
-    // there the argument is that the module's start-up current should not land
-    // while the supply is still weak. It has to be this way here: a meter whose
-    // radio waits for a local press cannot be commanded into its first reading,
-    // and being commandable is the point.
-    //
+    // LaunchPad S2 is the independent user button on PB21. It pulls the pin
+    // low when pressed; unlike S1/PA18, it does not disturb the ADC input.
+    let mut trigger = Input::new(p.PB21, Pull::Up);
+
+    // One reading on power-up, before anything can ask for it, and before the
+    // radio exists. Measuring first is what the board notes ask for on a
+    // harvested rail (6.1): the module's start-up current is the largest single
+    // draw in this firmware, and it should not land while the supply has just
+    // come up. Nothing is lost by waiting -- the reading is already in hand
+    // when the port opens, so the first frame goes out as soon as there is
+    // anything to send it over.
+    let mut in_hand = Some(meter.measure(&mut dma).await);
+
     // SAFETY: this is the only place either buffer is named, and the `Link`
     // built from them lives for the rest of the program.
-    let link = Link::power_up(
+    let mut link = Link::power_up(
         p.PB17,
         p.UART2,
         p.PB15,
@@ -107,46 +118,48 @@ async fn main(spawner: Spawner) -> ! {
     )
     .await;
 
-    // LaunchPad S2 is the independent user button on PB21. It pulls the pin
-    // low when pressed; unlike S1/PA18, it does not disturb the ADC input.
-    let mut trigger = Input::new(p.PB21, Pull::Up);
-
-    // A radio that failed to open leaves the meter working off its button and
-    // its panel, which is strictly better than refusing to measure at all.
-    let mut link = match link {
-        Some(link) => link,
-        None => loop {
-            trigger.wait_for_falling_edge().await;
-            let reading = meter.measure(&mut dma).await;
-            panel.show(&reading);
-            Timer::after_millis(DISPLAY_ON_MS).await;
-            panel.blank();
-        },
-    };
-
     loop {
-        // Idle here on both triggers at once. Whichever arrives first wins and
-        // the other future is dropped -- for the button that discards a pending
-        // edge, and for the radio it leaves any buffered bytes where they are,
-        // which the discard below then clears.
-        let addr = address.read();
-        // Which one won does not matter: the two triggers are the same request
-        // and take the same path from here.
-        let _: Either<(), link::Command> =
-            select(trigger.wait_for_falling_edge(), link.wait_command(addr)).await;
-
-        let reading = meter.measure(&mut dma).await;
+        // The power-on reading is already taken; every later one has to be
+        // asked for. Both then travel the identical path below, so the first
+        // reading is reported exactly like the ones that follow.
+        let reading = match in_hand.take() {
+            Some(reading) => reading,
+            None => {
+                // Idle here on both triggers at once. Whichever arrives first
+                // wins and the other future is dropped -- for the button that
+                // discards a pending edge, and for the radio it leaves any
+                // buffered bytes where they are, which the discard below then
+                // clears. Which one won does not matter: the two are the same
+                // request.
+                let addr = address.read();
+                match &mut link {
+                    Some(link) => {
+                        let _: Either<(), link::Command> =
+                            select(trigger.wait_for_falling_edge(), link.wait_command(addr)).await;
+                    }
+                    // A radio that failed to open leaves the meter working off
+                    // its button and its panel, which is strictly better than
+                    // refusing to measure at all.
+                    None => trigger.wait_for_falling_edge().await,
+                }
+                meter.measure(&mut dma).await
+            }
+        };
 
         // Report before the panel: the reader is waiting on an answer, and the
         // second the display spends lighting up is a second the radio could
         // have spent delivering it.
-        link.send(address.read(), &reading);
+        if let Some(link) = &mut link {
+            link.send(address.read(), &reading);
+        }
         panel.show(&reading);
 
         // Anything that arrived while the meter was busy is dropped here, so
         // the next `wait_command` starts from silence -- the same rule the
         // button already follows.
-        link.discard_pending().await;
+        if let Some(link) = &mut link {
+            link.discard_pending().await;
+        }
 
         Timer::after_millis(DISPLAY_ON_MS).await;
         panel.blank();
