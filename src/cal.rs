@@ -37,9 +37,10 @@ use crate::range::{Gain, Range};
 /// only need the few hundred mA around their own band, plus enough overlap
 /// past each re-range threshold that neighbouring tables agree where they
 /// meet -- a disagreement there shows up as a step in the reading every time
-/// the range changes. The step in use at 2 A additionally needs a point past
-/// 2 A, so the over-limit alarm region is interpolated rather than
-/// extrapolated.
+/// the range changes. The step in use at 2 A wants a point past 2 A as well,
+/// so the over-limit alarm region is interpolated rather than extrapolated;
+/// `CAL_X1` does not have one, and says below what that costs.
+///
 /// `CAL_X1` is the `Direct` range, and on this front end it is the range the
 /// bench actually runs in -- the autoranger never leaves it. That is not a
 /// fault: the input's own swing already fills 76-89% of the headroom its DC
@@ -47,75 +48,60 @@ use crate::range::{Gain, Range};
 /// choice. It stays that way while the front end's DC tracks its signal,
 /// because a PGA multiplies both.
 ///
-/// Reduced from a 196-frame run (`cal.csv`, 2026-07-31 21:54-21:59, reference
-/// SDM3055X-E, ADC on the 2.5 V VREF): readings within 1% of each other in
-/// current are one bench point and enter as their median, and a row is kept
-/// only if its RMS is at least 3% above the last kept one. Below that step the
-/// residual stops improving -- the extra rows are fitting noise, not curve.
+/// Reduced from an 84-frame run (`cal.csv`, 2026-08-01 05:12-05:15, address 6,
+/// reference SDM3055X-E, ADC on the 2.5 V VREF). The reduction walks the run in
+/// time order rather than sorting it, because what makes a bench point is that
+/// the load was *held*, and only the time axis knows that:
 ///
-/// The run swept up and then back down, and **both directions are in here on
-/// purpose**. At matched current the descending pass reads 0.59% lower than
-/// the ascending one, consistently enough to be a systematic rather than
-/// scatter; folding the two together puts the table between them, which shows
-/// up as a residual of +0.17% on the ascending points and -0.24% on the
-/// descending ones. Half the error each way beats none in one direction and
-/// all of it in the other. It also cancels the pairing lag to first order: the
-/// reference reading trails the meter's window by ~300 ms, which biases a
-/// rising sweep one way and a falling sweep the other.
+/// - consecutive frames whose reference current is within 1% of the running
+///   median are one bench point, and enter as the median of that run;
+/// - a group of fewer than three frames is discarded. Those are the frames
+///   caught while the load was being turned, where the meter's 260 ms window
+///   and the reference's are looking at different currents. Their apparent
+///   A/LSB scatters over 1.72e-3 to 2.94e-3 against 2.08-2.14e-3 for every
+///   settled group, so they are not weak points, they are wrong ones;
+/// - a group whose own RMS spans more than 5% is discarded for the same reason
+///   -- it is not one bench point however many frames it has;
+/// - a row is kept only if its RMS is at least 3% above the last kept one.
+///
+/// Twelve settled points survive out of twenty-three groups. Eleven remain
+/// after the one above 2 A, and nine after the 3% step.
 ///
 /// What bounds this table is not the table:
 ///
-/// - Per-frame scatter is 0.45% (1 sigma, from local fits within one pass).
-///   Fit residual is 0.238% median and 0.714% at the 90th percentile, and it
-///   barely moves between 82 rows and 38 -- both numbers are the run's noise
-///   and its direction offset, not the interpolation.
-/// - Nothing below 0.55 A or above 2.32 A. Worse, the four frames above that
-///   came back `OVER`: at 2.33 A the probe already puts the waveform's peak at
-///   code 4107 against a 4095 ceiling. The `> 2 A` alarm region of 2(3) is
-///   therefore only about 15% wide before the front end runs out of window,
-///   and `< 0.2 A` is reached by extending the first segment.
+/// - Nothing below 0.55 A or above 1.54 A. `< 0.2 A` is reached by extending
+///   the first segment, and everything past the last row is extrapolated along
+///   the final segment. That extrapolation was checked against the two frames
+///   this run did take above 2 A: it lands within 0.4% at 2.13 A and 4.8% low
+///   at 2.37 A. The `> 2 A` alarm of 2(3) therefore still fires at the right
+///   current, but the number it fires with is understated at the top.
+/// - **This is an ascending-ramp table.** Two settled points fall on the way
+///   back down, at 0.70 A and 0.87 A, and both sit about 5% below the
+///   ascending curve at the same reference current -- they agree with each
+///   other, so it is a direction offset and not scatter. Ramped down, this
+///   table therefore reads about 5% high. Two points cannot say whether that
+///   is core remanence in the CT, which would be the ordinary explanation and
+///   would make it a permanent property of the instrument, so nothing here
+///   corrects for it. Measuring it is a bench run of its own: sweep down as
+///   slowly as up, holding every point.
+/// - Residual against the settled points it was built from is zero by
+///   construction; the honest scatter figure is the 1.08% median relative
+///   residual of a straight line through the same points, which is what the
+///   piecewise segments are absorbing.
 ///
-/// Re-derive from the ascending pass alone if the load is only ever ramped up
-/// in service; the merge above is the choice that assumes least about that.
+/// Hold each bench point for five seconds or more when re-running this: at the
+/// 1.4 s the request-response loop takes per reading, that is the three frames
+/// a group needs to survive the filter above.
 pub static CAL_X1: &[(f32, f32)] = &[
-    (259.75, 0.5527),
-    (271.67, 0.5756),
-    (280.33, 0.5951),
-    (289.14, 0.6122),
-    (299.88, 0.6354),
-    (309.81, 0.6595),
-    (322.31, 0.6832),
-    (336.05, 0.7120),
-    (349.23, 0.7388),
-    (362.63, 0.7689),
-    (376.16, 0.7997),
-    (388.32, 0.8245),
-    (405.35, 0.8615),
-    (423.26, 0.8976),
-    (441.63, 0.9384),
-    (459.22, 0.9711),
-    (474.15, 1.0086),
-    (493.55, 1.0454),
-    (508.72, 1.0789),
-    (525.61, 1.1145),
-    (545.61, 1.1566),
-    (568.28, 1.2045),
-    (593.00, 1.2569),
-    (617.78, 1.3135),
-    (646.17, 1.3652),
-    (666.95, 1.4165),
-    (702.75, 1.4760),
-    (727.28, 1.5288),
-    (762.63, 1.6171),
-    (790.15, 1.6907),
-    (814.84, 1.7077),
-    (843.12, 1.7820),
-    (879.33, 1.8648),
-    (918.48, 1.9214),
-    (953.58, 2.0040),
-    (993.20, 2.1032),
-    (1029.83, 2.1726),
-    (1067.80, 2.2633),
+    (262.26, 0.5501),
+    (289.65, 0.6037),
+    (312.01, 0.6511),
+    (337.66, 0.7077),
+    (370.96, 0.7777),
+    (419.19, 0.8793),
+    (483.46, 1.0167),
+    (576.36, 1.2173),
+    (719.86, 1.5373),
 ];
 pub static CAL_X2: &[(f32, f32)] = &[];
 
@@ -152,9 +138,9 @@ pub fn cal_for(range: Range) -> &'static [(f32, f32)] {
 /// nominal ladder ratio, precisely the approximation the per-range tables
 /// exist to replace.
 ///
-/// Fitted to the same run as `CAL_X1`, by least squares on *relative* error (a
+/// Fitted to the same rows as `CAL_X1`, by least squares on *relative* error (a
 /// reading is judged as a percentage) and through the origin (the only shape
-/// `lsb_to_amps` can use here). Worst case 2.3% across that run's span -- the
+/// `lsb_to_amps` can use here). Worst case 1.63% across those rows -- the
 /// rebiased front end is nearly linear, so one straight line goes a long way
 /// here. Still a fallback and not a calibration: it says nothing about the
 /// five PGA steps it actually serves, which it reaches by the nominal ladder
@@ -162,7 +148,7 @@ pub fn cal_for(range: Range) -> &'static [(f32, f32)] {
 ///
 /// Written to the shortest decimal that round-trips through f32, so the source
 /// does not imply a precision this constant does not have.
-pub const CAL_FALLBACK_A_PER_LSB: f32 = 0.0021205244;
+pub const CAL_FALLBACK_A_PER_LSB: f32 = 0.0021008217;
 
 /// The gain `CAL_FALLBACK_A_PER_LSB` was fitted at.
 pub const CAL_FALLBACK_GAIN: f32 = 1.0;
