@@ -374,17 +374,12 @@ public final class MeterDashboardView extends View {
         long prevMax = maxSeenId;
         history = new ArrayList<>(allHistory);
         int newTotal = 0, newInScope = 0;
-        boolean autoArrived = false;
         for (MeterReading r : history) {
             if (r.id > maxSeenId) maxSeenId = r.id;
             if (r.id > prevMax) {
                 newTotal++;
                 if (allScope || r.address == panelAddr) newInScope++;
-                if ("AUTO".equalsIgnoreCase(r.source)) autoArrived = true;
             }
-        }
-        if (autoArrived && autoMode) {
-            remain = intervalSeconds;                          // 一轮存下来了,重新计时
         }
         if (firstLoad) {
             firstLoad = false;
@@ -409,6 +404,20 @@ public final class MeterDashboardView extends View {
 
     public void setAutoMode(boolean enabled) {
         applyMode(enabled);
+    }
+
+    /**
+     * 对齐服务排下的下一轮时刻。{@code ms < 0} 表示此刻没有排着的轮次,不动环。
+     *
+     * <p>倒计时不看有没有测到数:一轮问下来一台都没答,下一轮照样在一个完整
+     * 间隔之后——环也就该从满的地方重新走。
+     */
+    public void setCountdownMillis(long ms) {
+        if (!autoMode || ms < 0L) {
+            return;
+        }
+        remain = Math.min(intervalSeconds, ms / 1000f);
+        invalidate();
     }
 
     public void setPollingIntervalSeconds(int seconds) {

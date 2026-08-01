@@ -84,6 +84,8 @@ public final class MeterPollingService extends Service {
     public static final String EXTRA_STATE = "state";
     public static final String EXTRA_DETAIL = "detail";
     public static final String EXTRA_AUTO = "auto";
+    /** 距下一轮还有多少毫秒。自动模式外为 -1,界面据此对齐倒计时环。 */
+    public static final String EXTRA_NEXT_CYCLE_MS = "next_cycle_ms";
     public static final String EXTRA_MAC = "mac";
     public static final String EXTRA_NAME = "name";
     public static final String EXTRA_RSSI = "rssi";
@@ -288,6 +290,7 @@ public final class MeterPollingService extends Service {
             readNow(intent.getIntExtra(EXTRA_ADDRESS, -1));
         } else if (ACTION_UPDATE_INTERVAL.equals(action)) {
             if (autoMode) {
+                scheduleRound(preferences.pollingIntervalMs());
                 broadcastState(
                         "AUTO_WAIT",
                         String.format(
@@ -296,7 +299,6 @@ public final class MeterPollingService extends Service {
                                 preferences.pollingIntervalText()
                         )
                 );
-                scheduleRound(preferences.pollingIntervalMs());
             }
         }
         return START_NOT_STICKY;
@@ -589,8 +591,9 @@ public final class MeterPollingService extends Service {
      */
     private void kickRoundIfIdle() {
         if (autoMode && roundQueue.isEmpty()) {
-            handler.removeCallbacks(autoRoundRunnable);
-            handler.postDelayed(autoRoundRunnable, ROUND_RETRY_MS);
+            // 走 scheduleRound 而不是自己 postDelayed:通知和界面的倒计时都读
+            // nextCycleAtElapsedMs,直接改提醒时刻会让它们对着一个作废的时刻走。
+            scheduleRound(ROUND_RETRY_MS);
         }
     }
 
@@ -822,10 +825,12 @@ public final class MeterPollingService extends Service {
         if (!autoMode) {
             return;
         }
+        // 先排下一轮再广播:界面的倒计时环跟着广播里的剩余时间走,顺序反了
+        // 它拿到的就是上一轮那个早已走完的时刻。一台没测到的空轮同样要重新计时。
+        scheduleRound(preferences.pollingIntervalMs());
         broadcastState("AUTO_WAIT", String.format(
                 Locale.CHINA, "本轮存档%d台，%s后再采一轮",
                 roundStored, preferences.pollingIntervalText()));
-        scheduleRound(preferences.pollingIntervalMs());
     }
 
     /** 有应答:落库并广播。只有这条路径写数据库。 */
@@ -903,12 +908,20 @@ public final class MeterPollingService extends Service {
     }
 
     private void scheduleRound(long delayMs) {
-        long safeDelayMs = Math.max(1_000L, delayMs);
+        long safeDelayMs = Math.max(ROUND_RETRY_MS, delayMs);
         handler.removeCallbacks(autoRoundRunnable);
         handler.removeCallbacks(countdownTick);
         nextCycleAtElapsedMs = SystemClock.elapsedRealtime() + safeDelayMs;
         updateCountdownNotification();
         handler.postDelayed(autoRoundRunnable, safeDelayMs);
+    }
+
+    /** 距下一轮的毫秒数;不在自动模式(或还没排上)时为 -1。 */
+    private long remainingCycleMs() {
+        if (!autoMode || nextCycleAtElapsedMs <= 0L) {
+            return -1L;
+        }
+        return Math.max(0L, nextCycleAtElapsedMs - SystemClock.elapsedRealtime());
     }
 
     private void updateCountdownNotification() {
@@ -1016,6 +1029,7 @@ public final class MeterPollingService extends Service {
         intent.putExtra(EXTRA_STATE, state);
         intent.putExtra(EXTRA_DETAIL, detail);
         intent.putExtra(EXTRA_AUTO, autoMode);
+        intent.putExtra(EXTRA_NEXT_CYCLE_MS, remainingCycleMs());
         sendBroadcast(intent);
     }
 

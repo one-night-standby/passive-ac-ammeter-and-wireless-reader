@@ -67,6 +67,12 @@ public final class MainActivity extends Activity implements MeterDashboardView.L
                     MeterPollingService.EXTRA_AUTO,
                     false
             ));
+            // 倒计时以服务为准:一轮真正排下去了界面才重新计时,哪怕这一轮
+            // 一台都没测到——空轮和满轮等下一轮的时间是一样长的。
+            dashboard.setCountdownMillis(intent.getLongExtra(
+                    MeterPollingService.EXTRA_NEXT_CYCLE_MS,
+                    -1L
+            ));
             if ("ERROR".equals(state) && detail != null) {
                 Toast.makeText(MainActivity.this, detail, Toast.LENGTH_LONG).show();
             }
