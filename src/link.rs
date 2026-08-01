@@ -12,7 +12,7 @@ use embassy_mspm0::gpio::{Input, Level, Output, Pull};
 use embassy_mspm0::interrupt::typelevel::Binding;
 use embassy_mspm0::peripherals;
 use embassy_mspm0::uart::{BufferedInterruptHandler, BufferedUart, Config as UartConfig, Instance};
-use embassy_time::Timer;
+use embassy_time::{Duration, Timer, with_timeout};
 use embedded_io_async::{Read, ReadReady, Write};
 
 use crate::meter::{Quality, Reading};
@@ -56,6 +56,14 @@ const CMD_MAX: usize = 32;
 /// The rest is margin for an `rms` the DSP produced outside the converter's
 /// range, which is a number worth reporting rather than reshaping.
 const LINE_MAX: usize = 128;
+
+/// How long a line may sit unsent before the meter gives up on it.
+///
+/// A wait only happens when the ring is full, and at `BT_BAUD_RATE` the whole
+/// 192-byte ring is 17 ms of wire time, so anything past this is a port that
+/// has stopped clocking rather than one that is behind. Sized well clear of a
+/// legitimate backlog so it never fires on a link that is merely busy.
+const TX_DEADLINE_MS: u64 = 250;
 
 /// How often the meter announces itself while idle. Cheap enough to ignore:
 /// one 17-byte line is 18 ms of 9600-baud UART and no analog blocks at all,
@@ -217,12 +225,24 @@ impl Link {
     /// into this task waiting while the rest of the executor keeps running, and
     /// the indicator keeps blinking to say so.
     ///
-    /// No deadline on the wait. At 115200 the whole 192-byte ring drains in
-    /// 17 ms, so a wait longer than that means the port has stopped clocking,
-    /// and that is a fault worth being visible rather than one to paper over
-    /// by dropping frames on a timer.
+    /// Bounded, because this task is the whole meter. A port that has stopped
+    /// clocking is a fault worth being visible, but an unbounded wait here does
+    /// not make it visible -- it parks `main` mid-frame, which stops the
+    /// heartbeat and stops the button being waited on, so the meter goes silent
+    /// and deaf at once and looks like it lost power. Past `TX_DEADLINE_MS` the
+    /// line is abandoned and the meter carries on: one dropped frame the reader
+    /// already knows how to survive, against a meter that answers nothing.
+    ///
+    /// What is already in the ring stays there and goes out whenever the port
+    /// comes back, so an abandoned line can surface as one truncated frame. The
+    /// parser drops it on the newline it does not fit, which costs the line
+    /// after it and nothing further.
     async fn put_line(&mut self, line: &str) {
-        let _ = self.uart.write_all(line.as_bytes()).await;
+        let _ = with_timeout(
+            Duration::from_millis(TX_DEADLINE_MS),
+            self.uart.write_all(line.as_bytes()),
+        )
+        .await;
     }
 
     /// "I am here, and I am meter n." Carries no reading on purpose: this is a
