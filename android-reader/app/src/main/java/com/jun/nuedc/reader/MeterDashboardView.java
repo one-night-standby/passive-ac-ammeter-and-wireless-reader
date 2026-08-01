@@ -468,14 +468,14 @@ public final class MeterDashboardView extends View {
             if (address == pendingAddr) {
                 pendingUntil = m.frameAt;
             }
-            // 每一次读数都判一次:越限就响,不要求状态发生变化。读数是稀疏
+            // 每一次读数都判一次:该报就响,不要求状态发生变化。读数是稀疏
             // 的——手动读一次、自动轮次一次、表上按一次键一次——每一次都是
             // 一个独立的、值得被告知的事件。
             String st = classifyStatus(currentMa);
-            if (MeterReading.LOW.equals(st) || MeterReading.HIGH.equals(st)) {
+            if (alarms(st)) {
                 long alarmAt = SystemClock.uptimeMillis();
                 m.alertUntil = alarmAt + ALERT_MS;
-                alarmFeedback(address, alarmAt);
+                alarmFeedback(address, alarmAt, toneFor(st));
             }
         }
         m.lastAt = SystemClock.uptimeMillis();
@@ -1312,18 +1312,36 @@ public final class MeterDashboardView extends View {
         }
     }
 
+    /** 要出声的三种状态:越限说负载不对,断开说负载不在,都得让人知道。 */
+    private static boolean alarms(String status) {
+        return MeterReading.LOW.equals(status)
+                || MeterReading.HIGH.equals(status)
+                || MeterReading.DISCONNECTED.equals(status);
+    }
+
     /**
-     * 一次越限读数:震动两下 + 一串预警蜂鸣(走闹钟流,静音通知也听得见)。
+     * 这个状态该用哪一声。
+     *
+     * <p>断开走 CDMA 音型里的低音档,和越限那声在音高上分开:两件事要去查的地方
+     * 不一样——越限查负载,断开查接线——不看屏幕光凭声音就该分得出是哪一件。
+     */
+    private static int toneFor(String status) {
+        return MeterReading.DISCONNECTED.equals(status)
+                ? ToneGenerator.TONE_CDMA_LOW_SS
+                : ToneGenerator.TONE_CDMA_ALERT_CALL_GUARD;
+    }
+
+    /**
+     * 一次该报的读数:震动两下 + 一串预警蜂鸣(走闹钟流,静音通知也听得见)。
      *
      * <p>用 {@link ToneGenerator} 自己发音,不取系统铃声:默认通知音是一声
-     * 「叮」,听感是「收到了」,而这里要说的是「超限了」。告警音的语义得由这个
+     * 「叮」,听感是「收到了」,而这里要说的是「出事了」。告警音的语义得由这个
      * 程序自己定,不能跟着用户的通知音设置走。
      *
-     * <p>{@code ALERT_CALL_GUARD} 是三声短促上行,长度由音型本身定死,再用
-     * duration 兜一道:越限读数可能每隔几秒就来一次,一次告警必须在下一次读数
-     * 之前结束,不能像闹钟铃那样一响十几秒。
+     * <p>音型长度由它自己定死,再用 duration 兜一道:读数可能每隔几秒就来一次,
+     * 一次告警必须在下一次读数之前结束,不能像闹钟铃那样一响十几秒。
      */
-    private void alarmFeedback(int addr, long now) {
+    private void alarmFeedback(int addr, long now, int tone) {
         if (now < alarmMuteUntil[addr]) {
             return;                                            // 同一次读数被重复处理时去个重
         }
@@ -1334,10 +1352,10 @@ public final class MeterDashboardView extends View {
                 alarmTone = new ToneGenerator(
                         AudioManager.STREAM_ALARM, ToneGenerator.MAX_VOLUME);
             }
-            // 先停再发:同一次告警还在响时 startTone 会被吞掉,而每一次越限
-            // 都该出声。
+            // 先停再发:同一次告警还在响时 startTone 会被吞掉,而每一次都该
+            // 出声。
             alarmTone.stopTone();
-            alarmTone.startTone(ToneGenerator.TONE_CDMA_ALERT_CALL_GUARD, 600);
+            alarmTone.startTone(tone, 600);
         } catch (RuntimeException ignored) {
             // 音频资源被占满或没有可用输出,不影响震动和视觉报警
             alarmTone = null;
@@ -1468,7 +1486,7 @@ public final class MeterDashboardView extends View {
             float a = i * STEP + angle;
             float off = Math.abs(norm180(a)) / 180f;
             Live m = live[i];
-            boolean alarm = MeterReading.LOW.equals(m.status) || MeterReading.HIGH.equals(m.status);
+            boolean alarm = alarms(m.status);
             boolean alerting = now < m.alertUntil;             // 只在刚变化时提示
             float beat = alerting ? 1f + 0.045f * (float) Math.sin(now / 130.0) : 1f;
             slotScale[i] = lerp(1.14f, 0.82f, off) * beat;
@@ -1807,7 +1825,7 @@ public final class MeterDashboardView extends View {
                     chartPtXY.add(new float[]{px, py});
                     chartPtRec.add(r);
                     String st = statusOf(r);
-                    if (MeterReading.LOW.equals(st) || MeterReading.HIGH.equals(st)) {
+                    if (alarms(st)) {
                         fill.setColor(mulAlpha(FRAME, fade));
                         canvas.drawCircle(px, py, 4, fill);
                         stroke.setColor(mulAlpha(statusColor(st), fade));
