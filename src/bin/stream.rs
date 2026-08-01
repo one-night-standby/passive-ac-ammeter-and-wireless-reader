@@ -41,6 +41,8 @@ mod led;
 mod link;
 #[path = "../meter.rs"]
 mod meter;
+#[path = "../nvcal.rs"]
+mod nvcal;
 #[path = "../range.rs"]
 mod range;
 #[path = "../sampler.rs"]
@@ -80,6 +82,10 @@ async fn main(spawner: Spawner) -> ! {
     let address = Address::new(p.PB0, p.PB6, p.PB7, p.PB8);
     let mut meter = Meter::new(p.PA8, p.PA26);
     let mut dma = Channel::new(p.DMA_CH0, Irqs);
+
+    // Same table this part would use under `main.rs`: a bench run logged here
+    // has to describe the meter as it reads in the field, field table included.
+    cal::load_field();
 
     // The first reading is taken with the radio still dark. Its start-up
     // current is the largest single draw in this firmware and it lands on a

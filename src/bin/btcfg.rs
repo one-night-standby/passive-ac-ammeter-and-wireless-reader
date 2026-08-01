@@ -44,6 +44,8 @@ mod dsp;
 mod link;
 #[path = "../meter.rs"]
 mod meter;
+#[path = "../nvcal.rs"]
+mod nvcal;
 #[path = "../range.rs"]
 mod range;
 #[path = "../sampler.rs"]

@@ -36,10 +36,18 @@ public final class MeterFrameParser {
 
     private final StringBuilder buffer = new StringBuilder();
 
-    public List<ParsedFrame> feed(byte[] data) {
-        List<ParsedFrame> frames = new ArrayList<>();
+    /**
+     * 收到的字节里已经完整的那些行,原文照给。
+     *
+     * <p>拆行和解帧分开,是因为标定端要看的行这个解析器不认得——{@code CALACK}、
+     * {@code CALSTAT} 是标定推送的应答,读表器本身用不上。让它们从这里原样流出去,
+     * 好过在 {@link #parseLine} 里给每一条新语法加一个分支、再让读表器的采集逻辑
+     * 去跳过它们。
+     */
+    public List<String> feedLines(byte[] data) {
+        List<String> lines = new ArrayList<>();
         if (data == null || data.length == 0) {
-            return frames;
+            return lines;
         }
 
         buffer.append(new String(data, StandardCharsets.US_ASCII));
@@ -49,8 +57,15 @@ public final class MeterFrameParser {
 
         int newline;
         while ((newline = buffer.indexOf("\n")) >= 0) {
-            String line = buffer.substring(0, newline).replace("\r", "").trim();
+            lines.add(buffer.substring(0, newline).replace("\r", "").trim());
             buffer.delete(0, newline + 1);
+        }
+        return lines;
+    }
+
+    public List<ParsedFrame> feed(byte[] data) {
+        List<ParsedFrame> frames = new ArrayList<>();
+        for (String line : feedLines(data)) {
             ParsedFrame frame = parseLine(line);
             if (frame != null) {
                 frames.add(frame);

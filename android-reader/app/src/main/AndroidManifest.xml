@@ -41,6 +41,19 @@
             </intent-filter>
         </activity>
 
+        <!-- 标定台是第二个图标,不是读表器界面里的一个入口:自动模式要求
+             「一键启动」,那个界面上不该多一个能把表内标定改掉的按钮。 -->
+        <activity
+            android:name=".CalibrationActivity"
+            android:exported="true"
+            android:label="@string/calibration_name"
+            android:screenOrientation="portrait">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
         <service
             android:name=".MeterPollingService"
             android:exported="false"

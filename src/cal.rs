@@ -1,7 +1,16 @@
 //! Calibration: raw Hann-weighted RMS in ADC LSB -> amps, one table per
 //! range. These tables are the deliverable of the bench session; everything
 //! else in this firmware exists to produce a number worth putting in them.
+//!
+//! A table pushed over the link and kept in flash (`nvcal`) takes precedence
+//! over `CAL_X1` -- see `Table` for what that is for and what it does not
+//! cover.
 
+use core::cell::RefCell;
+
+use critical_section::Mutex;
+
+use crate::nvcal;
 use crate::range::{Gain, Range};
 
 /// Calibration table: `(raw Hann-weighted RMS in LSB, amps on the reference
@@ -235,17 +244,212 @@ const _: () = assert!(cal_strictly_ascending(CAL_X16), "{}", CAL_ORDER_MSG);
 
 const _: () = assert!(cal_strictly_ascending(CAL_X32), "{}", CAL_ORDER_MSG);
 
+/// Points a field table may hold.
+///
+/// Sixteen rather than the ten a session realistically collects, because what
+/// decides whether a piecewise-linear table clears 0.5% is where the knots sit,
+/// not how many there are. Against a smooth fit of the bench run, ten knots
+/// spaced evenly in log(RMS) leave a worst chord error of 0.49% -- the entire
+/// budget -- while the same ten spaced by round current values leave 1.5%: the
+/// sensitivity bends hardest around 0.3 A, and a table with no knot there
+/// cannot follow it. The spare slots are what lets a session put knots where
+/// the curve needs them instead of where the load knob is convenient. Sixteen
+/// costs 128 bytes of table and a 144-byte flash record.
+pub const FIELD_MAX: usize = 16;
+
+/// A calibration table small enough to travel over the link and live in flash.
+///
+/// This is the same `(LSB, amps)` relation as `CAL_X1`, measured against
+/// whatever reference is on the bench at the time. It exists because the
+/// scored quantity is agreement with *that* instrument: a 4.5-digit handheld
+/// and the meter this was fitted against can differ by more than the whole
+/// 0.5% budget on AC, and no amount of care on our side removes that.
+///
+/// It replaces `CAL_X1` only -- the `Direct` range, which is the only one this
+/// front end runs in. A field table pushed while a PGA step was somehow
+/// selected would be a table measured on one range applied to another, so the
+/// PGA steps keep their own tables and their own fallback.
+#[derive(Clone, Copy)]
+pub struct Table {
+    pub points: [(f32, f32); FIELD_MAX],
+    pub len: usize,
+}
+
+impl Table {
+    pub const EMPTY: Self = Self {
+        points: [(0.0, 0.0); FIELD_MAX],
+        len: 0,
+    };
+
+    pub fn as_slice(&self) -> &[(f32, f32)] {
+        &self.points[..self.len]
+    }
+
+    /// What `cal_strictly_ascending` checks for the built-in tables at compile
+    /// time, checked here at run time because these arrive over a radio.
+    ///
+    /// A table that fails this is refused whole rather than repaired: the
+    /// meter has no way to tell which of two out-of-order points is the wrong
+    /// one, and reading plausibly wrong on the built-in table is a state the
+    /// operator can see (`SRC=ROM` in every frame) while reading plausibly
+    /// wrong on a silently patched one is not.
+    pub fn valid(&self) -> bool {
+        if self.len < 2 || self.len > FIELD_MAX {
+            return false;
+        }
+        // Infinities pass a strictly-ascending test and then poison the
+        // interpolation, so they are excluded here rather than there. NaN is
+        // already excluded by the comparison itself.
+        if self
+            .as_slice()
+            .iter()
+            .any(|(lsb, amps)| !lsb.is_finite() || !amps.is_finite() || *lsb < 0.0 || *amps < 0.0)
+        {
+            return false;
+        }
+        cal_strictly_ascending(self.as_slice())
+    }
+}
+
+/// The table in use, or `None` while the meter is on `CAL_X1`.
+///
+/// Loaded from flash once at boot and thereafter only replaced by a completed
+/// push, so a measurement never waits on flash and never sees a half-installed
+/// table.
+static FIELD: Mutex<RefCell<Option<Table>>> = Mutex::new(RefCell::new(None));
+
+/// Points as they arrive, one frame each, before the push is complete.
+///
+/// Separate from `FIELD` because a push is not atomic on the wire: the app
+/// sends one point per line and any of them can be lost. Staging keeps the
+/// meter measuring on its current table for the whole exchange -- there is no
+/// window where it is calibrated by a partial table.
+///
+/// The mask is which slots have been written since the last commit or clear.
+/// A dropped point in the middle of a push is exactly what it catches: without
+/// it, the committed table would silently contain whatever that slot held from
+/// an earlier session.
+static STAGED: Mutex<RefCell<(Table, u16)>> = Mutex::new(RefCell::new((Table::EMPTY, 0)));
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum CalError {
+    /// Point index outside the table.
+    Index,
+    /// A coordinate that is not a usable number.
+    Value,
+    /// Fewer points committed than were staged, or a gap in the middle.
+    Missing,
+    /// Committed table is not two or more strictly ascending points.
+    Order,
+    /// The flash controller refused the write. The table in RAM is left alone:
+    /// it is still the table the operator measured, it just will not survive
+    /// the next power loss.
+    Flash,
+}
+
+/// Install whatever is in flash. Call once, before the first measurement.
+///
+/// A table that fails `valid` is dropped rather than repaired, for the same
+/// reason a pushed one is: `CAL_X1` is a defensible fallback and a
+/// half-trusted table is not.
+pub fn load_field() {
+    let stored = nvcal::load().filter(Table::valid);
+    critical_section::with(|cs| *FIELD.borrow(cs).borrow_mut() = stored);
+}
+
+/// How many points the meter is currently reading on; 0 means `CAL_X1`. This
+/// is what every frame reports as `SRC`, and the app's cue to push again after
+/// the meter has been through a power cycle it could not survive.
+pub fn field_len() -> usize {
+    critical_section::with(|cs| {
+        FIELD
+            .borrow(cs)
+            .borrow()
+            .map_or(0, |table| table.len)
+    })
+}
+
+/// Take one point of an in-progress push.
+pub fn stage_point(index: usize, lsb: f32, amps: f32) -> Result<(), CalError> {
+    if index >= FIELD_MAX {
+        return Err(CalError::Index);
+    }
+    if !lsb.is_finite() || !amps.is_finite() || lsb < 0.0 || amps < 0.0 {
+        return Err(CalError::Value);
+    }
+    critical_section::with(|cs| {
+        let mut staged = STAGED.borrow(cs).borrow_mut();
+        staged.0.points[index] = (lsb, amps);
+        staged.1 |= 1 << index;
+    });
+    Ok(())
+}
+
+/// Finish a push: check the staged points, write them to flash, and start
+/// reading on them.
+///
+/// Flash first, then RAM, so the two can only disagree in the direction that
+/// is safe to disagree in -- a write that failed leaves the meter on the table
+/// it already had, and says so.
+pub fn commit_field(count: usize) -> Result<(), CalError> {
+    let staged = critical_section::with(|cs| *STAGED.borrow(cs).borrow());
+    let (mut table, mask) = staged;
+    if count < 2 || count > FIELD_MAX {
+        return Err(CalError::Order);
+    }
+    let wanted = ((1u32 << count) - 1) as u16;
+    if mask & wanted != wanted {
+        return Err(CalError::Missing);
+    }
+    table.len = count;
+    if !table.valid() {
+        return Err(CalError::Order);
+    }
+
+    nvcal::store(&table).map_err(|_| CalError::Flash)?;
+    critical_section::with(|cs| {
+        *FIELD.borrow(cs).borrow_mut() = Some(table);
+        *STAGED.borrow(cs).borrow_mut() = (Table::EMPTY, 0);
+    });
+    Ok(())
+}
+
+/// Go back to `CAL_X1`, in flash as well as in RAM.
+pub fn clear_field() -> Result<(), CalError> {
+    nvcal::store(&Table::EMPTY).map_err(|_| CalError::Flash)?;
+    critical_section::with(|cs| {
+        *FIELD.borrow(cs).borrow_mut() = None;
+        *STAGED.borrow(cs).borrow_mut() = (Table::EMPTY, 0);
+    });
+    Ok(())
+}
+
 /// Piecewise-linear lookup in the active range's table. Outside the table the
 /// end segments are extended rather than clamped -- a clamped reading would
 /// silently under-report an over-limit current, and 2(3) needs `> 2 A` to
 /// raise the alarm.
 pub fn lsb_to_amps(rms: f32, range: Range) -> f32 {
+    if range == Range::Direct {
+        // Copied out rather than interpolated under the lock: the lookup is
+        // the tail of a measurement, and holding a critical section across it
+        // would put the link's interrupt behind arithmetic that does not need
+        // to exclude anything.
+        let field = critical_section::with(|cs| *FIELD.borrow(cs).borrow());
+        if let Some(table) = field {
+            return interpolate(rms, table.as_slice());
+        }
+    }
+
     let cal = cal_for(range);
     if cal.len() < 2 {
         let scale = CAL_FALLBACK_A_PER_LSB * CAL_FALLBACK_GAIN / range.nominal() as f32;
         return scale * rms;
     }
+    interpolate(rms, cal)
+}
 
+/// Requires at least two points; every caller has already established that.
+fn interpolate(rms: f32, cal: &[(f32, f32)]) -> f32 {
     // Pick the bracketing segment; fall back to the first/last segment when
     // the reading sits outside the calibrated span.
     let mut seg = cal.len() - 2;
