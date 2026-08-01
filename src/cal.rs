@@ -416,6 +416,12 @@ pub fn commit_field(count: usize) -> Result<(), CalError> {
 
 /// Go back to `CAL_X1`, in flash as well as in RAM.
 pub fn clear_field() -> Result<(), CalError> {
+    // Already there: say so without writing. Clearing is a record like any
+    // other -- a `len == 0` one -- so a second `CALOFF` would spend a slot
+    // saying what the last one already says, and seven of those are an erase.
+    if field_len() == 0 {
+        return Ok(());
+    }
     nvcal::store(&Table::EMPTY).map_err(|_| CalError::Flash)?;
     critical_section::with(|cs| {
         *FIELD.borrow(cs).borrow_mut() = None;
@@ -435,7 +441,12 @@ pub fn lsb_to_amps(rms: f32, range: Range) -> f32 {
         // would put the link's interrupt behind arithmetic that does not need
         // to exclude anything.
         let field = critical_section::with(|cs| *FIELD.borrow(cs).borrow());
-        if let Some(table) = field {
+        // The length is re-checked rather than assumed. Nothing installs a
+        // table shorter than two points -- both paths that write `FIELD` run
+        // `valid` first -- but `interpolate` subtracts two from the length, so
+        // the cost of that invariant being wrong is a panic in the tail of a
+        // measurement, and this meter panics by halting.
+        if let Some(table) = field.filter(|table| table.len >= 2) {
             return interpolate(rms, table.as_slice());
         }
     }
