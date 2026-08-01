@@ -687,12 +687,13 @@ public final class MeterPollingService extends Service {
             boolean solicited = link.askingAddr != NOT_ASKING
                     && (link.askingAddr < 0 || link.askingAddr == frame.address);
             boolean forRound = solicited && link.askingForRound;
-            if (solicited) {
-                clearReplyTimeout(link);
-            }
             if (frame.alive) {
                 // 心跳不是应答:不清超时、不推进轮次、不落库。它只回答
                 // 「此刻谁在场」——而这正是拨码开关改了之后唯一会变的东西。
+                // 清超时要放在这道判断之后:心跳每 2 秒一拍,而一次应答最迟要
+                // 1.5 秒,所以等应答的窗口里几乎总会插进一拍心跳。先清的话,
+                // 这一拍就把请求作废了,随后真正的读数帧变成「没人问过」,
+                // 自动轮次既不落库也不往下推。
                 // 每一拍都广播在场,不只在「新出现」时广播。只在跳变时发的话,
                 // 界面的离线标记一旦被别的原因置上(比如一次读取超时),后面
                 // 再多的心跳也清不掉它,那台表会一直显示离线。
@@ -701,6 +702,9 @@ public final class MeterPollingService extends Service {
                     kickRoundIfIdle();                         // 刚回来的地址,补一轮
                 }
                 continue;
+            }
+            if (solicited) {
+                clearReplyTimeout(link);
             }
             if (frame.hasReading()) {
                 link.lastMa = frame.currentMa;

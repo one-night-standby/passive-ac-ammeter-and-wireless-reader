@@ -14,11 +14,18 @@ public final class ReaderPreferences {
     public static final long SCAN_DURATION_MS = 8_000L;
     public static final long CONNECTION_TIMEOUT_MS = 10_000L;
     /**
-     * 发出 MEAS 之后等应答的时限。电流表一次测量约 260 ms，两行帧在 115200 波特上
-     * 不到 10 ms，再加一个 BLE 连接间隔——一次应答大约 300-400 ms。取 1.2 秒留三倍
-     * 余量。超时只说明这一次没读到，<b>不代表这台表离线</b>：在场与否由心跳说了算。
+     * 发出 MEAS 之后等应答的时限。
+     *
+     * <p>决定这个数的不是测量本身。电流表读完一次会亮屏 1 秒，这一秒里它不接
+     * 新请求，命令只是留在串口缓冲里等着——所以最坏情况是命令刚好赶在亮屏那一
+     * 刻到，要等 1 秒灭屏、再测 260 ms、再加链路时延才有应答，接近 1.5 秒。按
+     * 300-400 ms 的往返来定时限，等于把这一类<b>迟到但正常</b>的应答判成没读到，
+     * 而它随后还是会到、并把界面刷成新值——于是记录里存的是旧值、表上显示的是
+     * 新值。取 3 秒，把亮屏窗口整个盖住。
+     *
+     * <p>超时只说明这一次没读到，<b>不代表这台表离线</b>：在场与否由心跳说了算。
      */
-    public static final long REPLY_TIMEOUT_MS = 1_200L;
+    public static final long REPLY_TIMEOUT_MS = 3_000L;
 
     private static final String FILE_NAME = "reader_settings";
     private static final String KEY_POLLING_INTERVAL_MINUTES = "polling_interval_minutes";

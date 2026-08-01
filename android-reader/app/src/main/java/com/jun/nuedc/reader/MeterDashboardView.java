@@ -56,10 +56,11 @@ public final class MeterDashboardView extends View {
     /* ══════════ 与原型对齐的常量 ══════════ */
     private static final int SLOTS = 16;
     private static final float STEP = 360f / SLOTS;          // 22.5°
-    /* 读条时长。它同时是「发出请求到落库」的窗口:电流表答一次要测量 260 ms
-       加链路时延,服务端的应答时限是 REPLY_TIMEOUT_MS,读条必须比它长,否则
-       读条走完时应答还在路上,存下去的就是上一次的值。 */
-    private static final long STORE_MS = 1400;
+    /* 等应答的上限,也是读条走满一圈的时间。答来了就提前结束(见 onLiveFrame),
+       所以这个数只在真的没人答时才会走满,给得宽不影响手感。必须比服务端的
+       REPLY_TIMEOUT_MS 长:先超时的应该是这里,不然读条还在转、服务端已经把
+       这次请求判死了。 */
+    private static final long STORE_MS = 3200;
     private static final long ALERT_MS = 2200;                // 状态变化后的短暂提示
     /* 同一地址的响铃/震动去重窗口。不是「冷却」:每一次读数只要越限就该响,
        包括电流表上按键触发、值没变的那一次。这里只挡同一次读数被重复触发
@@ -147,6 +148,9 @@ public final class MeterDashboardView extends View {
         boolean everSeen;
         int frameMa = -1;
         long frameWallTs;
+        /** 最近一次<b>带读数</b>的帧的 uptime 时刻。和 lastAt 分开:lastAt 每一拍
+            心跳都在动,拿它判「这一次问到没问到」会把心跳当成应答。 */
+        long frameAt = Long.MIN_VALUE / 4;
         long lastAt = Long.MIN_VALUE / 4;                     // uptime 时刻,判静默只用这个钟
         String mac = "", name = "";
         int rssi = -127;
@@ -457,6 +461,12 @@ public final class MeterDashboardView extends View {
         if (currentMa >= 0) {
             m.frameMa = currentMa;
             m.frameWallTs = wallTs;
+            m.frameAt = SystemClock.uptimeMillis();
+            // 这一次问的就是它,答来了就结束等待。读条量的是「在等应答」,
+            // 答到了还继续走完只是空转,而且拖长了两次读取之间的最小间隔。
+            if (address == pendingAddr) {
+                pendingUntil = m.frameAt;
+            }
             // 每一次读数都判一次:越限就响,不要求状态发生变化。读数是稀疏
             // 的——手动读一次、自动轮次一次、表上按一次键一次——每一次都是
             // 一个独立的、值得被告知的事件。
@@ -540,7 +550,7 @@ public final class MeterDashboardView extends View {
             m.status = st;
         }
         if (pendingAddr >= 0 && now >= pendingUntil) {
-            commitPending();                                   // 读条一定走完,不中途打断
+            commitPending();                                   // 答到了,或者等满了
         }
         if (autoMode) {
             remain = Math.max(0f, remain - dt);
@@ -623,9 +633,14 @@ public final class MeterDashboardView extends View {
         int addr = pendingAddr;
         pendingAddr = -1;
         Live m = live[addr];
-        // 还要求真的收到过读数:一台只在心跳、这次读取又没答上来的表,
-        // 在场但没有可存的数,不能把上一次的值当成这一次的结果。
-        boolean hasFrame = present(addr) && m.everSeen && !m.silent && m.frameMa >= 0;
+        // 要求读数是<b>这一次问来的</b>:frameAt 必须落在请求之后。只看
+        // frameMa 存不存在是不够的——它记的是最近一次读到的值,一台还在心跳、
+        // 这次却没答上来的表照样满足,于是上一次的读数会被当成这一次的结果存
+        // 进库里,而表上的 OLED 显示的是它刚测到的新值。两边对不上就是从这里
+        // 来的。答不上来的原因不必区分:命令落在测量周期里被丢掉,或者应答比
+        // 读条慢,结果都一样——这一次没有可存的数。
+        boolean hasFrame = present(addr) && m.everSeen && !m.silent
+                && m.frameMa >= 0 && m.frameAt >= pendingFrom;
         int ma = hasFrame ? m.frameMa : -1;
         String status = hasFrame ? classifyStatus(ma) : MeterReading.OFFLINE;
         boolean willFly = allScope || panelAddr == addr;       // 出现在当前筛选里,才有得飞
