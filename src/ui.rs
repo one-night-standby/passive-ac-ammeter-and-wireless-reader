@@ -14,26 +14,11 @@ use embedded_graphics::prelude::*;
 use embedded_graphics::text::Text;
 use heapless::String;
 
-use crate::meter::{Quality, Reading};
+use crate::meter::Reading;
 use crate::oled::Oled;
 
 /// How long a reading stays lit before the panel is blanked.
 pub const DISPLAY_ON_MS: u64 = 1_000;
-
-/// A leading marker means the reading below it is not to be believed, and says
-/// which way it went wrong. All three sit on the primary line on purpose: a
-/// number this display cannot stand behind should not look like the others.
-/// They matter most while calibrating -- a marked frame's `rms` is fiction,
-/// and entering it into a CAL table freezes the fiction into the instrument.
-fn marker(quality: Quality) -> &'static str {
-    match quality {
-        Quality::RefBad => "R",
-        Quality::InputBad => "!",
-        Quality::OverRange => ">",
-        Quality::Incomplete => "?",
-        Quality::Good => "",
-    }
-}
 
 pub struct Panel {
     display: Option<Oled>,
@@ -95,7 +80,7 @@ impl Panel {
         let style = MonoTextStyle::new(&FONT_9X15, BinaryColor::On);
 
         let mut line: String<32> = String::new();
-        let _ = write!(line, "{}{:.3} A", marker(reading.quality()), reading.amps);
+        let _ = write!(line, "{:.3} A", reading.amps);
         Text::new(&line, Point::new(4, 26), style).draw(display)?;
 
         // Raw single-frame RMS in LSB and the gain it was taken at -- together

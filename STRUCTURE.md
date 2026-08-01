@@ -89,7 +89,7 @@ OPA1/DAC12 -> 外部电路回空闲态。PA18 的 IOMUX 从上电起就是高阻
 - `stream` 定时自测自发，每 `PERIOD_MS` 一次，测量之外模拟部分照样全掉电；蓝牙
   一旦上电就不再断。每次发两行：`METER_TEST`（安卓端解析的那条，正则锚到行尾，
   不能往后加字段）和 `METER_CAL`（原始 RMS、档位、探测帧的 mean/pp、质量标志，
-  手机忽略，`tools/cal_log.py` 收）。
+  手机忽略，`cargo xtask cal-log` 收）。
 
 两个固件的无线部分都走 `link.rs`，所以线上语法只有一份。命令方向是
 `MEAS`（广播）或 `MEAS,ADDR=n`（只有地址开关读数等于 n 的表响应）。故意不用
