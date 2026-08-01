@@ -102,6 +102,21 @@ public final class CalibrationActivity extends Activity {
     private static final Pattern STAT_PATTERN = Pattern.compile(
             "^CALSTAT,ADDR=(\\d{1,2}),SRC=([A-Z]+),N=(\\d{1,2})(?:,ERR=([A-Z_]+))?$");
 
+    /**
+     * 导入认的那一行:两个数,中间一个逗号、冒号、分号或空白,两头的括号、
+     * 逗号、注释随便。
+     *
+     * <p>整行匹配、一行一个点,不是在整段文本里搜。这不是为了严格,是因为
+     * {@code pub static CAL_X1: &[(f32, f32)] = &[} 这行里就摆着 "32, 32"
+     * ——按行整条匹配它落不进来,挨着搜就成了一个点。同一条规矩顺带挡掉
+     * {@code cargo xtask cal-log} 那种一行十几列的 CSV:那里面一行是一个
+     * 原始样本,不是一个标定点,整张导进来是错的。
+     */
+    private static final Pattern PAIR_PATTERN = Pattern.compile(
+            "^[^0-9+\\-.]*([-+]?[0-9]*\\.?[0-9]+(?:[eE][-+]?[0-9]+)?)"
+                    + "\\s*[,:;\\s]\\s*"
+                    + "([-+]?[0-9]*\\.?[0-9]+(?:[eE][-+]?[0-9]+)?)[^0-9]*$");
+
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final Deque<Double> recentRms = new ArrayDeque<>();
     private final List<double[]> points = new ArrayList<>();
@@ -401,6 +416,7 @@ public final class CalibrationActivity extends Activity {
         row.setPadding(0, dp(8), 0, 0);
         row.addView(quietButton("删最后一点", INK_2, v -> dropLastPoint()));
         row.addView(quietButton("清空", DANGER, v -> clearPoints()));
+        row.addView(quietButton("导入", INK_2, v -> importTable()));
         row.addView(quietButton("导出", INK_2, v -> exportTable()));
         card.addView(row);
         return card;
@@ -1013,6 +1029,92 @@ public final class CalibrationActivity extends Activity {
             toast("已复制到剪贴板");
         }
         appendLog(text.toString());
+    }
+
+    /**
+     * 从剪贴板取一张表回来,替换手机上这一份。
+     *
+     * <p>和「导出」对着用:导出去的那段字面量原样粘回来就是,所以一台手机上量的
+     * 表能搬到另一台上接着推,重装 App 之后也能把点找回来。粘 {@code cal.rs} 里
+     * 的 {@code CAL_X1} 同样收——那张表下端最低只到 0.1305 A,拿它当起点、在下面
+     * 补一个点,比从零量一遍快。
+     *
+     * <p>替换而不是追加:导入的是一整张表,和手机上剩的那些多半是两个场次的点,
+     * 混在一起谁也说不清哪个是哪个。要在导入的表上加点,导完再按「记录此点」。
+     *
+     * <p>数值一个不查,负数、离谱的大数照样摆进列表——和手打进去的一样。真要
+     * 推,表那边会拒(CALPT 应答里的 {@code ERR=VALUE}),日志上说得清楚,比在
+     * 这儿悄悄改掉或者悄悄扔掉强。
+     */
+    private void importTable() {
+        ClipboardManager clipboard =
+                (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+        ClipData clip = clipboard == null ? null : clipboard.getPrimaryClip();
+        if (clip == null || clip.getItemCount() == 0) {
+            toast("剪贴板是空的");
+            return;
+        }
+        StringBuilder text = new StringBuilder();
+        for (int i = 0; i < clip.getItemCount(); i++) {
+            CharSequence item = clip.getItemAt(i).coerceToText(this);
+            if (item != null) {
+                text.append(item).append('\n');
+            }
+        }
+
+        List<double[]> imported = parsePairs(text.toString());
+        if (imported.isEmpty()) {
+            toast("剪贴板里没有成对的数");
+            appendLog("✗ 导入:剪贴板里没有哪一行是两个数");
+            return;
+        }
+        // 多于能记的就整段不收。截前 64 个照样是一张能推的表,但它不是剪贴板里
+        // 那张,而列表上看不出少了后面一截。
+        if (imported.size() > MAX_CAPTURED) {
+            toast("剪贴板里 " + imported.size() + " 对,超过 " + MAX_CAPTURED);
+            appendLog("✗ 导入:剪贴板里 " + imported.size() + " 对,多于能记的 "
+                    + MAX_CAPTURED + " 个,一个都没收");
+            return;
+        }
+
+        int replaced = points.size();
+        points.clear();
+        points.addAll(imported);
+        store.savePoints(points);
+        store.markPushed(false);
+
+        double low = Double.MAX_VALUE;
+        double high = -Double.MAX_VALUE;
+        for (double[] point : points) {
+            low = Math.min(low, point[0]);
+            high = Math.max(high, point[0]);
+        }
+        // 报个数再报个跨度:少认了几行的话,这两个数里看得出来。
+        appendLog(String.format(Locale.CHINA, "← 导入 %d 点,%.2f…%.2f LSB%s",
+                points.size(), low, high,
+                replaced == 0 ? "" : "(替换掉原来的 " + replaced + " 点)"));
+        refreshPoints();
+        refreshLive();
+    }
+
+    /** 一行一个点,认不出的行跳过。顺序照原文,不排序——排序是推送那一步的事。 */
+    private List<double[]> parsePairs(String text) {
+        List<double[]> pairs = new ArrayList<>();
+        for (String line : text.split("[\\r\\n]+")) {
+            Matcher pair = PAIR_PATTERN.matcher(line);
+            if (!pair.matches()) {
+                continue;
+            }
+            try {
+                pairs.add(new double[]{
+                        Double.parseDouble(pair.group(1)),
+                        Double.parseDouble(pair.group(2))
+                });
+            } catch (NumberFormatException ignored) {
+                // 形状是正则限死的,这里只是不让一行把整段导入带走
+            }
+        }
+        return pairs;
     }
 
     private double spread() {
