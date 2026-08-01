@@ -9,8 +9,8 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.pm.PackageManager;
-import android.graphics.Color;
 import android.graphics.Typeface;
+import android.graphics.drawable.GradientDrawable;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
@@ -60,6 +60,12 @@ public final class CalibrationActivity extends Activity {
     private static final int MAX_POINTS = 16;
 
     /**
+     * 手机上能记多少。比表里能装的多得多——多记几个再挑,比记的时候就得算着
+     * 数强。挑的事交给 {@link #pushTable()}。
+     */
+    private static final int MAX_CAPTURED = 64;
+
+    /**
      * 实况里显示抖动幅度用的窗口。只是显示——记点不看它。
      *
      * <p>这里一条都不拦:按下「记录此点」就把当前这一帧的 RMS 和填进去的读数
@@ -102,6 +108,8 @@ public final class CalibrationActivity extends Activity {
     /** 上一次「推送」实际发出去的那一份:排过序、去过重。 */
     private List<double[]> pushOrder = new ArrayList<>();
     private final StringBuilder log = new StringBuilder();
+    private String lastLogLine = "";
+    private int repeatedLogLines;
 
     private CalibrationStore store;
     private int address = 6;
@@ -119,12 +127,15 @@ public final class CalibrationActivity extends Activity {
     private long lastRepushAt;
 
     private TextView liveView;
+    private TextView rmsView;
+    private TextView rmsHint;
+    private TextView sourcePill;
+    private TextView pointsCount;
     private TextView pointsView;
     private TextView logView;
     private TextView addressView;
     private EditText referenceInput;
     private CheckBox autoRepush;
-    private ScrollView pointsScroll;
     private ScrollView logScroll;
 
     private final Runnable poll = new Runnable() {
@@ -212,84 +223,329 @@ public final class CalibrationActivity extends Activity {
 
     /* ══════════ 界面 ══════════ */
 
+    /**
+     * 取自 app-prototype.html 的同一套色板和圆角,读表器界面用的也是它。这是
+     * 调试工具,但它和读表器装在同一台手机上、在同一个场子里被同一个人看,长成
+     * 两个样子没有道理。
+     */
+    private static final int PAGE = 0xFFE8ECF2;
+    private static final int SURFACE = 0xFFFFFFFF;
+    private static final int SUNKEN = 0xFFF1F4F9;
+    private static final int INK = 0xFF131922;
+    private static final int INK_2 = 0xFF767C86;
+    private static final int LINE = 0x1A131922;
+    private static final int LINE_2 = 0x29131922;
+    private static final int ACCENT = 0xFF1F6FEB;
+    private static final int MUTED = 0xFF8A94A3;
+    private static final int DANGER = 0xFFDC2626;
+
     private View buildUi() {
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        int pad = dp(12);
-        root.setPadding(pad, pad, pad, pad);
+        root.setPadding(dp(14), dp(14), dp(14), dp(14));
 
-        LinearLayout header = new LinearLayout(this);
-        header.setOrientation(LinearLayout.HORIZONTAL);
-        header.setGravity(Gravity.CENTER_VERTICAL);
-        header.addView(label("表地址"));
-        header.addView(flatButton("−", v -> setAddress(address - 1)));
-        addressView = mono(String.valueOf(address), 20);
-        addressView.setPadding(dp(10), 0, dp(10), 0);
-        header.addView(addressView);
-        header.addView(flatButton("+", v -> setAddress(address + 1)));
-        root.addView(header);
+        root.addView(header());
+        root.addView(liveCard(), stretch());
+        root.addView(captureCard(), stretch());
+        root.addView(pointsCard(), stretch());
+        root.addView(actionCard(), stretch());
+        root.addView(logCard(), stretch());
 
-        liveView = mono("", 15);
-        liveView.setPadding(dp(10), dp(10), dp(10), dp(10));
-        liveView.setBackgroundColor(0xFFF1F4F6);
-        root.addView(liveView, wide());
+        // 整页滚。这几张卡加起来本来就比一屏高,靠 weight 去分只会把最下面的
+        // 按钮裁掉。页面自己不会乱跳——会跳的是 appendLog 里那个 fullScroll,
+        // 它已经换成只滚日志框自己的 scrollTo 了。
+        ScrollView page = new ScrollView(this);
+        page.setBackgroundColor(PAGE);
+        page.setFillViewport(true);
+        page.addView(root);
+        return page;
+    }
 
-        LinearLayout capture = new LinearLayout(this);
-        capture.setOrientation(LinearLayout.HORIZONTAL);
-        capture.setGravity(Gravity.CENTER_VERTICAL);
-        capture.addView(label("标定表读数 A"));
+    /** 标题 + 地址步进器。地址是这个界面唯一会改表的东西,所以它在最上面。 */
+    private View header() {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+
+        TextView title = new TextView(this);
+        title.setText("标定台");
+        title.setTextSize(19);
+        title.setTypeface(Typeface.DEFAULT_BOLD);
+        title.setTextColor(INK);
+        row.addView(title, new LinearLayout.LayoutParams(0,
+                ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+        LinearLayout stepper = new LinearLayout(this);
+        stepper.setOrientation(LinearLayout.HORIZONTAL);
+        stepper.setGravity(Gravity.CENTER_VERTICAL);
+        stepper.setBackground(rounded(SURFACE, dp(999), LINE_2));
+        stepper.setPadding(dp(4), dp(2), dp(4), dp(2));
+        stepper.addView(stepButton("−", v -> setAddress(address - 1)));
+        addressView = new TextView(this);
+        addressView.setText(String.valueOf(address));
+        addressView.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
+        addressView.setTextSize(17);
+        addressView.setTextColor(INK);
+        addressView.setGravity(Gravity.CENTER);
+        addressView.setMinWidth(dp(34));
+        stepper.addView(addressView);
+        stepper.addView(stepButton("+", v -> setAddress(address + 1)));
+
+        TextView caption = new TextView(this);
+        caption.setText("表地址");
+        caption.setTextSize(11.5f);
+        caption.setTextColor(INK_2);
+        caption.setPadding(0, 0, dp(8), 0);
+        row.addView(caption);
+        row.addView(stepper);
+        return row;
+    }
+
+    /**
+     * 实况。三行定死,不随内容增减——行数一变,下面整块跟着跳,而这块每秒都在刷。
+     */
+    private View liveCard() {
+        LinearLayout card = card();
+
+        sourcePill = new TextView(this);
+        sourcePill.setTextSize(11.5f);
+        sourcePill.setTypeface(Typeface.DEFAULT_BOLD);
+        sourcePill.setPadding(dp(10), dp(4), dp(10), dp(5));
+        card.addView(sourcePill);
+
+        rmsView = new TextView(this);
+        rmsView.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
+        rmsView.setTextSize(34);
+        rmsView.setTextColor(INK);
+        rmsView.setPadding(0, dp(8), 0, 0);
+        card.addView(rmsView);
+
+        rmsHint = new TextView(this);
+        rmsHint.setTextSize(11.5f);
+        rmsHint.setTextColor(INK_2);
+        card.addView(rmsHint);
+
+        liveView = new TextView(this);
+        liveView.setTypeface(Typeface.MONOSPACE);
+        liveView.setTextSize(13);
+        liveView.setTextColor(INK_2);
+        liveView.setLines(2);
+        liveView.setPadding(0, dp(10), 0, 0);
+        card.addView(liveView);
+        return card;
+    }
+
+    private View captureCard() {
+        LinearLayout card = card();
+        card.addView(caption("标定表读数"));
+
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(0, dp(6), 0, 0);
+
         referenceInput = new EditText(this);
         referenceInput.setInputType(
                 InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_FLAG_DECIMAL);
         referenceInput.setHint("1.2345");
+        referenceInput.setTextColor(INK);
+        referenceInput.setHintTextColor(MUTED);
         referenceInput.setTypeface(Typeface.MONOSPACE);
-        capture.addView(referenceInput, new LinearLayout.LayoutParams(0,
+        referenceInput.setTextSize(20);
+        referenceInput.setBackground(rounded(SUNKEN, dp(10), LINE));
+        referenceInput.setPadding(dp(12), dp(10), dp(12), dp(10));
+        row.addView(referenceInput, new LinearLayout.LayoutParams(0,
                 ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-        capture.addView(flatButton("记录此点", v -> capturePoint()));
-        root.addView(capture, wide());
 
-        // 点列表和日志各自滚各自的,都给固定高度。整页跟着内容长本身就是错的:
-        // 日志一行一行往下掉,页面就一直往下窜,人正在输入框里打字或者盯着上面
-        // 的实况,视野被拽走。
-        pointsView = mono("", 13);
-        pointsView.setPadding(dp(10), dp(6), dp(10), dp(6));
-        pointsScroll = new ScrollView(this);
-        pointsScroll.addView(pointsView);
-        root.addView(pointsScroll, fixedHeight(dp(150)));
+        TextView unit = new TextView(this);
+        unit.setText("A");
+        unit.setTextSize(15);
+        unit.setTextColor(INK_2);
+        unit.setPadding(dp(8), 0, dp(10), 0);
+        row.addView(unit);
+        row.addView(filledButton("记录此点", ACCENT, v -> capturePoint()));
+        card.addView(row);
+        return card;
+    }
 
-        LinearLayout row1 = new LinearLayout(this);
-        row1.setOrientation(LinearLayout.HORIZONTAL);
-        row1.addView(flatButton("删最后一点", v -> dropLastPoint()));
-        row1.addView(flatButton("清空点", v -> clearPoints()));
-        row1.addView(flatButton("导出", v -> exportTable()));
-        root.addView(row1, wide());
+    private View pointsCard() {
+        LinearLayout card = card();
+
+        LinearLayout head = new LinearLayout(this);
+        head.setOrientation(LinearLayout.HORIZONTAL);
+        head.setGravity(Gravity.CENTER_VERTICAL);
+        head.addView(caption("已记的点"), new LinearLayout.LayoutParams(0,
+                ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        pointsCount = new TextView(this);
+        pointsCount.setTextSize(11.5f);
+        pointsCount.setTextColor(INK_2);
+        pointsCount.setTypeface(Typeface.MONOSPACE);
+        head.addView(pointsCount);
+        card.addView(head);
+
+        pointsView = new TextView(this);
+        pointsView.setTypeface(Typeface.MONOSPACE);
+        pointsView.setTextSize(13);
+        pointsView.setTextColor(INK);
+        pointsView.setLineSpacing(dp(3), 1f);
+        pointsView.setPadding(dp(10), dp(8), dp(10), dp(8));
+        pointsView.setBackground(rounded(SUNKEN, dp(10), 0));
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT);
+        params.topMargin = dp(6);
+        card.addView(pointsView, params);
+
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setPadding(0, dp(8), 0, 0);
+        row.addView(quietButton("删最后一点", INK_2, v -> dropLastPoint()));
+        row.addView(quietButton("清空", DANGER, v -> clearPoints()));
+        row.addView(quietButton("导出", INK_2, v -> exportTable()));
+        card.addView(row);
+        return card;
+    }
+
+    private View actionCard() {
+        LinearLayout card = card();
 
         // 两个按钮是一个开关的两头,不是"做一件事"和"撤销"。表里两张表随时可以
         // 换着用:出厂表一直在固件里,现场表的点一直在手机上,换过去换回来都不用
         // 重新量。当场要证明现场标定确实在起作用,来回按这两个就是。
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.addView(filledButton("推送并启用", ACCENT, v -> startPush()),
+                new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        row.addView(outlineButton("切回出厂表", v -> clearMeterTable()),
+                new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        card.addView(row);
+
         LinearLayout row2 = new LinearLayout(this);
         row2.setOrientation(LinearLayout.HORIZONTAL);
-        row2.addView(flatButton("推送并启用", v -> startPush()));
-        row2.addView(flatButton("切回出厂表", v -> clearMeterTable()));
-        row2.addView(flatButton("读表内状态",
-                v -> sendCommand(String.format(Locale.ROOT, "CALGET,ADDR=%d", address))));
-        root.addView(row2, wide());
-
+        row2.setGravity(Gravity.CENTER_VERTICAL);
+        row2.setPadding(0, dp(4), 0, 0);
         autoRepush = new CheckBox(this);
         // 只在"现场表已经启用"的前提下才补推。主动切回出厂表会先清掉那个前提,
         // 所以这个勾不会把人刚切回去的表又推回来。
-        autoRepush.setText("启用现场表后,掉电退回出厂表时自动补推");
+        autoRepush.setText("掉电退回出厂表时自动补推");
+        autoRepush.setTextSize(12.5f);
+        autoRepush.setTextColor(INK_2);
         autoRepush.setChecked(true);
-        root.addView(autoRepush);
+        autoRepush.setButtonTintList(android.content.res.ColorStateList.valueOf(ACCENT));
+        row2.addView(autoRepush, new LinearLayout.LayoutParams(0,
+                ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        row2.addView(quietButton("读状态", INK_2,
+                v -> sendCommand(String.format(Locale.ROOT, "CALGET,ADDR=%d", address))));
+        card.addView(row2);
+        return card;
+    }
 
-        logView = mono("", 12);
-        logView.setPadding(dp(10), dp(6), dp(10), dp(6));
-        logView.setTextColor(0xFF4A5560);
+    private View logCard() {
+        LinearLayout card = card();
+        card.addView(caption("日志"));
+        logView = new TextView(this);
+        logView.setTypeface(Typeface.MONOSPACE);
+        logView.setTextSize(11.5f);
+        logView.setTextColor(INK_2);
+        logView.setLineSpacing(dp(2), 1f);
+        logView.setPadding(dp(10), dp(8), dp(10), dp(8));
         logScroll = new ScrollView(this);
+        logScroll.setBackground(rounded(SUNKEN, dp(10), 0));
         logScroll.addView(logView);
-        root.addView(logScroll, fixedHeight(dp(160)));
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(120));
+        params.topMargin = dp(6);
+        card.addView(logScroll, params);
+        return card;
+    }
 
-        return root;
+    /* ── 上面那些卡片和控件的样子 ── */
+
+    private LinearLayout card() {
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setBackground(rounded(SURFACE, dp(16), LINE));
+        card.setPadding(dp(14), dp(12), dp(14), dp(12));
+        card.setElevation(dp(1));
+        return card;
+    }
+
+    private TextView caption(String text) {
+        TextView view = new TextView(this);
+        view.setText(text);
+        view.setTextSize(11.5f);
+        view.setTextColor(INK_2);
+        return view;
+    }
+
+    /** 圆角块:填色 + 可选 1px 描边。原型里所有面都是这个形状。 */
+    private GradientDrawable rounded(int fill, float radius, int stroke) {
+        GradientDrawable shape = new GradientDrawable();
+        shape.setColor(fill);
+        shape.setCornerRadius(radius);
+        if (stroke != 0) {
+            shape.setStroke(Math.max(1, dp(1) / 2), stroke);
+        }
+        return shape;
+    }
+
+    private Button filledButton(String text, int fill, View.OnClickListener listener) {
+        Button button = baseButton(text, listener);
+        button.setBackground(rounded(fill, dp(999), 0));
+        button.setTextColor(0xFFFFFFFF);
+        button.setPadding(dp(18), 0, dp(18), 0);
+        return button;
+    }
+
+    private Button outlineButton(String text, View.OnClickListener listener) {
+        Button button = baseButton(text, listener);
+        button.setBackground(rounded(SURFACE, dp(999), LINE_2));
+        button.setTextColor(INK);
+        button.setPadding(dp(18), 0, dp(18), 0);
+        return button;
+    }
+
+    /** 次要动作:没有面,只有字。删、清空、导出都属于这一类。 */
+    private Button quietButton(String text, int color, View.OnClickListener listener) {
+        Button button = baseButton(text, listener);
+        button.setBackground(null);
+        button.setTextColor(color);
+        button.setTextSize(12.5f);
+        button.setPadding(dp(10), 0, dp(10), 0);
+        return button;
+    }
+
+    private Button stepButton(String text, View.OnClickListener listener) {
+        Button button = baseButton(text, listener);
+        button.setBackground(null);
+        button.setTextColor(ACCENT);
+        button.setTextSize(19);
+        button.setMinWidth(dp(38));
+        button.setPadding(0, 0, 0, 0);
+        return button;
+    }
+
+    private Button baseButton(String text, View.OnClickListener listener) {
+        Button button = new Button(this);
+        button.setText(text);
+        button.setAllCaps(false);
+        button.setTextSize(14);
+        button.setMinWidth(0);
+        button.setMinHeight(dp(42));
+        button.setMinimumWidth(0);
+        button.setMinimumHeight(dp(42));
+        button.setStateListAnimator(null);
+        button.setOnClickListener(listener);
+        return button;
+    }
+
+    /** 卡片之间统一的间距。 */
+    private LinearLayout.LayoutParams stretch() {
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT);
+        params.topMargin = dp(10);
+        return params;
     }
 
     private void setAddress(int value) {
@@ -444,8 +700,8 @@ public final class CalibrationActivity extends Activity {
      * 界面该替他决定的。存下来的点列表里什么都看得见,不合适随时删。
      */
     private void capturePoint() {
-        if (points.size() >= MAX_POINTS) {
-            toast("表里最多装 " + MAX_POINTS + " 点");
+        if (points.size() >= MAX_CAPTURED) {
+            toast("最多记 " + MAX_CAPTURED + " 个点");
             return;
         }
         if (Double.isNaN(lastRms)) {
@@ -504,42 +760,106 @@ public final class CalibrationActivity extends Activity {
             appendLog("✗ 不能推:去掉 RMS 重复的之后不足 2 点");
             return;
         }
-        if (pushOrder.size() > MAX_POINTS) {
-            toast("表里最多装 " + MAX_POINTS + " 点");
-            return;
-        }
         pushingIndex = 0;
         pushRetries = 0;
+        int dropped = points.size() - pushOrder.size();
         appendLog("→ 推送 " + pushOrder.size() + " 点到 " + address + " 号表"
-                + (pushOrder.size() == points.size() ? "" : "(RMS 重复的只取最后记的那个)"));
+                + (dropped == 0 ? "" : "(排序去重取单调,挑掉 " + dropped + " 个)"));
         sendCurrentPushStep();
         handler.postDelayed(ackTimeout, ACK_TIMEOUT_MS);
     }
 
     /**
-     * 推送用的那一份:按 RMS 升序,RMS 相同的只留最后记的那个。
+     * 推送用的那一份。记进来的点一个不改,这里只挑。
      *
-     * <p>排序不是对输入的要求,是固件查表的前提——{@code lsb_to_amps} 拿 RMS 找
-     * 落在哪一段,RMS 那一列不单调,"哪一段"就没有定义。电流那一列不管:它可以
-     * 上上下下,插值照样成立,读数跟着抖就是了。
+     * <p>三步,每一步只解决一件表那边做不了的事:
      *
-     * <p>RMS 完全相同的两个点会让一段的跨度变成零,所以留后记的那个——同一个
-     * RMS 上重记一次,本来就是"刚才那个不算"的意思。
+     * <ol>
+     * <li><b>按 RMS 稳定排序</b>。{@code lsb_to_amps} 拿 RMS 找落在哪一段,RMS
+     *     不单调,"哪一段"就没有定义。记的顺序不必是升的,排一次就是。
+     * <li><b>RMS 相同的只留后记的</b>。同一个 RMS 上有两个点,中间那一段跨度是
+     *     零;而在同一个读数上重记一次,本来就是"刚才那个不算"的意思。
+     * <li><b>取电流那一列的最长递增子序列</b>。负载动完到前端跟上要几秒,这段
+     *     里记的点,参考表已经走了而表还没走——它描述的是两个不同的电流,任何
+     *     单调的表都容纳不下。LIS 挑掉的正是这些,而不是"抖得厉害"的点:抖动
+     *     不破坏单调,它留得下来。
+     * </ol>
+     *
+     * <p>最后如果还多于表能装的,按"去掉它对折线影响最小"逐个减,而不是等距抽。
      */
     private List<double[]> pushTable() {
         List<double[]> sorted = new ArrayList<>(points);
+        // 稳定排序:RMS 相同的一串仍按记录先后排,所以去重留下的是后记的那个。
         Collections.sort(sorted, (a, b) -> Double.compare(a[0], b[0]));
-        List<double[]> out = new ArrayList<>();
+
+        List<double[]> unique = new ArrayList<>();
         for (double[] point : sorted) {
-            if (!out.isEmpty() && out.get(out.size() - 1)[0] == point[0]) {
-                out.set(out.size() - 1, point);
+            if (!unique.isEmpty() && unique.get(unique.size() - 1)[0] == point[0]) {
+                unique.set(unique.size() - 1, point);
                 continue;
             }
-            out.add(point);
+            unique.add(point);
         }
+
+        List<double[]> rising = longestRising(unique);
+        while (rising.size() > MAX_POINTS) {
+            rising.remove(leastMissed(rising));
+        }
+        return rising;
+    }
+
+    /** 电流那一列的最长严格递增子序列。n 最多几十,平方的写法够用也看得懂。 */
+    private List<double[]> longestRising(List<double[]> sorted) {
+        int n = sorted.size();
+        if (n < 2) {
+            return new ArrayList<>(sorted);
+        }
+        int[] length = new int[n];
+        int[] from = new int[n];
+        int best = 0;
+        for (int i = 0; i < n; i++) {
+            length[i] = 1;
+            from[i] = -1;
+            for (int j = 0; j < i; j++) {
+                if (sorted.get(j)[1] < sorted.get(i)[1] && length[j] + 1 > length[i]) {
+                    length[i] = length[j] + 1;
+                    from[i] = j;
+                }
+            }
+            if (length[i] > length[best]) {
+                best = i;
+            }
+        }
+        List<double[]> out = new ArrayList<>();
+        for (int i = best; i >= 0; i = from[i]) {
+            out.add(sorted.get(i));
+        }
+        Collections.reverse(out);
         return out;
     }
 
+    /**
+     * 去掉哪一个点,对这条折线的改动最小(按相对误差算)。两端不动:它们定的是
+     * 表的量程,少一个就要靠外推补。
+     */
+    private int leastMissed(List<double[]> table) {
+        int worst = 1;
+        double least = Double.MAX_VALUE;
+        for (int i = 1; i < table.size() - 1; i++) {
+            double[] a = table.get(i - 1);
+            double[] b = table.get(i);
+            double[] c = table.get(i + 1);
+            double chord = a[1] + (c[1] - a[1]) * (b[0] - a[0]) / (c[0] - a[0]);
+            double missed = b[1] == 0 ? 0 : Math.abs(chord - b[1]) / Math.abs(b[1]);
+            if (missed < least) {
+                least = missed;
+                worst = i;
+            }
+        }
+        return worst;
+    }
+
+    /** 推送状态机当前该发哪一条:还在发点就发点,点发完了就发 CALEND。 */
     private void sendCurrentPushStep() {
         if (committing) {
             sendCommand(String.format(Locale.ROOT, "CALEND,ADDR=%d,N=%d",
@@ -586,42 +906,51 @@ public final class CalibrationActivity extends Activity {
     /* ══════════ 显示 ══════════ */
 
     private void refreshLive() {
-        if (liveView == null) {
+        if (rmsView == null) {
             return;
         }
-        StringBuilder text = new StringBuilder();
-        boolean fresh = System.currentTimeMillis() - lastFrameAt < 6_000L;
-        if (!fresh || Double.isNaN(lastRms)) {
-            text.append("等 ").append(address).append(" 号表的帧…\n");
-        } else {
-            text.append(String.format(Locale.CHINA, "RMS   %8.2f LSB", lastRms));
-            if (recentRms.size() >= SPREAD_WINDOW) {
+        boolean fresh = System.currentTimeMillis() - lastFrameAt < 6_000L
+                && !Double.isNaN(lastRms);
+
+        rmsView.setText(fresh ? String.format(Locale.CHINA, "%.2f", lastRms) : "--.--");
+        rmsView.setTextColor(fresh ? INK : MUTED);
+        rmsHint.setText(fresh && recentRms.size() >= SPREAD_WINDOW
                 // 只报,不判。抖多少是负载和前端的事,记不记这个点是人的事。
-                text.append(String.format(Locale.CHINA, "   近%d帧 ±%.2f%%",
-                        SPREAD_WINDOW, spread() * 100));
+                ? String.format(Locale.CHINA, "LSB · 近%d帧 ±%.2f%%",
+                        SPREAD_WINDOW, spread() * 100)
+                : fresh ? "LSB" : "等 " + address + " 号表的帧");
+
+        StringBuilder text = new StringBuilder();
+        if (fresh) {
+            text.append(String.format(Locale.CHINA, "表读 %.3f A", lastMa / 1000.0));
+            if (!"OK".equals(lastFlag) && !lastFlag.isEmpty()) {
+                text.append("   FLAG=").append(lastFlag);
             }
-            text.append('\n');
-            text.append(String.format(Locale.CHINA, "表读  %8.3f A    FLAG=%s\n",
-                    lastMa / 1000.0, lastFlag));
-            // 说的是表此刻用哪张表出这个数,不是手机上有什么。这一行和 OLED 上
-            // 的读数是同一张表算出来的——现场标定改的就是它。
-            text.append("表内  ").append("FIELD".equals(lastSource)
-                    ? "现场表(手机推的)"
-                    : "ROM".equals(lastSource) ? "出厂表 CAL_X1" : "未知(" + lastSource + ")");
-            if (!points.isEmpty() && !store.pushed()) {
-                text.append("   手机上 ").append(points.size()).append(" 点未推");
-            }
-            text.append('\n');
+        } else {
+            text.append("表读 ——");
         }
-        text.append("手机上 ").append(points.size()).append(" 点");
+        text.append('\n');
         if (pushingIndex >= 0) {
-            text.append("\n推送中:点 ").append(pushingIndex + 1)
-                    .append('/').append(pushOrder.size());
+            text.append("推送中 ").append(pushingIndex + 1).append('/')
+                    .append(pushOrder.size());
         } else if (committing) {
-            text.append("\n提交中(表在写 flash)…");
+            text.append("提交中,表在写 flash…");
+        } else if (!points.isEmpty() && !store.pushed()) {
+            text.append("手机上 ").append(points.size()).append(" 点,未推");
+        } else {
+            text.append("手机上 ").append(points.size()).append(" 点");
         }
         liveView.setText(text.toString());
-        liveView.setTextColor("FIELD".equals(lastSource) ? 0xFF176B87 : 0xFF8A4B00);
+
+        // 这一行说的是表此刻用哪张表出数,不是手机上有什么——它和 OLED 上的
+        // 读数是同一张表算出来的,现场标定改的就是它。
+        boolean field = "FIELD".equals(lastSource);
+        boolean known = field || "ROM".equals(lastSource);
+        sourcePill.setText(field ? "表内 · 现场表"
+                : "ROM".equals(lastSource) ? "表内 · 出厂表 CAL_X1" : "表内 · 未知");
+        sourcePill.setTextColor(field ? 0xFFFFFFFF : known ? INK_2 : MUTED);
+        sourcePill.setBackground(rounded(
+                field ? ACCENT : SUNKEN, dp(999), field ? 0 : LINE_2));
     }
 
     private void refreshPoints() {
@@ -629,17 +958,39 @@ public final class CalibrationActivity extends Activity {
             return;
         }
         if (points.isEmpty()) {
-            pointsView.setText("(还没有点)");
+            pointsCount.setText("");
+            pointsView.setText("还没有点。调好负载,填标定表读数,按「记录此点」。");
+            pointsView.setTextColor(MUTED);
             return;
         }
-        // 按记录顺序列,不排序:记进来什么样就是什么样,乱序也照列。
+        pointsView.setTextColor(INK);
+        // 按记录顺序列,不排序:记进来什么样就是什么样,乱序也照列。推送时才
+        // 排序取单调,那一份在这里用「挑掉」标出来。
+        List<double[]> keep = pushTable();
+        pointsCount.setText(points.size() == keep.size()
+                ? points.size() + " 点"
+                : points.size() + " 记 · " + keep.size() + " 推");
         StringBuilder text = new StringBuilder();
         for (int i = 0; i < points.size(); i++) {
             double[] point = points.get(i);
-            text.append(String.format(Locale.CHINA, "%2d  %8.2f LSB  %7.4f A\n",
-                    i + 1, point[0], point[1]));
+            boolean kept = false;
+            for (double[] other : keep) {
+                if (other == point) {
+                    kept = true;
+                    break;
+                }
+            }
+            text.append(String.format(Locale.CHINA, "%s %2d  %8.2f  %7.4f A\n",
+                    kept ? " " : "×", i + 1, point[0], point[1]));
         }
-        pointsView.setText(text.toString().trim());
+        if (keep.size() < points.size()) {
+            text.append("×  = 推送时挑掉(与单调冲突或 RMS 重复)");
+        }
+        // 只去尾部换行:首行那个空格是对齐用的,trim() 会把它吃掉,整列错一格。
+        while (text.length() > 0 && text.charAt(text.length() - 1) == '\n') {
+            text.setLength(text.length() - 1);
+        }
+        pointsView.setText(text);
     }
 
     /** 导成 cal.rs 能直接贴的字面量:现场标好的一张表,值得带回台上固化。 */
@@ -681,6 +1032,20 @@ public final class CalibrationActivity extends Activity {
 
 
     private void appendLog(String line) {
+        // 连着来的同一句合成一行加计数。没连上表的时候服务每 1.5 秒说一次
+        // 「没有已连接的电流表」,不合并的话真正有用的那几行会被顶出去。
+        if (line.equals(lastLogLine)) {
+            repeatedLogLines++;
+            int cut = log.lastIndexOf("\n", log.length() - 2);
+            log.setLength(cut < 0 ? 0 : cut + 1);
+            log.append(line).append("  ×").append(repeatedLogLines + 1).append('\n');
+            if (logView != null) {
+                logView.setText(log.toString().trim());
+            }
+            return;
+        }
+        lastLogLine = line;
+        repeatedLogLines = 0;
         log.append(line).append('\n');
         // 只留最近 40 行:这是个操作日志,不是记录。
         int lines = 0;
@@ -767,48 +1132,11 @@ public final class CalibrationActivity extends Activity {
         }
     }
 
-    private TextView mono(String text, int sizeSp) {
-        TextView view = new TextView(this);
-        view.setText(text);
-        view.setTypeface(Typeface.MONOSPACE);
-        view.setTextSize(sizeSp);
-        view.setTextColor(Color.parseColor("#182027"));
-        return view;
-    }
-
-    private TextView label(String text) {
-        TextView view = new TextView(this);
-        view.setText(text);
-        view.setTextSize(13);
-        view.setPadding(0, 0, dp(6), 0);
-        return view;
-    }
-
-    private Button flatButton(String text, View.OnClickListener listener) {
-        Button button = new Button(this);
-        button.setText(text);
-        button.setAllCaps(false);
-        button.setTextSize(14);
-        button.setOnClickListener(listener);
-        return button;
-    }
 
 
-    /** 自己滚自己的那两块:高度定死,内容再长也不会把整页顶长。 */
-    private LinearLayout.LayoutParams fixedHeight(int px) {
-        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, px);
-        params.topMargin = dp(8);
-        return params;
-    }
 
-    private LinearLayout.LayoutParams wide() {
-        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT);
-        params.topMargin = dp(8);
-        return params;
-    }
+
+
 
     private int dp(int value) {
         return Math.round(value * getResources().getDisplayMetrics().density);
