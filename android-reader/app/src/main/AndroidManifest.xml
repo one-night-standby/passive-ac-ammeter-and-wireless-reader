@@ -56,7 +56,7 @@
             android:label="@string/calibration_name"
             android:launchMode="singleTask"
             android:screenOrientation="portrait"
-            android:taskAffinity="com.jun.nuedc.reader.calibration">
+            android:taskAffinity="com.nuedc.reader.calibration">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />

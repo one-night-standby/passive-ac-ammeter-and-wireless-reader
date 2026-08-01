@@ -1,4 +1,4 @@
-package com.jun.nuedc.reader;
+package com.nuedc.reader;
 
 import android.Manifest;
 import android.app.Notification;
@@ -56,23 +56,23 @@ import java.util.UUID;
  */
 public final class MeterPollingService extends Service {
     public static final String ACTION_CONNECT_BASIC =
-            "com.jun.nuedc.reader.action.CONNECT_BASIC";       // 兼容旧名:启动链路管理
+            "com.nuedc.reader.action.CONNECT_BASIC";       // 兼容旧名:启动链路管理
     public static final String ACTION_START_AUTO =
-            "com.jun.nuedc.reader.action.START_AUTO";
+            "com.nuedc.reader.action.START_AUTO";
     public static final String ACTION_STOP_AUTO =
-            "com.jun.nuedc.reader.action.STOP_AUTO";
+            "com.nuedc.reader.action.STOP_AUTO";
     public static final String ACTION_UPDATE_INTERVAL =
-            "com.jun.nuedc.reader.action.UPDATE_INTERVAL";
+            "com.nuedc.reader.action.UPDATE_INTERVAL";
     /** 基本模式的一对一手动读取,带 EXTRA_ADDRESS。 */
     public static final String ACTION_READ_NOW =
-            "com.jun.nuedc.reader.action.READ_NOW";
+            "com.nuedc.reader.action.READ_NOW";
     public static final String ACTION_READING =
-            "com.jun.nuedc.reader.event.READING";
+            "com.nuedc.reader.event.READING";
     public static final String ACTION_STATE =
-            "com.jun.nuedc.reader.event.STATE";
+            "com.nuedc.reader.event.STATE";
     /** 一次应答带回来的帧:只进界面,落不落库由采集模式决定。 */
     public static final String ACTION_FRAME =
-            "com.jun.nuedc.reader.event.FRAME";
+            "com.nuedc.reader.event.FRAME";
     /**
      * 电流表发来的一整行原文,给标定端用。
      *
@@ -80,13 +80,13 @@ public final class MeterPollingService extends Service {
      * RMS、{@code SRC} 和推送应答都在这一层,再往上就被解析器过滤掉了。
      */
     public static final String ACTION_LINE =
-            "com.jun.nuedc.reader.action.LINE";
+            "com.nuedc.reader.action.LINE";
     /** 往电流表写一行任意命令,给标定端推表用。带 EXTRA_LINE。 */
     public static final String ACTION_SEND_LINE =
-            "com.jun.nuedc.reader.action.SEND_LINE";
+            "com.nuedc.reader.action.SEND_LINE";
     /** 问了没人答:界面据此做离线指示。刻意不落库,见 onReplyMissing。 */
     public static final String ACTION_OFFLINE =
-            "com.jun.nuedc.reader.event.OFFLINE";
+            "com.nuedc.reader.event.OFFLINE";
 
     public static final String EXTRA_ADDRESS = "address";
     public static final String EXTRA_CURRENT_MA = "current_ma";

@@ -1,4 +1,4 @@
-package com.jun.nuedc.reader;
+package com.nuedc.reader;
 
 import android.Manifest;
 import android.app.Activity;

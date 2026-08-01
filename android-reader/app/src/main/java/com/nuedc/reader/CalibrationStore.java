@@ -1,4 +1,4 @@
-package com.jun.nuedc.reader;
+package com.nuedc.reader;
 
 import android.content.Context;
 import android.content.SharedPreferences;

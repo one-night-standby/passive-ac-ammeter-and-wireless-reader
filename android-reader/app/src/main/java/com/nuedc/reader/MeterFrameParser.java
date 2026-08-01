@@ -1,4 +1,4 @@
-package com.jun.nuedc.reader;
+package com.nuedc.reader;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
