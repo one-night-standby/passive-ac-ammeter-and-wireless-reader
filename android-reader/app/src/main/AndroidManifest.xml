@@ -42,12 +42,21 @@
         </activity>
 
         <!-- 标定台是第二个图标,不是读表器界面里的一个入口:自动模式要求
-             「一键启动」,那个界面上不该多一个能把表内标定改掉的按钮。 -->
+             「一键启动」,那个界面上不该多一个能把表内标定改掉的按钮。
+
+             两个图标就得是两个 task。桌面按 FLAG_ACTIVITY_NEW_TASK 启动,而它
+             是按 taskAffinity 找现成 task 的——affinity 用默认值的话两个图标是
+             同一个名字,点标定台会找到读表器那个正在跑的 task 直接调到前台,
+             再被桌面附带的 RESET_TASK_IF_NEEDED 弹回栈底,于是点 B 出来的是 A。
+             singleTask 是配套的:一个台子只该有一个,再点图标是回到它,不是叠
+             一层新的。 -->
         <activity
             android:name=".CalibrationActivity"
             android:exported="true"
             android:label="@string/calibration_name"
-            android:screenOrientation="portrait">
+            android:launchMode="singleTask"
+            android:screenOrientation="portrait"
+            android:taskAffinity="com.jun.nuedc.reader.calibration">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
