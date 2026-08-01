@@ -20,7 +20,6 @@ import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
-import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
@@ -90,8 +89,9 @@ public final class CalibrationActivity extends Activity {
     /** CALEND 要等表把 flash 写完,可能还要先擦一个扇区,给得比 ACK 宽。 */
     private static final long COMMIT_TIMEOUT_MS = 5_000L;
 
-    /** 看到 SRC=ROM 之后,最快隔多久自动重推一次。 */
+    /** 看到 SRC=ROM 之后,最快隔多久自动补推一次,以及最多连着补几次。 */
     private static final long REPUSH_COOLDOWN_MS = 10_000L;
+    private static final int MAX_REPUSH_ATTEMPTS = 2;
 
     private static final Pattern TEST_PATTERN = Pattern.compile(
             "^METER_TEST,ADDR=(\\d{1,2}),CURRENT_MA=(\\d{1,7}),STATUS=([A-Z_]+)$");
@@ -125,6 +125,7 @@ public final class CalibrationActivity extends Activity {
     private int pushRetries;
     private boolean committing;
     private long lastRepushAt;
+    private int repushAttempts;
 
     private TextView liveView;
     private TextView rmsView;
@@ -135,7 +136,6 @@ public final class CalibrationActivity extends Activity {
     private TextView logView;
     private TextView addressView;
     private EditText referenceInput;
-    private CheckBox autoRepush;
     private ScrollView logScroll;
 
     private final Runnable poll = new Runnable() {
@@ -414,29 +414,16 @@ public final class CalibrationActivity extends Activity {
         // 重新量。当场要证明现场标定确实在起作用,来回按这两个就是。
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
         row.addView(filledButton("推送并启用", ACCENT, v -> startPush()),
                 new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
         row.addView(outlineButton("切回出厂表", v -> clearMeterTable()),
-                new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-        card.addView(row);
-
-        LinearLayout row2 = new LinearLayout(this);
-        row2.setOrientation(LinearLayout.HORIZONTAL);
-        row2.setGravity(Gravity.CENTER_VERTICAL);
-        row2.setPadding(0, dp(4), 0, 0);
-        autoRepush = new CheckBox(this);
-        // 只在"现场表已经启用"的前提下才补推。主动切回出厂表会先清掉那个前提,
-        // 所以这个勾不会把人刚切回去的表又推回来。
-        autoRepush.setText("掉电退回出厂表时自动补推");
-        autoRepush.setTextSize(12.5f);
-        autoRepush.setTextColor(INK_2);
-        autoRepush.setChecked(true);
-        autoRepush.setButtonTintList(android.content.res.ColorStateList.valueOf(ACCENT));
-        row2.addView(autoRepush, new LinearLayout.LayoutParams(0,
-                ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-        row2.addView(quietButton("读状态", INK_2,
+                new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 0.85f));
+        // 「读状态」和那两个不是一个量级的动作,所以它没有面,只有字。三个并成
+        // 一行,免得为一个次要按钮空出一整条带子。
+        row.addView(quietButton("读状态", INK_2,
                 v -> sendCommand(String.format(Locale.ROOT, "CALGET,ADDR=%d", address))));
-        card.addView(row2);
+        card.addView(row);
         return card;
     }
 
@@ -649,6 +636,7 @@ public final class CalibrationActivity extends Activity {
             } else if ("FIELD".equals(source)) {
                 appendLog("✓ 表内已是现场表," + count + " 点,已写入 flash");
                 store.markPushed(true);
+                repushAttempts = 0;
             } else {
                 appendLog("✗ 提交后表仍报 " + source + ",没生效");
             }
@@ -667,17 +655,24 @@ public final class CalibrationActivity extends Activity {
     }
 
     /**
-     * 表掉过电、现场表没了,就把手机上这张再推一遍。
+     * 表说它在用出厂表,而这张现场表本该是装好的——补推一次。
      *
-     * <p>这正是把表放进 flash 之后还要留的那道防线:flash 写坏、或者根本没写成
-     * 的那次,表会退回出厂表并在每一帧里说 SRC=ROM——不看这个字段的话,它表现
-     * 出来只是"读数差了一点"。
+     * <p>表内表在 flash 里,掉电不会丢,所以这条路只在几种病态情况下走得到:
+     * {@code CALEND} 的应答丢了而提交其实没做成、flash 记录坏了、或者别人对
+     * 这台表发过 {@code CALOFF}。补推能治第一种,治不了后两种。
+     *
+     * <p>所以它连着补两次就停,不再无限重试:flash 真坏了的话,每 10 秒推一遍
+     * 只是一遍遍写同一块坏区,还把日志刷满,让真正该看见的那行被顶出去。停下来
+     * 之后状态牌一直是"出厂表",那才是该看见的东西。
      */
     private void maybeRepush() {
-        if (!autoRepush.isChecked() || !"ROM".equals(lastSource)) {
+        if (!"ROM".equals(lastSource) || !store.pushed()) {
             return;
         }
-        if (!store.pushed() || points.size() < 2 || pushingIndex >= 0 || committing) {
+        if (points.size() < 2 || pushingIndex >= 0 || committing) {
+            return;
+        }
+        if (repushAttempts >= MAX_REPUSH_ATTEMPTS) {
             return;
         }
         long now = System.currentTimeMillis();
@@ -685,8 +680,13 @@ public final class CalibrationActivity extends Activity {
             return;
         }
         lastRepushAt = now;
-        appendLog("! 表报 SRC=ROM(应该是掉过电),自动重推");
+        repushAttempts++;
+        appendLog("! 表在用出厂表,但这张本该装好的——补推(第 "
+                + repushAttempts + "/" + MAX_REPUSH_ATTEMPTS + " 次)");
         startPush();
+        if (repushAttempts >= MAX_REPUSH_ATTEMPTS) {
+            appendLog("  这次再不成就不自动推了,要推自己按");
+        }
     }
 
     /* ══════════ 记点 ══════════ */
@@ -892,6 +892,7 @@ public final class CalibrationActivity extends Activity {
      */
     private void clearMeterTable() {
         store.markPushed(false);
+        repushAttempts = 0;
         sendCommand(String.format(Locale.ROOT, "CALOFF,ADDR=%d", address));
         appendLog("→ 切回出厂表(手机上的 " + points.size() + " 个点还在,可随时推回去)");
     }
