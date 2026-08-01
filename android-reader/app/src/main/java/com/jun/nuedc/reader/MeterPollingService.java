@@ -583,20 +583,6 @@ public final class MeterPollingService extends Service {
         // 而且开关中途被拨动时这条路也照样跟得上。
     }
 
-    /**
-     * 自动模式下有新表接入时补一轮。
-     *
-     * <p>不补的话,「一键启动」按下时还没有任何连接,那一轮的目标集是空的,
-     * 界面要空等一个完整周期才见到第一条记录。
-     */
-    private void kickRoundIfIdle() {
-        if (autoMode && roundQueue.isEmpty()) {
-            // 走 scheduleRound 而不是自己 postDelayed:通知和界面的倒计时都读
-            // nextCycleAtElapsedMs,直接改提醒时刻会让它们对着一个作废的时刻走。
-            scheduleRound(ROUND_RETRY_MS);
-        }
-    }
-
     /* ══════════ 请求-应答 ══════════ */
 
     /**
@@ -679,8 +665,7 @@ public final class MeterPollingService extends Service {
             // 任何一帧都是在场的证据,不只是心跳。一次读数前后电流表要静默
             // 一段(测量 260 ms 加显示 1 s,下一拍最迟 3.3 s 才来),期间它照
             // 样在答读数——只认心跳的话,正在正常工作的表会被扫成离线。
-            long heard = SystemClock.elapsedRealtime();
-            Long lastHeard = aliveAt.put(frame.address, heard);
+            aliveAt.put(frame.address, SystemClock.elapsedRealtime());
             // 电流表上电时会不请自来地发一帧。那不是任何请求的应答,不能拿它
             // 推进轮次,也不能按上一次请求的身份落库——否则一次重启就会凭空
             // 多存一条、并且把轮次队列多弹一个地址出去。
@@ -698,9 +683,6 @@ public final class MeterPollingService extends Service {
                 // 界面的离线标记一旦被别的原因置上(比如一次读取超时),后面
                 // 再多的心跳也清不掉它,那台表会一直显示离线。
                 broadcastPresence(frame.address, link);
-                if (lastHeard == null || heard - lastHeard > ALIVE_WINDOW_MS) {
-                    kickRoundIfIdle();                         // 刚回来的地址,补一轮
-                }
                 continue;
             }
             if (solicited) {
@@ -710,13 +692,6 @@ public final class MeterPollingService extends Service {
                 link.lastMa = frame.currentMa;
                 broadcastFrame(frame, link);
                 onReplyArrived(frame.address, frame.currentMa, link, forRound);
-                // 补一轮的条件是「这个地址刚出现」,和心跳那边同一个判据,不是
-                // 「这一帧没人问过」。电流表上按一次键就会主动发一帧,手动读取
-                // 也是,拿没人问过当条件的话,每一次都会把下一轮重排到 500 ms
-                // 之后——倒计时环归零重走,一次本地按键就把自动采集的节奏顶掉。
-                if (lastHeard == null || heard - lastHeard > ALIVE_WINDOW_MS) {
-                    kickRoundIfIdle();
-                }
             }
             // METER_CAL 到这里就没事了。它带的 FLAG 是给标定台看的,不是读数的
             // 状态标记:电流表测到什么就发什么,读数永远走 METER_TEST,读表器
