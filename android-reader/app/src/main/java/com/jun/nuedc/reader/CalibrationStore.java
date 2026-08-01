@@ -22,13 +22,9 @@ public final class CalibrationStore {
     private static final String FILE_NAME = "calibration_bench";
     private static final String KEY_POINTS = "points";
     private static final String KEY_ADDRESS = "address";
-    private static final String KEY_TARGET_COUNT = "target_count";
     private static final String KEY_PUSHED = "pushed";
 
     private static final int DEFAULT_ADDRESS = 6;
-    /** 12 而不是 10:同一条靶位曲线上 10 点最坏弦误差 0.35%→0.47%,
-     *  而 0.5% 是全部预算,现场还要留给参考表本身和沉降。 */
-    private static final int DEFAULT_TARGET_COUNT = 12;
 
     private final SharedPreferences preferences;
 
@@ -80,14 +76,6 @@ public final class CalibrationStore {
         preferences.edit().putInt(KEY_ADDRESS, address).apply();
     }
 
-    public int targetCount() {
-        int value = preferences.getInt(KEY_TARGET_COUNT, DEFAULT_TARGET_COUNT);
-        return value < 2 || value > 16 ? DEFAULT_TARGET_COUNT : value;
-    }
-
-    public void saveTargetCount(int count) {
-        preferences.edit().putInt(KEY_TARGET_COUNT, count).apply();
-    }
 
     public boolean pushed() {
         return preferences.getBoolean(KEY_PUSHED, false);

@@ -29,7 +29,6 @@ import android.widget.Toast;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collections;
 import java.util.Deque;
 import java.util.List;
@@ -47,11 +46,9 @@ import java.util.regex.Pattern;
  * 存在手机里:电流表靠被测电流取电,回路一断就掉电,存手机上的表在每一次掉电
  * 之后都要人记得重推。
  *
- * <p>点数上限 16,而不是十。决定一张折线表能不能压进 0.5% 的是节点<b>放在哪</b>,
- * 不是有几个:拿台上那次扫描拟出的光滑曲线做基准,10 个节点按 log(RMS) 等比放,
- * 最坏弦误差 0.49%,正好是全部预算;同样 10 个点按"0.1/0.2/0.4…"这种整数电流放,
- * 是 1.5%——灵敏度在 0.3 A 附近拐得最厉害,那儿没有节点就跟不上。所以这个界面
- * 报的靶位是按 RMS 等比排的,不是按电流。
+ * <p>界面不替人做判断。记点没有任何前置条件,点记成什么样、记多少个、按什么
+ * 顺序记,都是操作的人的事;这里只把收到的东西如实摆出来,再原样存下去。要
+ * 推的时候才按 RMS 排一次序——那是固件查表的前提,不是对输入的要求。
  *
  * <p>它是独立的一个图标,和读表器界面分开:自动模式要"一键启动",那个界面上不
  * 该多一个能把表改坏的按钮。两边共用 {@link MeterPollingService} 的那条 BLE 链。
@@ -63,34 +60,13 @@ public final class CalibrationActivity extends Activity {
     private static final int MAX_POINTS = 16;
 
     /**
-     * 靶位曲线,单位 LSB,17 个采样点;取 n 个靶位就是在它上面等间隔插值。
+     * 实况里显示抖动幅度用的窗口。只是显示——记点不看它。
      *
-     * <p>两端:低端 14 LSB(≈0.116 A,台上那次扫描到的最低点),高端 988 LSB
-     * (≈2.15 A)。高端<b>不是</b>固件表的顶(1093 LSB / 2.38 A):题面 6.1 的负载
-     * 只到 2.2 A,把靶位放在够不着的地方,操作的人会一直看到"调大负载"而永远
-     * 铺不满。2.15 A 又高于 2 A,所以 2(3) 的超限判决点落在插值段里,不靠外推。
-     *
-     * <p>中间的疏密不是等比的。误差集中在低端:同样 10 个点等比 log(RMS) 放,
-     * 最坏弦误差 0.47%,而逐段看,0.13-0.15 A 那一段一个人占掉 0.58%,0.34 A
-     * 以上每段都在 0.15% 以下——灵敏度从 117 LSB/A 涨到 449 LSB/A,低端一个
-     * ΔI 换来的 ΔRMS 少得多。所以这条曲线按曲率加权(节点密度 ∝ |g''|^½,
-     * g = ln I 对 ln RMS),再和等比各取一半。
-     *
-     * <p>取一半而不是全按曲率,是因为曲率本身估得不牢:台上那 215 帧里真正
-     * 沉降好的只有 22 帧、落在 9 个不同电流上,而且 0.294 A 到 0.888 A 之间
-     * 一帧都没有。全按曲率会把顶端拉成一根 2.5:1 的长弦,横跨的正是数据最
-     * 稀的那一段。各取一半后最宽段 1.75:1(12 点),形状还在,赌得少些。
+     * <p>这里一条都不拦:按下「记录此点」就把当前这一帧的 RMS 和填进去的读数
+     * 原样存下来,稳没稳、表报什么 FLAG、和已有的点挨多近,都不作数。要不要
+     * 这个点是操作的人的判断,界面只负责把它看到的东西如实摆出来。
      */
-    private static final double[] TARGET_CURVE_LSB = {
-            14, 17, 21, 26, 33, 41, 51, 65, 83, 107, 139, 182, 241, 325, 448, 641, 988
-    };
-
-    /** 认为一个靶位"已经有点了"的半径。比它更近的两个点,分段斜率就是噪声。 */
-    private static final double TARGET_TOLERANCE = 0.15;
-
-    /** 判稳用的窗口:连续这么多帧的 RMS 落在 {@link #SETTLE_SPREAD} 之内才让记点。 */
-    private static final int SETTLE_WINDOW = 5;
-    private static final double SETTLE_SPREAD = 0.005;
+    private static final int SPREAD_WINDOW = 5;
 
     /** 读数节奏。一次测量 260 ms 加亮屏 1 s,比这更密只是白等。 */
     private static final long POLL_MS = 1_500L;
@@ -123,11 +99,12 @@ public final class CalibrationActivity extends Activity {
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final Deque<Double> recentRms = new ArrayDeque<>();
     private final List<double[]> points = new ArrayList<>();
+    /** 上一次「推送」实际发出去的那一份:排过序、去过重。 */
+    private List<double[]> pushOrder = new ArrayList<>();
     private final StringBuilder log = new StringBuilder();
 
     private CalibrationStore store;
     private int address = 6;
-    private int targetCount = 10;
 
     private double lastRms = Double.NaN;
     private int lastMa = -1;
@@ -145,10 +122,10 @@ public final class CalibrationActivity extends Activity {
     private TextView pointsView;
     private TextView logView;
     private TextView addressView;
-    private TextView targetCountView;
     private EditText referenceInput;
     private CheckBox autoRepush;
-    private ScrollView scroller;
+    private ScrollView pointsScroll;
+    private ScrollView logScroll;
 
     private final Runnable poll = new Runnable() {
         @Override
@@ -201,7 +178,6 @@ public final class CalibrationActivity extends Activity {
         super.onCreate(savedInstanceState);
         store = new CalibrationStore(this);
         address = store.address();
-        targetCount = store.targetCount();
         points.addAll(store.points());
         setContentView(buildUi());
         refreshPoints();
@@ -211,7 +187,7 @@ public final class CalibrationActivity extends Activity {
             startReader(MeterPollingService.ACTION_CONNECT_BASIC);
             sendCommand(String.format(Locale.ROOT, "CALGET,ADDR=%d", address));
         });
-        appendLog("标定台就绪。靶位按 log(RMS) 等比排,不是按整数电流。");
+        appendLog("标定台就绪。");
     }
 
     @Override
@@ -251,13 +227,6 @@ public final class CalibrationActivity extends Activity {
         addressView.setPadding(dp(10), 0, dp(10), 0);
         header.addView(addressView);
         header.addView(flatButton("+", v -> setAddress(address + 1)));
-        header.addView(spacer());
-        header.addView(label("靶位数"));
-        header.addView(flatButton("−", v -> setTargetCount(targetCount - 1)));
-        targetCountView = mono(String.valueOf(targetCount), 20);
-        targetCountView.setPadding(dp(10), 0, dp(10), 0);
-        header.addView(targetCountView);
-        header.addView(flatButton("+", v -> setTargetCount(targetCount + 1)));
         root.addView(header);
 
         liveView = mono("", 15);
@@ -279,9 +248,14 @@ public final class CalibrationActivity extends Activity {
         capture.addView(flatButton("记录此点", v -> capturePoint()));
         root.addView(capture, wide());
 
+        // 点列表和日志各自滚各自的,都给固定高度。整页跟着内容长本身就是错的:
+        // 日志一行一行往下掉,页面就一直往下窜,人正在输入框里打字或者盯着上面
+        // 的实况,视野被拽走。
         pointsView = mono("", 13);
         pointsView.setPadding(dp(10), dp(6), dp(10), dp(6));
-        root.addView(pointsView, wide());
+        pointsScroll = new ScrollView(this);
+        pointsScroll.addView(pointsView);
+        root.addView(pointsScroll, fixedHeight(dp(150)));
 
         LinearLayout row1 = new LinearLayout(this);
         row1.setOrientation(LinearLayout.HORIZONTAL);
@@ -311,11 +285,11 @@ public final class CalibrationActivity extends Activity {
         logView = mono("", 12);
         logView.setPadding(dp(10), dp(6), dp(10), dp(6));
         logView.setTextColor(0xFF4A5560);
-        root.addView(logView, wide());
+        logScroll = new ScrollView(this);
+        logScroll.addView(logView);
+        root.addView(logScroll, fixedHeight(dp(160)));
 
-        scroller = new ScrollView(this);
-        scroller.addView(root);
-        return scroller;
+        return root;
     }
 
     private void setAddress(int value) {
@@ -328,15 +302,6 @@ public final class CalibrationActivity extends Activity {
         sendCommand(String.format(Locale.ROOT, "CALGET,ADDR=%d", address));
     }
 
-    private void setTargetCount(int value) {
-        if (value < 2 || value > MAX_POINTS) {
-            return;
-        }
-        targetCount = value;
-        targetCountView.setText(String.valueOf(targetCount));
-        store.saveTargetCount(targetCount);
-        refreshLive();
-    }
 
     /* ══════════ 收帧 ══════════ */
 
@@ -355,7 +320,7 @@ public final class CalibrationActivity extends Activity {
             lastSource = cal.group(5) == null ? "?" : cal.group(5);
             lastFrameAt = System.currentTimeMillis();
             recentRms.addLast(lastRms);
-            while (recentRms.size() > SETTLE_WINDOW) {
+            while (recentRms.size() > SPREAD_WINDOW) {
                 recentRms.removeFirst();
             }
             maybeRepush();
@@ -398,10 +363,10 @@ public final class CalibrationActivity extends Activity {
         handler.removeCallbacks(ackTimeout);
         pushingIndex++;
         pushRetries = 0;
-        if (pushingIndex >= points.size()) {
+        if (pushingIndex >= pushOrder.size()) {
             pushingIndex = -1;
             committing = true;
-            appendLog("… 全部 " + points.size() + " 点已暂存,提交中(表要写 flash)");
+            appendLog("… 全部 " + pushOrder.size() + " 点已暂存,提交中(表要写 flash)");
             sendCurrentPushStep();
             handler.postDelayed(ackTimeout, COMMIT_TIMEOUT_MS);
             return;
@@ -435,7 +400,7 @@ public final class CalibrationActivity extends Activity {
             appendLog("· 表内:" + source + "," + count + " 点"
                     + (error == null ? "" : ",ERR=" + error));
             // 上一次提交的应答丢了、但表其实装上了,就是这条查询来兜的。
-            if ("FIELD".equals(source) && count == points.size()) {
+            if ("FIELD".equals(source) && count == pushOrder.size()) {
                 store.markPushed(true);
             }
         }
@@ -467,22 +432,21 @@ public final class CalibrationActivity extends Activity {
 
     /* ══════════ 记点 ══════════ */
 
+    /**
+     * 记下当前这一帧的 RMS 和填进去的读数。原样存,一条不拦。
+     *
+     * <p>只有两件事会让它记不下来:一帧都还没收到(没有 RMS 可记),和输入框里
+     * 不是一个数(没有读数可记)。表报什么 FLAG、读数稳不稳、和已有的点挨多近、
+     * 记下来的顺序是不是递增,都不在这儿判——那些是操作的人看着办的事,不是
+     * 界面该替他决定的。存下来的点列表里什么都看得见,不合适随时删。
+     */
     private void capturePoint() {
         if (points.size() >= MAX_POINTS) {
-            toast("最多 " + MAX_POINTS + " 点");
+            toast("表里最多装 " + MAX_POINTS + " 点");
             return;
         }
-        if (recentRms.size() < SETTLE_WINDOW) {
-            toast("还在收帧,等 " + SETTLE_WINDOW + " 帧再记");
-            return;
-        }
-        if (spread() > SETTLE_SPREAD) {
-            toast(String.format(Locale.CHINA,
-                    "读数还没稳(±%.2f%%),等负载沉降", spread() * 100));
-            return;
-        }
-        if (!"OK".equals(lastFlag)) {
-            toast("表说这一帧不可信:" + lastFlag);
+        if (Double.isNaN(lastRms)) {
+            toast("还没收到帧,没有 RMS 可记");
             return;
         }
         double reference;
@@ -492,26 +456,14 @@ public final class CalibrationActivity extends Activity {
             toast("先填标定表读数,单位 A");
             return;
         }
-        if (reference <= 0 || reference > 10) {
-            toast("标定表读数不像话:" + reference);
-            return;
-        }
 
-        double rms = median();
-        for (double[] point : points) {
-            // 两个点挨得太近,它们之间那一段的斜率就是两端的噪声,不是曲线。
-            if (Math.abs(Math.log(point[0] / rms)) < Math.log(1.02)) {
-                toast("和已有点差不到 2%,换一个负载再记");
-                return;
-            }
-        }
-        points.add(new double[]{rms, reference});
-        Collections.sort(points, (a, b) -> Double.compare(a[0], b[0]));
+        points.add(new double[]{lastRms, reference});
         store.savePoints(points);
         store.markPushed(false);
         referenceInput.setText("");
-        appendLog(String.format(Locale.CHINA, "+ 点 %d:RMS %.2f → %.4f A",
-                points.size(), rms, reference));
+        appendLog(String.format(Locale.CHINA, "+ 点 %d:RMS %.2f → %.4f A%s",
+                points.size(), lastRms, reference,
+                "OK".equals(lastFlag) ? "" : "  (FLAG=" + lastFlag + ")"));
         refreshPoints();
         refreshLive();
     }
@@ -543,52 +495,58 @@ public final class CalibrationActivity extends Activity {
             toast("正在推送");
             return;
         }
-        String problem = tableProblem();
-        if (problem != null) {
-            toast(problem);
-            appendLog("✗ 不能推:" + problem);
+        pushOrder = pushTable();
+        if (pushOrder.size() < 2) {
+            toast("至少要 2 个 RMS 不同的点");
+            appendLog("✗ 不能推:去掉 RMS 重复的之后不足 2 点");
+            return;
+        }
+        if (pushOrder.size() > MAX_POINTS) {
+            toast("表里最多装 " + MAX_POINTS + " 点");
             return;
         }
         pushingIndex = 0;
         pushRetries = 0;
-        appendLog("→ 开始推送 " + points.size() + " 点到 " + address + " 号表");
+        appendLog("→ 推送 " + pushOrder.size() + " 点到 " + address + " 号表"
+                + (pushOrder.size() == points.size() ? "" : "(RMS 重复的只取最后记的那个)"));
         sendCurrentPushStep();
         handler.postDelayed(ackTimeout, ACK_TIMEOUT_MS);
     }
 
     /**
-     * 推之前先在手机上判一次:表那边不合格是整张拒收,而拒收信息只有一个词。
-     * 在这里判,能说清是哪两个点的问题。
+     * 推送用的那一份:按 RMS 升序,RMS 相同的只留最后记的那个。
+     *
+     * <p>排序不是对输入的要求,是固件查表的前提——{@code lsb_to_amps} 拿 RMS 找
+     * 落在哪一段,RMS 那一列不单调,"哪一段"就没有定义。电流那一列不管:它可以
+     * 上上下下,插值照样成立,读数跟着抖就是了。
+     *
+     * <p>RMS 完全相同的两个点会让一段的跨度变成零,所以留后记的那个——同一个
+     * RMS 上重记一次,本来就是"刚才那个不算"的意思。
      */
-    private String tableProblem() {
-        if (points.size() < 2) {
-            return "至少要 2 个点";
-        }
-        if (points.size() > MAX_POINTS) {
-            return "超过 " + MAX_POINTS + " 点";
-        }
-        for (int i = 1; i < points.size(); i++) {
-            double[] previous = points.get(i - 1);
-            double[] current = points.get(i);
-            if (current[0] <= previous[0] || current[1] <= previous[1]) {
-                return String.format(Locale.CHINA,
-                        "第 %d、%d 点没有一起递增(%.2f→%.2f LSB,%.4f→%.4f A)",
-                        i, i + 1, previous[0], current[0], previous[1], current[1]);
+    private List<double[]> pushTable() {
+        List<double[]> sorted = new ArrayList<>(points);
+        Collections.sort(sorted, (a, b) -> Double.compare(a[0], b[0]));
+        List<double[]> out = new ArrayList<>();
+        for (double[] point : sorted) {
+            if (!out.isEmpty() && out.get(out.size() - 1)[0] == point[0]) {
+                out.set(out.size() - 1, point);
+                continue;
             }
+            out.add(point);
         }
-        return null;
+        return out;
     }
 
     private void sendCurrentPushStep() {
         if (committing) {
             sendCommand(String.format(Locale.ROOT, "CALEND,ADDR=%d,N=%d",
-                    address, points.size()));
+                    address, pushOrder.size()));
             return;
         }
-        if (pushingIndex < 0 || pushingIndex >= points.size()) {
+        if (pushingIndex < 0 || pushingIndex >= pushOrder.size()) {
             return;
         }
-        double[] point = points.get(pushingIndex);
+        double[] point = pushOrder.get(pushingIndex);
         sendCommand(String.format(Locale.ROOT, "CALPT,ADDR=%d,I=%d,X=%.2f,Y=%.4f",
                 address, pushingIndex, point[0], point[1]));
     }
@@ -634,10 +592,10 @@ public final class CalibrationActivity extends Activity {
             text.append("等 ").append(address).append(" 号表的帧…\n");
         } else {
             text.append(String.format(Locale.CHINA, "RMS   %8.2f LSB", lastRms));
-            if (recentRms.size() >= SETTLE_WINDOW) {
-                boolean settled = spread() <= SETTLE_SPREAD;
-                text.append(String.format(Locale.CHINA, "   %s ±%.2f%%",
-                        settled ? "稳" : "动", spread() * 100));
+            if (recentRms.size() >= SPREAD_WINDOW) {
+                // 只报,不判。抖多少是负载和前端的事,记不记这个点是人的事。
+                text.append(String.format(Locale.CHINA, "   近%d帧 ±%.2f%%",
+                        SPREAD_WINDOW, spread() * 100));
             }
             text.append('\n');
             text.append(String.format(Locale.CHINA, "表读  %8.3f A    FLAG=%s\n",
@@ -652,58 +610,15 @@ public final class CalibrationActivity extends Activity {
             }
             text.append('\n');
         }
-        text.append(nextTargetHint());
+        text.append("手机上 ").append(points.size()).append(" 点");
         if (pushingIndex >= 0) {
             text.append("\n推送中:点 ").append(pushingIndex + 1)
-                    .append('/').append(points.size());
+                    .append('/').append(pushOrder.size());
         } else if (committing) {
             text.append("\n提交中(表在写 flash)…");
         }
         liveView.setText(text.toString());
         liveView.setTextColor("FIELD".equals(lastSource) ? 0xFF176B87 : 0xFF8A4B00);
-    }
-
-    /**
-     * 下一个还没有点的靶位。按 log(RMS) 等比排——不是按整数电流:同样点数下,
-     * 按电流排的最坏弦误差是按 RMS 排的三倍,而 0.5% 的预算经不起这个。
-     */
-    private String nextTargetHint() {
-        double[] targets = targets();
-        for (double target : targets) {
-            boolean covered = false;
-            for (double[] point : points) {
-                if (Math.abs(Math.log(point[0] / target)) < Math.log(1 + TARGET_TOLERANCE)) {
-                    covered = true;
-                    break;
-                }
-            }
-            if (covered) {
-                continue;
-            }
-            String nudge = "";
-            if (!Double.isNaN(lastRms)) {
-                nudge = lastRms > target * (1 + TARGET_TOLERANCE) ? "(调小负载)"
-                        : lastRms < target / (1 + TARGET_TOLERANCE) ? "(调大负载)"
-                        : "(就在这儿,记点)";
-            }
-            return String.format(Locale.CHINA, "下一靶位 RMS≈%.0f %s   已记 %d/%d",
-                    target, nudge, points.size(), targets.length);
-        }
-        return String.format(Locale.CHINA, "靶位已铺满,已记 %d 点", points.size());
-    }
-
-    /** 在 {@link #TARGET_CURVE_LSB} 上等间隔取 {@link #targetCount} 个靶位。 */
-    private double[] targets() {
-        double[] targets = new double[targetCount];
-        int last = TARGET_CURVE_LSB.length - 1;
-        for (int i = 0; i < targetCount; i++) {
-            double at = (double) i * last / (targetCount - 1);
-            int floor = Math.min((int) at, last - 1);
-            double frac = at - floor;
-            targets[i] = TARGET_CURVE_LSB[floor]
-                    + (TARGET_CURVE_LSB[floor + 1] - TARGET_CURVE_LSB[floor]) * frac;
-        }
-        return targets;
     }
 
     private void refreshPoints() {
@@ -714,17 +629,12 @@ public final class CalibrationActivity extends Activity {
             pointsView.setText("(还没有点)");
             return;
         }
+        // 按记录顺序列,不排序:记进来什么样就是什么样,乱序也照列。
         StringBuilder text = new StringBuilder();
         for (int i = 0; i < points.size(); i++) {
             double[] point = points.get(i);
-            text.append(String.format(Locale.CHINA, "%2d  %8.2f LSB  %7.4f A",
+            text.append(String.format(Locale.CHINA, "%2d  %8.2f LSB  %7.4f A\n",
                     i + 1, point[0], point[1]));
-            if (i > 0) {
-                double[] previous = points.get(i - 1);
-                double slope = (point[1] - previous[1]) / (point[0] - previous[0]);
-                text.append(String.format(Locale.CHINA, "   %6.2f mA/LSB", slope * 1000));
-            }
-            text.append('\n');
         }
         pointsView.setText(text.toString().trim());
     }
@@ -766,15 +676,6 @@ public final class CalibrationActivity extends Activity {
         return mean <= 0 ? Double.MAX_VALUE : (high - low) / mean;
     }
 
-    private double median() {
-        double[] sorted = new double[recentRms.size()];
-        int i = 0;
-        for (double value : recentRms) {
-            sorted[i++] = value;
-        }
-        Arrays.sort(sorted);
-        return sorted[sorted.length / 2];
-    }
 
     private void appendLog(String line) {
         log.append(line).append('\n');
@@ -793,8 +694,11 @@ public final class CalibrationActivity extends Activity {
         if (logView != null) {
             logView.setText(log.toString().trim());
         }
-        if (scroller != null) {
-            scroller.post(() -> scroller.fullScroll(View.FOCUS_DOWN));
+        if (logScroll != null) {
+            // scrollTo,不是 fullScroll:后者会把焦点也一起要过来,于是每来一行
+            // 日志,正在打字的输入框就被抢一次。
+            logScroll.post(() -> logScroll.scrollTo(0, Math.max(0,
+                    logView.getHeight() - logScroll.getHeight())));
         }
     }
 
@@ -886,10 +790,13 @@ public final class CalibrationActivity extends Activity {
         return button;
     }
 
-    private View spacer() {
-        View view = new View(this);
-        view.setLayoutParams(new LinearLayout.LayoutParams(dp(16), 1));
-        return view;
+
+    /** 自己滚自己的那两块:高度定死,内容再长也不会把整页顶长。 */
+    private LinearLayout.LayoutParams fixedHeight(int px) {
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, px);
+        params.topMargin = dp(8);
+        return params;
     }
 
     private LinearLayout.LayoutParams wide() {

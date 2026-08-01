@@ -285,21 +285,25 @@ impl Table {
         &self.points[..self.len]
     }
 
-    /// What `cal_strictly_ascending` checks for the built-in tables at compile
-    /// time, checked here at run time because these arrive over a radio.
+    /// Only what the lookup cannot do without: the LSB column ascending, and
+    /// numbers that are numbers.
     ///
-    /// A table that fails this is refused whole rather than repaired: the
-    /// meter has no way to tell which of two out-of-order points is the wrong
-    /// one, and reading plausibly wrong on the built-in table is a state the
-    /// operator can see (`SRC=ROM` in every frame) while reading plausibly
-    /// wrong on a silently patched one is not.
+    /// The amps column is left alone deliberately. `lsb_to_amps` finds its
+    /// segment by LSB, so a LSB column that does not increase leaves "which
+    /// segment" undefined -- that one is arithmetic, not taste. What the amps
+    /// do between two points is a measurement result: a bench point taken
+    /// while the load was still moving, or two currents a hair apart read in
+    /// the wrong order, produce a table that dips, and a table that dips is
+    /// what the reference actually said. The built-in tables are held to the
+    /// stricter rule at compile time, where a non-monotone pair means a typo
+    /// rather than a reading.
     pub fn valid(&self) -> bool {
         if self.len < 2 || self.len > FIELD_MAX {
             return false;
         }
-        // Infinities pass a strictly-ascending test and then poison the
-        // interpolation, so they are excluded here rather than there. NaN is
-        // already excluded by the comparison itself.
+        // Infinities pass an ascending test and then poison the interpolation,
+        // so they are excluded here rather than there. NaN is already excluded
+        // by the comparison itself.
         if self
             .as_slice()
             .iter()
@@ -307,7 +311,9 @@ impl Table {
         {
             return false;
         }
-        cal_strictly_ascending(self.as_slice())
+        self.as_slice()
+            .windows(2)
+            .all(|pair| pair[1].0 > pair[0].0)
     }
 }
 
