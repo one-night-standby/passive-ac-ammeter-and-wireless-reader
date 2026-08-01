@@ -710,8 +710,12 @@ public final class MeterPollingService extends Service {
                 link.lastMa = frame.currentMa;
                 broadcastFrame(frame, link);
                 onReplyArrived(frame.address, frame.currentMa, link, forRound);
-                if (!solicited || !forRound) {
-                    kickRoundIfIdle();                         // 认出地址了,补一轮
+                // 补一轮的条件是「这个地址刚出现」,和心跳那边同一个判据,不是
+                // 「这一帧没人问过」。电流表上按一次键就会主动发一帧,手动读取
+                // 也是,拿没人问过当条件的话,每一次都会把下一轮重排到 500 ms
+                // 之后——倒计时环归零重走,一次本地按键就把自动采集的节奏顶掉。
+                if (lastHeard == null || heard - lastHeard > ALIVE_WINDOW_MS) {
+                    kickRoundIfIdle();
                 }
             }
             // METER_CAL 到这里就没事了。它带的 FLAG 是给标定台看的,不是读数的

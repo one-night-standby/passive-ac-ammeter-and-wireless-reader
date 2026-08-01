@@ -8,10 +8,8 @@ import android.graphics.Paint;
 import android.graphics.Path;
 import android.graphics.RectF;
 import android.graphics.Typeface;
-import android.media.AudioAttributes;
-import android.media.Ringtone;
-import android.media.RingtoneManager;
-import android.net.Uri;
+import android.media.AudioManager;
+import android.media.ToneGenerator;
 import android.os.SystemClock;
 import android.os.VibrationEffect;
 import android.os.Vibrator;
@@ -234,7 +232,7 @@ public final class MeterDashboardView extends View {
     private boolean expectCaptureRefresh;
     private final Live[] live = new Live[SLOTS];
     private final long[] alarmMuteUntil = new long[SLOTS];
-    private Ringtone alarmRingtone;
+    private ToneGenerator alarmTone;
     private final List<Row> rows = new ArrayList<>();
     private boolean connectionError;
     private String connectionDetail = "正在连接 HC-42…";
@@ -509,6 +507,11 @@ public final class MeterDashboardView extends View {
         removeCallbacks(modelLoop);
         removeCallbacks(renderLoop);
         removeCallbacks(panelSwitch);
+        // ToneGenerator 占的是全局有限的音频会话,不放会一直挂着。
+        if (alarmTone != null) {
+            alarmTone.release();
+            alarmTone = null;
+        }
         super.onDetachedFromWindow();
     }
 
@@ -1306,7 +1309,17 @@ public final class MeterDashboardView extends View {
         }
     }
 
-    /** 一次越限读数:震动两下 + 响一声系统铃(走闹钟音量,静音通知也听得见)。 */
+    /**
+     * 一次越限读数:震动两下 + 一串预警蜂鸣(走闹钟流,静音通知也听得见)。
+     *
+     * <p>用 {@link ToneGenerator} 自己发音,不取系统铃声:默认通知音是一声
+     * 「叮」,听感是「收到了」,而这里要说的是「超限了」。告警音的语义得由这个
+     * 程序自己定,不能跟着用户的通知音设置走。
+     *
+     * <p>{@code ALERT_CALL_GUARD} 是三声短促上行,长度由音型本身定死,再用
+     * duration 兜一道:越限读数可能每隔几秒就来一次,一次告警必须在下一次读数
+     * 之前结束,不能像闹钟铃那样一响十几秒。
+     */
     private void alarmFeedback(int addr, long now) {
         if (now < alarmMuteUntil[addr]) {
             return;                                            // 同一次读数被重复处理时去个重
@@ -1314,25 +1327,17 @@ public final class MeterDashboardView extends View {
         alarmMuteUntil[addr] = now + ALARM_DEDUP_MS;
         vibrateEffect(VibrationEffect.createWaveform(new long[]{0, 120, 80, 120}, -1));
         try {
-            if (alarmRingtone == null) {
-                Uri uri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION);
-                alarmRingtone = RingtoneManager.getRingtone(getContext(), uri);
-                if (alarmRingtone != null) {
-                    alarmRingtone.setAudioAttributes(new AudioAttributes.Builder()
-                            .setUsage(AudioAttributes.USAGE_ALARM)
-                            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                            .build());
-                }
+            if (alarmTone == null) {
+                alarmTone = new ToneGenerator(
+                        AudioManager.STREAM_ALARM, ToneGenerator.MAX_VOLUME);
             }
-            if (alarmRingtone != null) {
-                // 先停再播。Ringtone.play() 在正在播放时不会重头开始,而是
-                // 直接被吞掉——默认通知音有一两秒,读数可能来得更快,于是
-                // 「响一次吞一次」。停一下才能保证每一次越限都听得见。
-                alarmRingtone.stop();
-                alarmRingtone.play();
-            }
-        } catch (Exception ignored) {
-            // 没有可用铃声也不影响视觉报警
+            // 先停再发:同一次告警还在响时 startTone 会被吞掉,而每一次越限
+            // 都该出声。
+            alarmTone.stopTone();
+            alarmTone.startTone(ToneGenerator.TONE_CDMA_ALERT_CALL_GUARD, 600);
+        } catch (RuntimeException ignored) {
+            // 音频资源被占满或没有可用输出,不影响震动和视觉报警
+            alarmTone = null;
         }
     }
 
