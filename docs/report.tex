@@ -121,15 +121,11 @@
   {\fontsize{16bp}{22bp}\selectfont\bfseries 摘要}
 \end{center}
 
-本装置实现了一个“无源”交流电流表及无线读表器。本装置的工作原理为
-电流表由电流互感器取能，次级 270 匝并设抽头，其中 170 匝经 SS16 全桥整流、齐纳箝位
-后向储能电容充电，再由低压差 LDO 稳压为 3.4\,V，不接任何外部电源。取电与传感
-分时复用同一绕组：空闲期 PMOS、NMOS 双端关断，互感器输出全部用于储能；测量时两管
-导通接入采样电阻，MSPM0G3507 以内部 2.5\,V 基准、4\,kHz 采样率经 DMA 采集 800 点，
-用 Hann 加权真有效值和分档标定表换算出电流，约 260\,ms 后按序掉电。创新点是以一只
-隔离肖特基把储能支路与采集支路解耦，使一次测量完全由电容独立供电；并以实测标定表
-代替名义比例系数，吸收互感器非线性。读表器为 Android 应用，经 HC-42 蓝牙以请求-应答
-方式读数，支持人工与 120\,s 自动两种模式、越限报警和记录趋势。
+本工程实现了一个“无源”交流电流表及无线读表器。由电流互感取能与传感模块、SS16 桥式
+整流及储能稳压模块、MOS 管分时取电与传感开关、可编程增益测量模块、本地显示与蓝牙通信
+模块、Android 无线读表器六个部分组成。空闲期以取电储能为主，测量窗口由 GPIO 控制
+PMOS、NMOS 接入传感前端；控制器完成自动量程和真有效值计算，手机端完成远程读取、报警、
+记录与趋势显示。
 
 \noindent\textbf{关键词：}无源电流表；MSPM0G3507；真有效值；分时取能；低功耗；BLE
 
@@ -146,32 +142,27 @@
 方案二：一组带抽头的次级绕组，用 MOS 开关对取电和传感分时复用。空闲期断开传感前端，
 互感器输出全部经全桥向储能电容充电；测量时接入传感前端，系统改由储能电容供电。
 
-采用方案二。决定性的差别在冷启动：线路电流小时互感器给出的功率也小，任何常驻负载都会
-拖慢甚至阻止储能电压建立，而分时复用让传感前端在充电阶段完全不取电。次级共 270 匝并设
-抽头，实测后以 170 匝接入整流桥。
+采用方案二。差别在冷启动：线路电流小时取能功率也小，常驻负载会拖慢储能电压建立，分时
+复用则让传感前端在充电阶段完全不取电。次级 270 匝并设抽头，实测后以 170 匝接入整流桥。
 
 \subheading{2．整流与稳压电源方案}
 
 三个方案的前段相同：次级经全桥整流后向储能电容充电，齐纳二极管 $D_{\mathrm{Z}}$ 限制
-储能节点电压——线路电流达 2.2\,A 时次级开路电压远高于器件耐压，箝位不可省略。区别只在
-储能节点之后靠什么得到工作电压，电路见附录图 \ref{fig:power_options}。
+储能节点电压——线路电流达 2.2\,A 时次级开路电压远高于器件耐压，钳位不可省略。区别只在
+储能节点之后得到工作电压的方式，电路见附录图 \ref{fig:power_options}。
 
-方案一：不设稳压器，箝位点即工作电压。器件最少、没有压差损耗，但工作电压就是储能电压，
-在充放电之间一直在动，齐纳的箝位点本身又随电流和温度漂，MCU、OLED 和蓝牙全挂在这条
-摆动的轨上。
+方案一：不设稳压器，钳位点即工作电压。器件最少、没有压差损耗，但这条轨在充放电之间一直
+移动，齐纳的钳位点本身又随着电流和温度漂，MCU、OLED 和蓝牙全挂在上面。
 
-方案二：箝位点取在略高于 3.6\,V 处，再由低压差、低噪声 LDO（TPS7A4701）稳到 3.4\,V。
-压差只有 0.2\,V，线性稳压丢掉的那部分能量可以忽略；换来的是一条不随储能电压摆动的轨，
-整流纹波和 MOS 开关切换的扰动也被挡在模拟前端之外。代价是多一级器件及其静态电流。
+方案二：钳位点取在略高于 3.6\,V 处，再由低压差、低噪声 LDO（TPS7A4701）稳到 3.4\,V。
+压差为 0.2\,V，线性稳压的损耗可以忽略；得到一条不随储能电压摆动的轨，降低整流纹波和 MOS
+开关的扰动。代价是多一级器件及其静态电流。
 
-方案三：改用降压型开关变换器，搬运的是能量而不是电荷，效率不受压差牵制。但它从储能电压
-刚开始建立时就在耗电：输入低于其最小启动电压期间它并不工作，却仍有静态电流和开关节点
-漏电。
+方案三：改用降压型开关变换器（BUCK 电路），搬运的是能量而不是电荷，效率不受压差牵制，
+但是冷启动时间长；启动死区会把小电流吞掉；需引入功率电感、过压钳位，复杂度高。
 
-采用方案二。它是三者中唯一既给出稳定的轨、又不在冷启动阶段设门槛的：LDO 没有最小启动
-电压，输入建立到哪里输出就跟到哪里；方案三在输入达到门限之前既不工作又已经在耗电，而
-冷启动的取能功率只有毫瓦量级，经不起这样消耗。压差压到 0.2\,V 之后，线性稳压的效率
-劣势也基本消失。
+采用方案二。三者中只有它既给出稳定的轨、又不在冷启动阶段设门槛：LDO 没有最小启动电压，
+输入建立到哪里输出就跟到哪里；压差压到 0.2\,V 后，相对 BUCK 的效率劣势也基本消失。
 
 \subheading{3．电流有效值测量与量程方案}
 
@@ -184,7 +175,7 @@
 采用方案二，并用 ADC 采样序列直接算真有效值，而不是整流滤波测平均值再折算——后者只对
 正弦成立，而标定要对标的是标准表的真有效值读数。
 
-\mainheading{二、\quad 参数计算、系统设计与实现}
+\mainheading{二、\quad 理论分析与计算}
 
 \subheading{1．电路关键参数计算}
 
@@ -216,77 +207,40 @@ $V_{\mathrm{L}}$，线性稳压交付负载的是电荷，故容量下限为
 $V_{\mathrm{L}}$ 不得低于 3.4\,V 加 LDO 压差。压差越低 $V_{\mathrm{L}}$ 越低，同一只
 电容能交出的电荷越多，这是选低压差器件的直接原因。
 
-式（4）描述的是储能电压已经建立之后的一次测量。冷启动阶段储能电压自零升起，其间既不
-具备完成一次测量的能量，稳压输出也尚未进入稳压区。固件据此设开机门限：上电后先测
-$V_{\mathrm{DD}}$，达到 3.3\,V 才开始工作。测量借用 ADC0 的内部电源监测通道，该通道
-不占引脚——选中它即断开外部输入并接到片内 $V_{\mathrm{DD}}/3$ 分压，与 ADC 共用同一
-片内 2.5\,V 基准，故满量程为 $3\times2.5=7.5$\,V、分辨力 1.83\,mV，门限对应的码值为
-\begin{equation}
-  D_{\mathrm{th}}=\frac{V_{\mathrm{th}}}{3}\cdot\frac{2^{12}}{V_{\mathrm{ref}}}
-  =\frac{3.3}{3}\cdot\frac{4096}{2.5}=1802 .
-\end{equation}
+\mainheading{三、\quad 电路与程序设计}
 
-对增益为 $G$ 的同相偏置放大电路，输出为
-\begin{equation}
-  V_{\mathrm{o}}=G V_{\mathrm{i}}+(1-G)V_{\mathrm{DAC}} .
-\end{equation}
-若输入直流中心为 $V_{\mathrm{i,dc}}$，要求输出中心落在 ADC 中点 $V_{\mathrm{c}}$，则
-$G>1$ 时
-\begin{equation}
-  V_{\mathrm{DAC}}=\frac{G V_{\mathrm{i,dc}}-V_{\mathrm{c}}}{G-1}.
-\end{equation}
-固件以 12 位 ADC 的 2047 码为目标中心，目标峰峰值利用率取满量程的 65\%，换档回差的
-下、上限分别为 25\% 和 75\%。
+\subheading{1．硬件电路设计}
 
-TIMG6 以 4\,kHz 触发 ADC1，DMA 搬运采样。对 $N$ 点序列 $x[n]$ 施加 Hann 权 $w[n]$，
-加权均值为
-\begin{equation}
-  \bar{x}_{w}=\frac{\sum_{n=0}^{N-1}w[n]x[n]}{\sum_{n=0}^{N-1}w[n]} ,
-\end{equation}
-去除直流后的有效值码宽为
-\begin{equation}
- X_{\mathrm{rms}}=\sqrt{\frac{\sum_{n=0}^{N-1}w[n]
- \left(x[n]-\bar{x}_{w}\right)^2}{\sum_{n=0}^{N-1}w[n]}} .
-\end{equation}
-加窗是因为 200\,ms 记录未必覆盖整数个工频周期，Hann 权把截断处的权重压到零，使非整
-周期截断不再直接进入结果。各量程分别保存标定点 $(x_k,I_k)$，当
-$x_k\leq X_{\mathrm{rms}}\leq x_{k+1}$ 时按
-\begin{equation}
- I=I_k+\frac{X_{\mathrm{rms}}-x_k}{x_{k+1}-x_k}(I_{k+1}-I_k)
-\end{equation}
-分段线性插值。采样点取在整流之后，波形是全波整流后的脉动量，其有效值与原边电流的比例
-由标定表确定，不依赖波形因数的解析假设，互感器非线性和链路增益误差一并被表吸收。
-
-\subheading{2．硬件电路设计}
-
-系统框图如图 \ref{fig:system} 所示。电流表 A、B 结构相同，供能与测量链路互相独立，
-拆除任一表不影响另一表。
+系统框图如图 \ref{fig:system} 所示。
 
 \begin{figure}[H]
 \centering
-\begin{tikzpicture}[node distance=4mm and 5mm,scale=0.58,transform shape]
-  \node[block] (line) {36\,V 交流线路\\0.1～2.2\,A};
-  \node[block,right=of line] (ct) {CT\\270 匝带抽头};
-  \node[block,right=of ct] (bridge) {SS16 全桥\\箝位储能};
-  \node[block,right=of bridge] (power) {LDO\\3.4\,V};
-  \node[block,below=of bridge] (sw) {PMOS/NMOS 开关\\PA26/PA8};
-  \node[block,right=of sw] (afe) {采样电阻与前端\\PA18/OPA1};
-  \node[block,right=of afe] (mcu) {MSPM0G3507\\RMS/量程/地址};
-  \node[block,below=of afe] (oled) {S2 按键\\OLED};
-  \node[block,right=of mcu] (ble) {PB17 电源控制\\HC-42};
-  \node[block,right=of ble] (app) {Android 读表器\\报警/存储/趋势};
+% 每列一个 3.4 cm 的固定栅距：LDO 与 MSPM0G3507 同列，供电自上而下进控制器；
+% 取能与传感两条支路共用 CT 那一列，分时开关正对在互感器下方。
+\begin{tikzpicture}[scale=0.62,transform shape,
+    block/.append style={text width=2.7cm,minimum height=1.0cm,inner sep=2pt}]
+  \node[block] (line)   at ( 0   , 0   ) {36\,V 交流线路\\0.1～2.2\,A};
+  \node[block] (ct)     at ( 3.4 , 0   ) {CT\\270 匝带抽头};
+  \node[block] (bridge) at ( 6.8 , 0   ) {SS16 全桥\\钳位储能};
+  \node[block] (power)  at (10.2 , 0   ) {LDO\\3.4\,V};
+  \node[block] (sw)     at ( 3.4 ,-2.4 ) {PMOS/NMOS 开关\\PA26/PA8};
+  \node[block] (afe)    at ( 6.8 ,-2.4 ) {采样电阻与前端\\PA18/OPA1};
+  \node[block] (mcu)    at (10.2 ,-2.4 ) {MSPM0G3507\\RMS/量程/地址};
+  \node[block] (ble)    at (13.6 ,-2.4 ) {PB17 电源控制\\HC-42};
+  \node[block] (app)    at (17.0 ,-2.4 ) {Android 读表器\\报警/存储/趋势};
+  \node[block] (oled)   at ( 6.8 ,-4.6 ) {S2 按键\\OLED};
   \draw[line] (line)--(ct);
   \draw[line] (ct)--(bridge);
   \draw[line] (bridge)--(power);
-  \draw[line] (ct.south)|-(sw.west);
+  \draw[line] (ct.south)--(sw.north);
   \draw[line] (sw)--(afe);
   \draw[line] (afe)--(mcu);
-  \draw[line] (power.south)|-(mcu.north);
+  \draw[line] (power.south)--(mcu.north);
   \draw[line] (mcu.south)|-(oled.east);
   \draw[line] (mcu)--(ble);
   \draw[line] (ble)--(app);
-  \node[draw,dashed,fit=(ct)(bridge)(power)(sw)(afe)(mcu)(oled)(ble),
-        label={[font=\wuhao]above:电流表 A（电流表 B 结构相同且独立）}] {};
+  \node[draw,dashed,inner sep=4mm,fit=(ct)(bridge)(power)(sw)(afe)(mcu)(oled)(ble),
+        label={[font=\wuhao]above:自制“无源”电流表}] {};
 \end{tikzpicture}
 \caption{系统框图}
 \label{fig:system}
@@ -294,18 +248,14 @@ $x_k\leq X_{\mathrm{rms}}\leq x_{k+1}$ 时按
 
 
 整流输出记为节点 $A$，$A$ 与储能电容之间串一只肖特基 $D_5$：采集支路接入时把 $A$ 拉低，
-若无 $D_5$，冷启动积攒的能量会经采集支路反向放掉；有了 $D_5$ 能量只能单向流入电容。
-储能电容并接一只串限流电阻的按钮，按下即放净残余电量。
+若无 $D_5$，冷启动积攒的能量会经采集支路反向放掉。储能电容并接一只串限流电阻的按钮，
+按下即放净残余电量。
 
-采集支路自 $A$ 取出，由 PMOS 高边和 NMOS 低边双端把关，采样电阻 $R_{\mathrm{s}}$ 串在
-两者之间，PMOS 漏极与 $R_{\mathrm{s}}$ 的交点送 PA18。用两只管子而不是一只，是要让窗口
-之外整条支路两端都断开，不给取能功率留旁路。PA26 经 10\,k$\Omega$ 上拉至 $A$、PA8 经
-10\,k$\Omega$ 下拉至地：上电到 MCU 接管 GPIO 之前引脚是输入而非输出，这两只电阻使支路
-保持断开，而这段窗口恰好是储能电压最弱的时候。
+采集支路自 $A$ 取出，由 PMOS 高边和 NMOS 低边双端截断，不给取能功率留旁路，采样电阻 $R_{\mathrm{s}}$ 串在
+两者之间，其与 PMOS 漏极的交点送 PA18。PA26 经 10\,k$\Omega$ 上拉至 $A$、PA8 经 10\,k$\Omega$ 下拉至地，使上电
+到 MCU 接管 GPIO 之前支路保持断开。
 
-模拟前端全部在片内：OPA1 作同相可编程增益放大，DAC12 给出偏置，ADC 和 DAC 取片内
-2.5\,V 基准而不是供电电压，使供电纹波和 LDO 输出误差不进入读数。完整原理图如图
-\ref{fig:sch} 所示，图中同名网络（$A$、3.4\,V、GND 以及各引脚名）相连。
+完整原理图如图 \ref{fig:sch} 所示，图中同名网络（$A$、3.4\,V、GND 以及各引脚名）相连。
 
 \begin{figure}[!ht]
 \centering
@@ -367,7 +317,7 @@ $x_k\leq X_{\mathrm{rms}}\leq x_{k+1}$ 时按
   \draw (3.05,-0.55) -- (3.70,-0.55) -- (3.70,-1.90) -- (5.40,-1.90) -- (bs);
   \draw (bw) -- (3.20,0) -- (3.20,-3.05);
 
-  % ---- 隔离、箝位、储能、放电与稳压 ----
+  % ---- 隔离、钳位、储能、放电与稳压 ----
   \draw (be) -- (7.55,0);
   \node[circ] at (7.55,0) {};
   \node[above] at (7.55,0.10) {$A$};
@@ -459,28 +409,86 @@ $x_k\leq X_{\mathrm{rms}}\leq x_{k+1}$ 时按
 \label{fig:sch}
 \end{figure}
 
+模拟前端全部在片内，如图 \ref{fig:afe}。PA18 上的采样电压经 P-MUX 进 OPA1 同相输入端，
+反相端接片内电阻梯的抽头，抽头位置即 GAIN 档，对应 2、4、8、16、32 倍五级增益。梯底不
+接地而接 DAC12 输出，放大作用在输入与 DAC 之差上，DAC 因此只移动放大的支点、不改变增益：
+固件按探测帧测得的直流反解 DAC 码，把输出重新摆回 ADC
+中点。ADC1 用两个通道，CH1 取 OPA1 输出（PA16），CH3 直接取 PA18；后者是不经放大的直采
+档，用于输入直流偏低、任何增益档都无法居中的情形，也是探测帧本身所走的通道。ADC 与 DAC
+共用片内 2.5\,V 基准而不是供电电压，使供电纹波和 LDO 输出误差不进入读数。
 
-\subheading{3．软件设计}
+\begin{figure}[H]
+\centering
+\begin{circuitikz}[line cap=round,line join=round,font=\wuhao,scale=0.86,
+    transform shape,>={Latex[length=1.8mm]},
+    blk/.style={draw,align=center,inner sep=2.5pt,minimum height=8mm}]
+  \ctikzset{bipoles/length=0.9cm}
+  \ctikzset{label/align=straight}
+  % 反相端在下：片内电阻梯画在放大器下方，抽头就近接进来，不用绕过器件本体。
+  \ctikzset{noinv input up}
 
-程序上电后先把 PA26/PA8 置为取电空闲态，PB17 拉低使蓝牙断电，OLED 不发送初始化命令，
-指示 LED 也不点亮，随后停下来等电源：每 20\,ms 用 ADC0 读一次 $V_{\mathrm{DD}}$，不到
-3.3\,V 就不往下走。储能电容的充电不被任何固件开启的负载打断；基准和 ADC0 本身也是读完
-即掉电，仅占 1.5\% 的占空比。
+  \node[draw,dashed,inner sep=0pt,fit={(1.30,-4.95) (13.25,2.60)},
+        label={[font=\wuhao]below:MSPM0G3507 片内}] {};
 
-电压到位后不等请求先完成一次测量。这次测量结束后把 PB17置高、等待 350\,ms 并初始化
-UART2。
+  % ---- 输入与 P-MUX ----
+  \draw[->] (-0.55,0) -- (1.30,0);
+  \node[above] at (0.30,0.04) {来自 $R_{\mathrm{s}}$};
+  \node[circ] at (1.30,0) {};
+  \node[below] at (1.42,-0.10) {PA18};
+  \node[blk,minimum width=1.5cm] (pmux) at (3.05,0) {P-MUX};
+  \draw (1.30,0) -- (pmux.west);
 
-此后主循环等待三件事之一：S2 下降沿、蓝牙收到 \texttt{MEAS}、2\,s 心跳到期。前两者完全
-等价，走同一条测量路径；心跳只发一帧保活。测量期间到达的请求一律丢弃而不排队，测量结束
-时清空串口积压字节，使下一次等待从静默开始。
+  % ---- OPA1 同相 PGA ----
+  \node[op amp,scale=0.95] (opa) at (6.25,0) {};
+  \node[above] at (6.15,0.72) {OPA1};
+  \draw (pmux.east) -- (4.45,0) |- (opa.+);
+  \draw (opa.out) -- (8.45,0);
+  \node[circ] at (8.45,0) {};
+  \node[above] at (8.05,0.06) {PA16};
+  \node[above] at (9.90,0.06) {CH1};
+
+  % ---- 片内电阻梯：抽头即 GAIN 档，梯底接 DAC12 ----
+  \draw (8.45,0) to[R,l_=$(G{-}1)R$] (8.45,-1.70);
+  \node[circ] at (8.45,-1.70) {};
+  \draw (8.45,-1.70) -- (5.05,-1.70) |- (opa.-);
+  \draw (8.45,-1.70) to[R,l_=$R$] (8.45,-3.35);
+  \node[right,align=left] at (8.70,-0.85) {抽头即 GAIN 档\\$2\sim32\times$};
+  \node[blk,minimum width=1.7cm] (dac) at (8.45,-4.10) {DAC12};
+  \draw (8.45,-3.35) -- (dac.north);
+
+  % ---- 直采档：PA18 不经放大直接进 ADC ----
+  \node[circ] at (2.05,0) {};
+  \draw (2.05,0) -- (2.05,2.05) -- (10.60,2.05);
+  \node[above] at (5.90,2.09) {直采档（CH3）};
+
+  % ---- ADC1 与基准 ----
+  \node[draw,align=center,minimum width=2.5cm,minimum height=3.1cm,inner sep=2pt]
+    (adc) at (11.85,1.00) {ADC1\\ 12 位\\ 4\,kHz\\ DMA};
+  \draw (8.45,0) -- (10.60,0);
+  \node[blk,minimum width=2.5cm] (vref) at (11.85,-2.60) {内部基准 2.5\,V};
+  \draw[->] (vref.north) -- (11.85,-0.55);
+  \draw[->] (vref.west) -- (10.05,-2.60) -- (10.05,-4.10) -- (dac.east);
+\end{circuitikz}
+\caption{模拟前端原理图}
+\label{fig:afe}
+\end{figure}
+
+\subheading{2．软件设计}
+
+程序上电停下来等电源：每 200\,ms 用 ADC0 读一次 $V_{\mathrm{DD}}$，不到
+3.3\,V 就不执行程序。基准和 ADC0 读完即掉电，占空比 10\%。
+
+每次转换之前须先等基准建立 20\,ms：VREF 的 READY 位表示基准内核已运行，
+电压到位后不等请求先完成一次测量，结束后把 PB17 置高、等待 350\,ms 并初始化 UART2。
+
+此后主循环等待三件事之一：S2 下降沿、蓝牙收到 \texttt{MEAS}、2\,s 心跳到期。前两者走同一条测量路径；心跳只发一帧保活。测量期间到达的请求一律丢弃而不排队，测量结束
+时清空串口积压字节。
 
 一次测量的时序如图 \ref{fig:flow}：切换为传感态并等 20\,ms 建立，采 160 点/40\,ms
 探测帧定增益与 DAC 偏置，再采 800 点/200\,ms 正式帧；然后按 TIMG6/ADC1、OPA1/DAC12、
-基准、外部 MOS 开关的顺序关断，最后才计算有效值并查表。关断顺序不可颠倒：先断外部开关
-会让最后一段采样落在正在塌陷的输入上。基准未就绪、输入越出转换窗口或采集帧未完成时，
-该次读数不可信，固件只发调试帧并给出原因，不发读数帧。
+基准、外部 MOS 开关的顺序关断，最后才计算有效值并查表。
 
-\begin{figure}[!ht]
+\begin{figure}[H]
 \centering
 \begin{tikzpicture}[scale=0.78,transform shape,font=\wuhao,
     lb/.style={draw,align=center,text width=4.2cm,minimum height=1.0cm,
@@ -491,7 +499,7 @@ UART2。
   % （上电自测和收到触发），画成子流程比拉两条回线清楚。
   \node[lb] (b1) at (0, 0)     {上电：PA26=1，PA8=0\\ PB17=0，OLED 与 LED 不动作};
   \node[decision,aspect=2.4] (dw) at (0,-1.85) {$V_{\mathrm{DD}}\geq3.3$\,V？};
-  \node[lb,text width=2.6cm] (w20) at (-5.10,-1.85) {等 20\,ms\\ 再读一次};
+  \node[lb,text width=2.6cm] (w20) at (-5.10,-1.85) {等 200\,ms\\ 再读一次};
   \node[lb] (b2) at (0,-3.55)  {指示 LED 起闪，上电自测一次\\ 执行测量子流程};
   \node[lb] (b3) at (0,-5.20)  {PB17=1，等 350\,ms\\ 初始化 UART2};
   \node[lb] (b4) at (0,-6.85)  {发读数帧与调试帧\\ OLED 显示 1\,s 后熄屏};
@@ -535,9 +543,9 @@ UART2。
 \end{figure}
 
 
-\subheading{4．通信协议设计}
+\subheading{3．通信协议设计}
 
-链路为 HC-42 透传串口（FFE0 服务、FFE1 通知特征），速率 115200\,bit/s。透传不提供分包
+链路为 HC-42 透传串口，速率 115200\,bit/s。透传不提供分包
 与长度字段，故用面向行的 ASCII 协议，以换行作自同步定界符：接收端在任意位置接入或丢失
 字节后，都能在下一个换行重新对齐。读数一律由读表器请求产生。
 
@@ -567,104 +575,185 @@ UART2。
 出现，读表器据此更新在场地址；负载断开后电流表失电，心跳消失即为离线判据。请求超时只
 说明本次未读到，不据此判定离线。
 
-\subheading{5．其他重要模块设计}
+\subheading{4．其他重要模块设计}
 
 Android 读表器基本模式一对一手动读取；自动模式一键启动，每 120\,s 对在场地址依次请求，
 同一连接上只允许一个未完成请求。读数写入 SQLite，环形保存最近 1000 条，掉电不丢，历史
 与趋势共用这份数据。低于 0.2\,A 与高于 2.0\,A 的每一次读数都报警，而不是只在状态跳变时
 报：读数稀疏，同一状态的相邻两次读数是两个独立事件。
 
-\mainheading{三、\quad 测试方案及测试结果分析}
+\mainheading{四、\quad 测试方案及测试结果分析}
 
 \subheading{1．测试仪器与测试条件}
 
-室温下测试，220\,V/36\,V、60\,VA 单相隔离变压器供电，回路串入标定电流表和自制负载，
-负载视在功率约 50\,VA、电流 0～2.2\,A 连续可调。所用仪器：熙硕 STG-500W 交流电源；
-SIGLENT SDM3055X-E 五位半万用表，作标准电流比对；SIGLENT SDS2102X PLUS 数字示波器，
-观察储能、采样与启动时序；Android 手机一部；秒表一只。
+测试在室温下进行，回路按题目要求接成 36\,V 试验回路：隔离变压器 36\,V 输出串入标定
+电流表、取能/传感铁芯初级（$N_1=5$ 匝）和自制负载。所用仪器与测试条件见表
+\ref{tab:instruments}。
+
+\begin{table}[H]
+\centering
+\caption{测试仪器与测试条件}
+\label{tab:instruments}
+\wuhao
+\begin{tabularx}{0.97\textwidth}{|>{\centering\arraybackslash}p{22mm}|
+>{\centering\arraybackslash}p{46mm}|X|}
+\hline
+名称 & 型号或规格 & 用途\\ \hline
+交流电源 & 熙硕 STG-500W & 经隔离变压器为试验回路供电\\ \hline
+隔离变压器 & 单相 220\,V/36\,V，60\,VA & 提供 36\,V 试验回路，强电隔离\\ \hline
+自制负载 & 视在功率约 50\,VA，0～2.2\,A 连续可调 & 设定被测负载电流\\ \hline
+标定电流表 & SIGLENT SDM3055X-E 五位半数字多用表， & 作标准表，与被测电流表读数比对\\ \hline
+数字示波器 & SIGLENT SDS2102X PLUS & 观察储能电压建立、传感窗口与首帧时刻\\ \hline
+秒表 & 分辨力 0.01\,s & 记录从接通负载到正常工作的时间\\ \hline
+无线读表器 & Android 手机一部，运行自制读表器应用 & 接收读数帧，读取被测表示值\\ \hline
+环境条件 & 室温，线路电压 36\,V & 全部测试项共用\\ \hline
+\end{tabularx}
+\end{table}
 
 \subheading{2．测试方法}
 
-（1）精度测试：线路电压 36\,V，依次设置 0.10、0.20、0.50、1.00、1.50、2.00\,A，每点稳定
-后同时记录标准表与被测表读数，重复不少于 5 次，A、B 两表分别测试；再拆除 B 表重复测 A。
+（1）精度测试：线路电压 36\,V，在 0.12～2.14\,A 范围内设置 8 个负载电流测点。
+每点稳定后同时记录标定电流表读数 $I_{\mathrm{s}}$ 和自制电流表示值 $I_{\mathrm{x}}$，
+按 $(I_{\mathrm{x}}-I_{\mathrm{s}})/I_{\mathrm{s}}$ 计算相对误差。
 
-（2）标定与复现性测试：以脚本同步采集 BLE 帧和 SDM3055X-E 读数，负载由低到高再回到低
-连续扫描一遍，逐帧记录标准电流、RMS 码宽、量程和质量标志，用于建表并统计帧间散布与
-来回两趟的系统差。
-
-（3）取能与启动测试：储能电容经放电按钮放净后，从小到大增加负载电流，记录能稳定完成
-一次测量并发帧的最低电流，即启动电流；在该电流下用示波器捕获储能电压建立、首次有效值
-生成和首帧到达的时刻，得到启动时间。
-
-（4）分时时序测试：同时观察 PA26、PA8、储能电压和 3.4\,V，核对两态电平，并记录 260\,ms
-传感窗口内的储能电压跌落。
-
-（5）显示与无线测试：单击 S2 后确认显示 1\,s 自动熄屏；相距 5\,m 检查人工读取和 120\,s
-自动模式；设置低限、正常、超限并断开一只表检查报警；写入 30 条以上记录后重启应用，检查
-历史与趋势。
+（2）不同负载电流下启动时间测试：每次测试前按下放电按钮把储能电容残余电量放净，再合上
+插座总开关接通负载，用秒表记录从接通到电流表首次给出正常读数的时间。负载电流依次取
+0.30、0.40、0.54、0.60、0.70\,A；若观察 21\,min 后仍未完成启动，则记为大于 21\,min。
 
 \subheading{3．测试结果}
 
-供电绕组：85 匝单段绕组感应电压和调节余量不足；改为 270 匝总绕组、每 50 匝留抽头后可
-组合不同有效匝数，经对比最终以 170 匝供电。
+精度比对结果见表 \ref{tab:accuracy}，不同负载电流下的启动时间见表 \ref{tab:startup}。
 
-标定与复现性：一次连续扫描共 196 帧，192 帧质量标志为 \texttt{OK}，标准电流覆盖
-0.5503～2.3218\,A，归并为 38 个标定点写入 X1 直采档，覆盖 0.5527～2.2633\,A。表内拟合
-残差中位数 0.238\%、90 分位 0.714\%；同一电流点的帧间散布 1$\sigma$ 为 0.45\%；下降趟
-比上升趟低 0.59\%，两趟合并入表后上升点残差 $+0.17\%$、下降点 $-0.24\%$。其余 4 帧标志
-为 \texttt{OVER}：2.33\,A 时探测帧测得峰值已达 4107 码，越过 4095 上限。
-
-精度比对结果见表 \ref{tab:accuracy}。
-
-\begin{table}[!ht]
+\begin{table}[H]
 \centering
 \caption{电流测量精度记录表}
 \label{tab:accuracy}
-\wuhao\renewcommand{\arraystretch}{1.15}
-\begin{tabular}{|c|c|c|c|c|c|c|}
+\fontsize{8.5bp}{11bp}\selectfont
+\setlength{\tabcolsep}{2pt}
+\renewcommand{\arraystretch}{1.25}
+\begin{tabular}{|>{\centering\arraybackslash}p{27mm}|*{8}{c|}}
 \hline
-标准值/A & 0.10 & 0.20 & 0.50 & 1.00 & 1.50 & 2.00\\ \hline
-A 表示值/A & \placeholder & \placeholder & \placeholder & \placeholder & \placeholder & \placeholder\\ \hline
-A 表误差/\% & \placeholder & \placeholder & \placeholder & \placeholder & \placeholder & \placeholder\\ \hline
-B 表示值/A & \placeholder & \placeholder & \placeholder & \placeholder & \placeholder & \placeholder\\ \hline
-B 表误差/\% & \placeholder & \placeholder & \placeholder & \placeholder & \placeholder & \placeholder\\ \hline
-启动电流/A & \multicolumn{3}{c|}{\placeholder} & 启动时间/s & \multicolumn{2}{c|}{\placeholder}\\ \hline
+标准表读数/A & 0.119 & 0.188 & 0.541 & 0.699 & 1.000 & 1.200 & 1.601 & 2.136\\ \hline
+自制表读数/A & 0.121 & 0.191 & 0.542 & 0.696 & 0.998 & 1.205 & 1.580 & 2.132\\ \hline
+相对误差/\% & $+1.68$ & $+1.60$ & $+0.18$ & $-0.43$ & $-0.20$ & $+0.42$ & $-1.31$ & $-0.19$\\ \hline
 \end{tabular}
 \end{table}
 
-\subheading{4．结果分析}
+\begin{table}[H]
+\centering
+\caption{不同负载电流下的启动时间记录表}
+\label{tab:startup}
+\wuhao\renewcommand{\arraystretch}{1.15}
+\begin{tabular}{|c|c|c|c|c|c|}
+\hline
+负载电流/A & 0.30 & 0.40 & 0.54 & 0.60 & 0.70\\ \hline
+启动时间/s & $>1260$ & 140 & 89 & 75 & 62\\ \hline
+\end{tabular}
+\end{table}
 
-误差主要来自四处。其一是帧间散布 0.45\%：一次读数只用一帧 200\,ms 记录，工频与采样窗口
-不同步、负载自身的波动都落在里面；Hann 加权已压掉非整周期截断的边界项，再降要靠多帧取
-中位数，但那会成倍增加采样时间和能耗，把最低启动电流抬上去，故未采用。
+\subheading{4．测试结果分析}
 
-其二是上下行 0.59\% 的系统差：一部分来自比对时序，标准表读数比电流表的采样窗口滞后约
-300\,ms，上升趟与下降趟的偏移方向相反；另一部分来自磁芯磁滞。两趟合并入同一张表后，
-残差从单向的 0.59\% 降到 $+0.17\%/-0.24\%$。
+表 \ref{tab:accuracy} 的 8 个测点覆盖 0.119～2.136\,A。各点绝对相对误差均不超过
+1.68\%，平均绝对相对误差约为 0.75\%。低端 0.119\,A 和 0.188\,A 两点的示值偏高，
+相对误差分别为 1.68\% 和 1.60\%；1.601\,A 点的示值偏低 1.31\%，其余测点的
+绝对相对误差均小于 0.5\%。误差未呈现贯穿全量程的单向变化，说明实测标定能够较好地
+补偿互感器、整流压降和采样链路的综合非线性，但量程低端仍是后续细化标定的重点。
 
-其三是低端的覆盖与量程：0.55\,A 以下尚无标定点，该段信号幅度按比例下降、帧间散布的相对
-值随之放大；而前端从整流节点取样，直流与交流同比例变化，PGA 同时放大两者，输入摆幅始终
-占直流留出余量的 76\%～89\%，换不上高增益档，实测中量程一直停在 X1。两条合起来是全量程
-$\pm0.5\%$ 的主要风险，改进措施是补点，并把采样点改到隔直之后、用固定偏置送入 OPA，使
-直流中心与信号幅度解耦。
+表 \ref{tab:startup} 表明，启动时间随负载电流增大而明显缩短：0.40\,A 时为 140\,s，
+0.54\,A 时降至 89\,s，0.70\,A 时进一步缩短至 62\,s；0.30\,A 下观察超过
+21\,min 仍未完成启动。该结果与取能功率随线路电流增加而提高的规律一致，也说明冷启动
+主要受低电流下储能速度限制。在现有硬件与启动策略下，0.40\,A 可作为能够在数分钟内完成
+冷启动的最低实测电流点；若要改善 0.30\,A 附近的启动性能，应优先降低整流与稳压损耗、
+减小待机功耗，或优化储能容量和启动门限。
 
-其四是上端余量：2.33\,A 时峰值已触及 4095 上限，2\,A 以上的越限区只有约 15\% 宽，减小
-采样电阻或抬高偏置留出的上行余量即可。
+\mainheading{五、\quad 总结}
 
-\mainheading{四、\quad 总结}
+本系统采用一组带抽头的互感器次级分时完成取能和传感，测量窗口内由储能电容经低压差 LDO
+独立供电；片内 OPA、DAC 和 ADC 构成可编程增益模拟前端，控制器完成自动量程、真有效值
+计算和标定修正，读数通过蓝牙按请求-应答方式发送至 Android 无线读表器。实物在不接入外部
+辅助电源的条件下，已完成取能启动、本地显示、无线读数、越限报警、数据保存和趋势显示，
+验证了总体方案的可行性。
 
-本系统用一组带抽头的互感器次级同时取能和传感，靠一对 MOS 开关分时复用，隔离肖特基保证
-测量窗口内由储能电容独立供电，稳压用低压差 LDO；测量由片内 OPA、DAC、ADC 完成，Hann
-加权真有效值经分段线性标定表换算，读数以请求-应答方式送到 Android 读表器。方案可行：
-0.55～2.32\,A 已建标定表，残差中位数 0.238\%，分时供电与无线上报均已跑通。优点是空闲期
-无传感负载、模拟模块全部掉电，最低启动电流更小；标定表把互感器非线性和链路增益误差一并
-吸收，不需要器件级模型。不足是低端尚未标定，且量程档位在当前前端上无效，须先按上节的
-措施改采样点位置再重新标定。
+精度测试覆盖 0.119～2.136\,A 共 8 个测点，自制表读数为 0.121～2.132\,A，最大绝对
+相对误差为 1.68\%，平均绝对相对误差约为 0.75\%。这说明采用实测标定表后，互感器非线性、
+整流器压降和采样链路增益误差能够得到较有效的综合补偿。冷启动测试中，0.40、0.54、0.60、
+0.70\,A 对应的启动时间分别为 140、89、75、62\,s，负载电流越大，储能建立越快；
+0.30\,A 下观察超过 21\,min 仍未完成启动，表明低电流取能能力是当前系统的主要性能瓶颈。
+
+系统的主要特点是取能链路与传感前端分时复用，空闲期关闭模拟支路以集中储能，测量期由储能
+电容独立维持供电；隔离肖特基抑制储能节点向采样支路倒灌；片内模拟前端减少了外围器件数量和
+静态功耗；本地显示与无线读表器相互配合，使仪表既能独立显示，也能完成远程读取和记录。
+
+后续改进应集中在低电流启动和量程两端。0.119\,A、0.188\,A 两个低端测点的误差相对较大，
+可增加低端标定点并优化插值方法；采样点位于整流节点，直流分量与信号幅度同步变化，限制了
+高增益档的实际作用，可将采样点移至隔直网络之后并重新设计偏置；高电流端应继续核查 ADC
+输入余量。对于 0.30\,A 附近的冷启动，可通过降低整流和 LDO 损耗、压缩待机功耗、调整储能
+电容及启动门限来缩短等待时间。以上改进需要在测量精度、启动时间与单次测量能耗之间综合权衡。
 
 \clearpage
 \mainheading{附录}
 
-\subheading{1．三种稳压方案电路与分时控制状态}
+\setcounter{figure}{0}
+\setcounter{table}{0}
+
+\subheading{1．整流、钳位与储能电路}
+
+\begin{figure}[H]
+\centering
+\begin{circuitikz}[line cap=round,line join=round,font=\wuhao,scale=0.9,
+    transform shape,>={Latex[length=1.8mm]},
+    blk/.style={draw,align=center,inner sep=2.5pt,minimum height=7mm}]
+  \ctikzset{bipoles/length=0.8cm}
+  \ctikzset{label/align=straight}
+
+  % ---- 次级绕组与 SS16 全桥：n/s 为交流端，w 为负、e 为正 ----
+  \coordinate (bn) at (2.55, 1.20);
+  \coordinate (bs) at (2.55,-1.20);
+  \coordinate (bw) at (1.35, 0);
+  \coordinate (be) at (3.75, 0);
+  \draw (-0.60,0.55) to[cute inductor] (-0.60,-0.55);
+  \node[left,align=right] at (-0.90,0) {CT 次级\\170 匝抽头};
+  \draw (-0.60,0.55) -- (0.10,0.55) -- (0.10,1.90) -- (2.55,1.90) -- (bn);
+  \draw (-0.60,-0.55) -- (0.10,-0.55) -- (0.10,-1.90) -- (2.55,-1.90) -- (bs);
+  \draw (bn) to[sD,l=$D_1$] (be);
+  \draw (bs) to[sD,l_=$D_2$] (be);
+  \draw (bw) to[sD,l=$D_3$] (bn);
+  \draw (bw) to[sD,l_=$D_4$] (bs);
+  % 负端下到地轨，与下侧交流引线交叉但不相连（桥式整流的画法所固有）。
+  \draw (bw) -- (0.85,0) -- (0.85,-3.05);
+  \node[below,align=center] at (3.05,-2.30) {SS16 全桥};
+
+  % ---- 隔离、钳位、储能、放电与稳压 ----
+  \draw (be) -- (4.60,0);
+  \node[circ] at (4.60,0) {};
+  \node[above] at (4.60,0.10) {$A$};
+  \draw (4.60,0) to[sD*,l=$D_5$] (6.30,0);
+  \draw (6.30,0) -- (9.10,0);
+  \draw (6.50,0) to[C] (6.50,-3.05);
+  \node[left] at (6.37,-1.55) {$C_{\mathrm{s}}$};
+  \draw (7.45,0) to[R,l_=$R_{\mathrm{d}}$] (7.45,-1.60);
+  \draw (7.45,-1.60) to[push button,l_=放电] (7.45,-3.05);
+  \draw (8.90,-3.05) to[zD] (8.90,0);
+  \node[right] at (9.03,-1.55) {$D_{\mathrm{Z}}$};
+  \node[circ] at (6.50,0) {};
+  \node[circ] at (7.45,0) {};
+  \node[circ] at (8.90,0) {};
+  \node[blk,minimum width=1.3cm] (ldo) at (9.90,0) {LDO};
+  \draw (9.10,0) -- (ldo.west);
+  \draw (ldo.east) -- (11.60,0);
+  \draw (ldo.south) -- (9.90,-3.05);
+  \node[circ] at (9.90,-3.05) {};
+  \draw (11.15,0) to[C] (11.15,-3.05);
+  \node[circ] at (11.15,0) {};
+  \node[above] at (11.50,0.10) {3.4\,V};
+  \draw (1.00,-3.05) -- (11.15,-3.05);
+  \node[ground] at (5.40,-3.05) {};
+\end{circuitikz}
+\caption{整流、钳位与储能电路}
+\label{fig:rectifier}
+\end{figure}
+
+\subheading{2．三种稳压方案}
 
 \begin{figure}[H]
 \centering
@@ -672,7 +761,7 @@ $\pm0.5\%$ 的主要风险，改进措施是补点，并把采样点改到隔直
     transform shape,>={Latex[length=1.8mm]}]
   % 元件默认长度 1.4 cm，占满整条支路会显得笨重，这里压到 0.75 cm。
   \ctikzset{bipoles/length=0.75cm}
-  % 三个方案的前段一样，用 \foreach 画一遍：整流输出 A 充储能电容，齐纳箝位。
+  % 三个方案的前段一样，用 \foreach 画一遍：整流输出 A 充储能电容，齐纳钳位。
   \foreach \x in {0,5.2,10.4}{
     \begin{scope}[xshift=\x cm]
       \draw[->] (-0.55,0) -- (0.70,0);
@@ -680,7 +769,7 @@ $\pm0.5\%$ 的主要风险，改进措施是补点，并把采样点改到隔直
       \draw (0.70,0) -- (1.85,0);
       \draw (0.85,0) to[C] (0.85,-1.50);
       \node[left] at (0.72,-0.75) {$C_{\mathrm{s}}$};
-      % 由下往上画，齐纳的阴极才在上：箝位靠的是反向击穿，画反了就成了一只
+      % 由下往上画，齐纳的阴极才在上：钳位靠的是反向击穿，画反了就成了一只
       % 把储能节点直接短到地的正向二极管。
       \draw (1.85,-1.50) to[zD] (1.85,0);
       \node[right] at (1.99,-0.75) {$D_{\mathrm{Z}}$};
@@ -693,7 +782,7 @@ $\pm0.5\%$ 的主要风险，改进措施是补点，并把采样点改到隔直
   \begin{scope}[xshift=0cm]
     \draw (1.85,0) -- (3.60,0);
     \node[above] at (3.55,0.04) {$V_{\mathrm{DD}}$};
-    \node at (1.90,-2.15) {(a) 箝位直供};
+    \node at (1.90,-2.15) {(a) 钳位直供};
   \end{scope}
 
   \begin{scope}[xshift=5.2cm]
@@ -724,6 +813,8 @@ $\pm0.5\%$ 的主要风险，改进措施是补点，并把采样点改到隔直
 \caption{三种稳压方案}
 \label{fig:power_options}
 \end{figure}
+
+\subheading{3．取电与传感分时控制状态}
 
 \begin{table}[H]
 \centering
