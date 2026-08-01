@@ -86,6 +86,9 @@ public final class MeterDashboardView extends View {
     private static final int C_LOW = 0xFFC87C00;
     private static final int C_HIGH = 0xFFDC2626;
     private static final int C_OFF = 0xFF828C98;              // rgb(130,140,152)
+    /* 负载断开:比离线更沉的同色系灰。两者都是「这条线上没有电流」,但一个是
+       表不说话、一个是表说了「没有」,后者是确认过的事实,所以压得更实。 */
+    private static final int C_DISC = 0xFF4A525C;             // rgb(74,82,92)
     private static final int SLOT_OFF = 0xFF8A94A3;           // .slot.is-off
 
     /* ══════════ 设计坐标(980×462,对应原型 CSS 布局) ══════════ */
@@ -530,9 +533,9 @@ public final class MeterDashboardView extends View {
                 continue;
             }
             // frameMa < 0 是「在场但还没读过数」——心跳只说明它在,不带电流。
-            // 这不是一个电流档位:交给 classifyStatus 的话 -1 < 200 会被判成
-            // 低限,于是表一出现就先假报一次低限,而真正读到 0.064 A 时状态
-            // 已经是低限了,跳变沿不存在,该响的那次反而不响。
+            // 这不是一个电流档位:交给 classifyStatus 的话 -1 会一路落到负载
+            // 断开,于是表一出现就先说一次负载断开,而真正读到 0.064 A 时该报
+            // 的低限又因为不是跳变沿而不报。
             String st;
             if (m.silent) {
                 st = MeterReading.OFFLINE;
@@ -2285,6 +2288,7 @@ public final class MeterDashboardView extends View {
         if (status == null) return "未读";
         if (MeterReading.LOW.equals(status)) return "低限";
         if (MeterReading.HIGH.equals(status)) return "超限";
+        if (MeterReading.DISCONNECTED.equals(status)) return "负载断开";
         if (MeterReading.OFFLINE.equals(status)) return "离线";
         return "正常";
     }
@@ -2293,6 +2297,7 @@ public final class MeterDashboardView extends View {
         if (status == null) return INK3;
         if (MeterReading.LOW.equals(status)) return C_LOW;
         if (MeterReading.HIGH.equals(status)) return C_HIGH;
+        if (MeterReading.DISCONNECTED.equals(status)) return C_DISC;
         if (MeterReading.OFFLINE.equals(status)) return C_OFF;
         return C_OK;
     }
@@ -2313,6 +2318,12 @@ public final class MeterDashboardView extends View {
     private int warmColor(int ma) {
         if (ma < 0) {
             return C_OFF;
+        }
+        // 负载断开落在连续色标的冷端,而那一端画出来是「离低限还远」的琥珀偏绿。
+        // 数字必须和状态标签说同一件事,否则中心一个暖色的 0.003、下面一行写着
+        // 负载断开,界面自己跟自己打架。
+        if (ma < MeterReading.DISCONNECT_MA) {
+            return C_DISC;
         }
         float amps = ma / 1000f;
         float lowBand = Math.max(0.02f, lowMa * 0.8f / 1000f);
