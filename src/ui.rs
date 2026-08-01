@@ -1,5 +1,5 @@
 //! The local readout: an SSD1306 that is dark except for the second after a
-//! reading, and that is allowed to be absent.
+//! reading, and that is allowed to stop answering.
 //!
 //! Nothing here looks at the supply. `main` does not reach its first reading
 //! until the rail has come up, so by the time a panel exists to bring up it is
@@ -52,12 +52,12 @@ impl Panel {
     /// it the pins it had stolen, so the next attempt starts from the same
     /// state as the first one did.
     ///
-    /// Nothing limits how many attempts a power cycle may make. An absent
-    /// display NACKs the address byte of `init`'s first command, which ends the
-    /// attempt inside 30 us -- once per reading, on a bus that is idle in
-    /// between. That is cheaper than any rule for deciding a panel is gone for
-    /// good, and it means a display plugged in mid-run comes up on the next
-    /// reading.
+    /// Nothing limits how many attempts a power cycle may make. The panel is
+    /// soldered to the board, so a NACK never means it is gone -- it means the
+    /// rail sagged under it or the bus glitched, and both of those come back.
+    /// There is no state a retry could be wrong about, and the attempt that
+    /// finds the panel still silent ends on the address byte of `init`'s first
+    /// command, inside 30 us, once per reading.
     fn get(&mut self) -> Option<&mut Oled> {
         if self.display.is_none() {
             // SAFETY: PB2/PB3 are used by nothing else in this firmware, and
@@ -69,11 +69,11 @@ impl Panel {
 
     /// Drop the driver so the next reading brings the panel up from scratch.
     ///
-    /// A panel that stops acknowledging has either lost its rail or lost the
-    /// bus, and a panel that comes back from either one comes back reset: its
-    /// GDDRAM, its addressing mode and its charge pump are no longer what this
-    /// driver assumes, and only a fresh `init` puts them back. Keeping the
-    /// driver would keep writing frames that land nowhere.
+    /// A panel that stops acknowledging has lost its rail or lost the bus, and
+    /// it comes back from either one reset: its GDDRAM, its addressing mode and
+    /// its charge pump are no longer what this driver assumes, and only a fresh
+    /// `init` puts them back. Keeping the driver would keep writing frames that
+    /// land nowhere.
     fn lost(&mut self) {
         self.display = None;
     }
