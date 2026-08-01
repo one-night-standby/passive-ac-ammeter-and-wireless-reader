@@ -57,13 +57,35 @@ const CMD_MAX: usize = 32;
 /// range, which is a number worth reporting rather than reshaping.
 const LINE_MAX: usize = 128;
 
-/// How long a line may sit unsent before the meter gives up on it.
+/// How long one chunk may sit unsent before the meter gives up on the line.
 ///
 /// A wait only happens when the ring is full, and at `BT_BAUD_RATE` the whole
 /// 192-byte ring is 17 ms of wire time, so anything past this is a port that
 /// has stopped clocking rather than one that is behind. Sized well clear of a
 /// legitimate backlog so it never fires on a link that is merely busy.
 const TX_DEADLINE_MS: u64 = 250;
+
+/// How much of a line goes into the module at a time.
+///
+/// One BLE notification on the default ATT MTU of 23 carries 20 bytes, and the
+/// module has one connection event to send it in. Nothing tells the meter when
+/// that has happened: the HC-42 has no flow control, so its UART and its radio
+/// are two unsynchronised rates with only the module's own buffer between them
+/// -- and the meter's side is faster by three orders of magnitude. Handing it a
+/// whole 62-byte frame at `BT_BAUD_RATE` delivers it in 5 ms and asks the module
+/// to hold the remainder for several connection intervals, which is how a frame
+/// comes back to the reader with its tail missing, or not at all. The heartbeat
+/// is 15 bytes and never shows it.
+const BT_PACKET_MAX: usize = 20;
+
+/// The pause between chunks: one connection interval, so each chunk is picked
+/// up before the next arrives.
+///
+/// Android settles a BLE connection at 30-50 ms and the module publishes no
+/// preference, so this is set from the slow end. It costs one interval per
+/// chunk on the way out -- about 350 ms for a whole reading -- which is spent
+/// inside the reader's reply window and buys the frames actually arriving.
+const BT_PACKET_GAP_MS: u64 = 50;
 
 /// How often the meter announces itself while idle. Cheap enough to ignore:
 /// one 17-byte line is 18 ms of 9600-baud UART and no analog blocks at all,
@@ -237,12 +259,23 @@ impl Link {
     /// comes back, so an abandoned line can surface as one truncated frame. The
     /// parser drops it on the newline it does not fit, which costs the line
     /// after it and nothing further.
+    /// Paced at `BT_PACKET_MAX` a chunk so the module is never handed more than
+    /// it can put on the air before the next chunk lands. The gap goes in front
+    /// of every chunk, this line's first one included: two lines of a reading go
+    /// out back to back, and the module cannot tell where one ends.
     async fn put_line(&mut self, line: &str) {
-        let _ = with_timeout(
-            Duration::from_millis(TX_DEADLINE_MS),
-            self.uart.write_all(line.as_bytes()),
-        )
-        .await;
+        for chunk in line.as_bytes().chunks(BT_PACKET_MAX) {
+            Timer::after_millis(BT_PACKET_GAP_MS).await;
+            if with_timeout(
+                Duration::from_millis(TX_DEADLINE_MS),
+                self.uart.write_all(chunk),
+            )
+            .await
+            .is_err()
+            {
+                return;
+            }
+        }
     }
 
     /// "I am here, and I am meter n." Carries no reading on purpose: this is a
