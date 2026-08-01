@@ -20,8 +20,8 @@ use crate::range::{Gain, Range};
 /// accuracy -- 1(1) is "误差 ... 相对于标定电流表读数". So any error a single
 /// scale factor can absorb is already free, and what is left after fitting is
 /// only what a straight line *cannot* absorb: curvature across the 20:1 range.
-/// And there is a great deal of it. Sensitivity runs 449 LSB/A at 1.15 A down
-/// to 117 LSB/A at 0.12 A -- a factor of 3.8 -- so no line, and no two- or
+/// And there is a great deal of it. Sensitivity runs 444 LSB/A at 1.15 A down
+/// to 136 LSB/A at 0.12 A -- a factor of 3.3 -- so no line, and no two- or
 /// three-constant curve, reaches the bottom of the measuring range. A dense
 /// table does, and it needs no model of the mechanism.
 ///
@@ -45,118 +45,123 @@ use crate::range::{Gain, Range};
 /// because a PGA multiplies both.
 ///
 /// TO REFILL: `cargo xtask cal-log`, sweep the load across the range, and run
-/// the reduction below over the CSV it writes.
+/// the selection below over the CSV it writes.
 ///
-/// Reduced from a 215-frame run (`cal.csv`, 2026-08-01 10:04-10:22, address 6,
-/// reference SDM3055X-E, ADC on the 2.5 V VREF), covering 0.115 A to 2.38 A.
-/// The reduction takes every frame that carries both numbers, with no filter on
-/// the quality flag, and does only what the table's own shape demands:
+/// Selected from a 362-frame run (`cal.csv`, 2026-08-01 16:57-17:16, address
+/// 13, reference SDM3055X-E, ADC on the 2.5 V VREF), 352 frames of which carry
+/// both numbers. Every entry below is one of those frames verbatim -- nothing
+/// here is a bin median, a fit, or any other number the bench did not read.
+/// The selection takes every frame that carries both numbers, with no filter on
+/// the quality flag, and only ever discards:
 ///
-/// - frames are sorted by RMS and grouped into 1%-wide bins; each bin enters as
-///   its median. Neighbouring frames of one held point differ by less than the
-///   bin width, so this is averaging, not selection;
-/// - the longest strictly-ascending subsequence of the binned points is kept.
-///   What it discards is the frames taken while the front end was still settling
-///   after a load step -- there the reference has moved and the meter has not,
-///   so the pair describes two different currents and no monotone table can
-///   contain it. 128 bins in, 94 out;
+/// - frames are sorted by RMS and the longest subsequence that strictly ascends
+///   in *both* columns is kept. What it discards is the frames taken while the
+///   front end was still settling after a load step -- there the reference has
+///   moved and the meter has not, so the pair describes two different currents
+///   and no monotone table can contain it. 352 in, 274 out;
 /// - a point is kept only if its RMS is at least 2% above the last kept one.
-///   Below that the segment is shorter than the scatter on its endpoints, and
-///   its slope is noise: without this rule the steepest segment is six times its
-///   neighbours. 94 in, 75 out, and the segment slopes span 0.28-10.4 mA/LSB.
+///   Below that the segment is shorter than the scatter on its endpoints and its
+///   slope is noise. The rule covers the two ends as well, which is where it
+///   matters most: the top of a sweep can hold two frames a fraction of an LSB
+///   apart whose references differ by most of an amp, and the last segment is
+///   the one `interpolate` extends to decide the `> 2 A` alarm. 274 in, 130 out;
+/// - of those, the fewest points whose piecewise-linear interpolation still
+///   reproduces all 130 within 0.3% -- picked by splitting at the worst-fitting
+///   point, so knots land where the curve bends rather than on a fixed grid.
+///   0.3% because tightening it to 0.2% moves the residual below by 0.02
+///   points: past here the limit is the scatter on the frames, not the knots.
+///   130 in, 68 out, and the segment slopes span 0.22-6.60 mA/LSB.
 ///
-/// Against the 32 frames of the run that sat in a settled stretch -- both the
-/// reference and the RMS steady across their neighbours, so the pairing is
-/// trustworthy -- the residual is 0.12% median, 0.45% at the 90th percentile,
-/// 6.2% worst.
+/// Against the 127 frames of the run that sit outside the 12 s following any 2%
+/// step on the reference -- long enough for the front end to have caught up, so
+/// the pairing is trustworthy -- the residual is 0.10% median, 0.36% at the
+/// 90th percentile, 0.91% worst. That window is cut on the reference and the
+/// clock alone: a frame is not excused from the check for disagreeing with the
+/// table. Local flatness will not do the same job, because for several seconds
+/// after a step both traces are flat at two different currents.
 ///
 /// What bounds this table:
 ///
-/// - The bottom is measured, not extrapolated: the run reaches 0.115 A, below
+/// - The bottom is measured, not extrapolated: the run reaches 0.0880 A, below
 ///   the 0.1 A the range asks for, so nothing under 0.2 A rests on an
-///   extension of the first segment.
-/// - Above 2.38 A the last segment is extended rather than clamped, so the
+///   extension of the first segment. It is thin down there all the same -- the
+///   first few frames carry 2 to 4 LSB of RMS, so those segments' slopes are
+///   worth about as much as a 3 LSB reading is.
+/// - Above 2.6763 A the last segment is extended rather than clamped, so the
 ///   `> 2 A` alarm of 2(3) fires at the right current.
 /// - **This is a single-direction sweep.** The front end takes seconds to settle
-///   after a load step, and the reduction drops the frames inside that, so the
+///   after a load step, and the selection drops the frames inside that, so the
 ///   table describes the settled value. A reading taken within a few seconds of
 ///   a load change will not match it.
 pub static CAL_X1: &[(f32, f32)] = &[
-    (13.56, 0.1155),
-    (14.71, 0.1182),
-    (15.21, 0.1202),
-    (18.60, 0.1242),
-    (20.87, 0.1280),
-    (22.56, 0.1298),
-    (23.71, 0.1346),
-    (25.94, 0.1377),
-    (27.44, 0.1404),
-    (28.98, 0.1431),
-    (31.07, 0.1459),
-    (32.16, 0.1496),
-    (34.03, 0.1525),
-    (35.39, 0.1546),
-    (36.68, 0.1584),
-    (38.24, 0.1607),
-    (39.23, 0.1631),
-    (41.04, 0.1657),
-    (42.46, 0.1694),
-    (43.82, 0.1714),
-    (46.09, 0.1743),
-    (47.49, 0.1786),
-    (48.56, 0.1817),
-    (52.14, 0.1872),
-    (53.85, 0.1898),
-    (59.11, 0.2014),
-    (64.25, 0.2085),
-    (65.73, 0.2116),
-    (68.97, 0.2162),
-    (73.02, 0.2222),
-    (77.10, 0.2303),
-    (80.25, 0.2363),
-    (84.29, 0.2422),
-    (86.02, 0.2454),
-    (89.75, 0.2527),
-    (91.99, 0.2563),
-    (94.94, 0.2641),
-    (106.37, 0.2673),
-    (118.81, 0.2901),
-    (128.43, 0.3114),
-    (137.13, 0.3349),
-    (151.29, 0.3394),
-    (159.53, 0.3900),
-    (173.21, 0.3968),
-    (188.68, 0.4538),
-    (193.65, 0.4796),
-    (225.37, 0.4894),
-    (241.51, 0.5622),
-    (279.41, 0.5855),
-    (286.44, 0.6587),
-    (296.60, 0.6796),
-    (303.83, 0.6952),
-    (317.93, 0.7040),
-    (331.62, 0.7314),
-    (340.22, 0.7756),
-    (353.14, 0.8165),
-    (387.60, 0.8729),
-    (396.67, 0.8924),
-    (435.73, 0.9701),
-    (458.57, 1.0265),
-    (515.12, 1.1485),
-    (554.68, 1.2324),
-    (617.90, 1.3650),
-    (676.45, 1.4024),
-    (696.77, 1.5127),
-    (747.14, 1.6166),
-    (788.33, 1.6800),
-    (823.22, 1.7859),
-    (855.40, 1.8768),
-    (896.34, 1.9269),
-    (927.08, 2.0224),
-    (955.55, 2.0823),
-    (990.81, 2.1549),
-    (1018.13, 2.2124),
-    (1093.01, 2.3797),
+    (2.27, 0.0880),
+    (2.64, 0.0893),
+    (3.77, 0.0909),
+    (4.30, 0.0944),
+    (5.74, 0.0988),
+    (7.40, 0.1029),
+    (9.28, 0.1067),
+    (9.48, 0.1078),
+    (10.21, 0.1095),
+    (10.96, 0.1101),
+    (13.28, 0.1143),
+    (14.26, 0.1169),
+    (15.90, 0.1191),
+    (17.60, 0.1227),
+    (20.20, 0.1271),
+    (21.60, 0.1282),
+    (22.37, 0.1305),
+    (24.47, 0.1337),
+    (25.62, 0.1362),
+    (29.49, 0.1421),
+    (37.66, 0.1592),
+    (39.68, 0.1628),
+    (41.27, 0.1671),
+    (44.61, 0.1720),
+    (46.28, 0.1759),
+    (50.50, 0.1833),
+    (51.97, 0.1857),
+    (58.45, 0.1871),
+    (63.23, 0.2068),
+    (66.75, 0.2141),
+    (68.11, 0.2154),
+    (72.36, 0.2235),
+    (80.26, 0.2366),
+    (88.15, 0.2517),
+    (105.09, 0.2862),
+    (108.72, 0.2990),
+    (111.93, 0.2998),
+    (125.07, 0.3259),
+    (145.02, 0.3668),
+    (151.59, 0.3893),
+    (156.98, 0.3920),
+    (174.03, 0.4281),
+    (180.54, 0.4391),
+    (214.61, 0.5170),
+    (234.26, 0.5561),
+    (239.65, 0.5699),
+    (283.56, 0.6612),
+    (354.30, 0.8161),
+    (372.74, 0.8571),
+    (386.11, 0.8928),
+    (395.20, 0.9024),
+    (444.27, 1.0044),
+    (478.03, 1.0837),
+    (489.56, 1.0972),
+    (499.72, 1.1298),
+    (512.25, 1.1520),
+    (558.70, 1.2566),
+    (593.30, 1.3241),
+    (695.66, 1.5441),
+    (735.20, 1.6659),
+    (752.66, 1.6703),
+    (799.88, 1.7617),
+    (820.14, 1.8176),
+    (867.90, 1.8660),
+    (887.65, 1.9574),
+    (997.20, 2.2043),
+    (1021.62, 2.2281),
+    (1218.58, 2.6763),
 ];
 
 pub static CAL_X2: &[(f32, f32)] = &[];
@@ -196,15 +201,16 @@ pub fn cal_for(range: Range) -> &'static [(f32, f32)] {
 ///
 /// Fitted to the same rows as `CAL_X1`, by least squares on *relative* error (a
 /// reading is judged as a percentage) and through the origin (the only shape
-/// `lsb_to_amps` can use here). Worst case 69% across those rows, at the bottom
+/// `lsb_to_amps` can use here). Worst case 93% across those rows, at the bottom
 /// of the range -- a single scale factor cannot follow a sensitivity that moves
-/// by 3.8x, which is the whole reason `CAL_X1` is a table. Nothing that reaches
+/// by 3.3x across the measuring range and by 18x once the rows below 0.1 A are
+/// counted, which is the whole reason `CAL_X1` is a table. Nothing that reaches
 /// this constant is calibrated; it exists so an unfilled step reads a plausible
 /// number instead of a wild one.
 ///
 /// Written to the shortest decimal that round-trips through f32, so the source
 /// does not imply a precision this constant does not have.
-pub const CAL_FALLBACK_A_PER_LSB: f32 = 0.0026078339;
+pub const CAL_FALLBACK_A_PER_LSB: f32 = 0.002685222;
 
 pub const CAL_FALLBACK_GAIN: f32 = 1.0;
 
