@@ -10,16 +10,23 @@
 //! Read against the same 2.5 V reference the measurement chain runs on, which
 //! is the only reference this program ever selects. VDD/3 is 1.1 V at 3.3 V, so
 //! the answer sits at code 1802 of 4095 -- 44% of the scale, 1.83 mV of supply
-//! per code -- and full scale is 7.5 V, far above the 3.6 V the MCU is rated to,
-//! so no supply the part survives can push the code off the top and come back
-//! looking like a healthy rail.
+//! per code -- and full scale is 7.5 V.
+//!
+//! The code is a *ratio*, VDD/3 over VREF, so everything this module concludes
+//! rests on VREF actually being at 2.5 V when the sample is taken. A reference
+//! that is low reads the supply high, in direct proportion, and the one thing
+//! that reliably makes it low is not having waited for it: `vref::init` returns
+//! on the READY bit, which says the reference core is running, not that the
+//! 1 uF CVREF it drives has charged. Hence `VREF_SETTLE_MS` below, and hence
+//! `MAX_PLAUSIBLE_CODE` -- above 3.6 V there is no supply the part survives, so
+//! a code that high is a statement about the reference and not about the rail.
 //!
 //! The 2.5 V setting needs VDD >= 2.7 V to be in spec, which is *below* the
 //! voltage being judged, so the verdict is taken where the reference is valid.
-//! Under 2.7 V the reference sags with the supply it is powered from, and a
-//! sagging reference makes the code read high rather than low -- to fake a pass
-//! at 3.3 V it would have to collapse to 1.97 V, which is a supply the CPU is
-//! not executing at. Out of spec here means imprecise, not wrong-sided.
+//! Under 2.7 V the reference sags with the supply it is powered from, and that
+//! sag reads high too -- to fake a pass at 3.3 V it would have to collapse to
+//! 1.97 V, which is a supply the CPU is not executing at. Out of spec here
+//! means imprecise, not wrong-sided.
 //!
 //! The 1.4 V setting BUFCONFIG also offers would be valid further down, and is
 //! still not worth having: a second reference voltage means CVREF has to be
@@ -61,11 +68,41 @@ const FULL_SCALE_MV: u32 = 3 * 2_500;
 
 const CODES: u32 = 4096;
 
-/// How often the rail is re-measured while `wait_above` waits on it. Each look
-/// is one reference bring-up and one conversion, a few hundred microseconds, so
-/// this is also the duty cycle VREF and ADC0 run at across the wait -- neither
-/// is left enabled between looks.
-const POLL_MS: u64 = 20;
+/// The most the part is rated to be powered at (datasheet 7.1), as a code. The
+/// converter cannot report a supply above this from a chip that is executing,
+/// so a code at or past it did not come from the rail -- it came from a
+/// reference that had not reached 2.5 V, which pushes the ratio up without
+/// bound and clips at full scale.
+///
+/// Not the fix for an unsettled reference, only the floor under it: a reference
+/// that is merely *part way* up reads high by a factor this cannot see. What it
+/// does catch is the collapse -- and a collapsed reference otherwise reports
+/// 7.5 V, which passes every threshold anyone would write here.
+const MAX_PLAUSIBLE_CODE: u16 = (3_600 * CODES / FULL_SCALE_MV) as u16;
+
+/// How long the reference is given after `vref::init` returns, before the
+/// sample that is scaled against it.
+///
+/// READY is not settling. It reports the reference core running; CVREF is 1 uF
+/// hung off a buffer whose whole quiescent budget is 189 uA, and it starts a
+/// power cycle discharged. Sample before it has arrived and the ratio reads
+/// high -- which on a gate means opening below the threshold, the one failure
+/// direction that matters here.
+///
+/// Same 20 ms `meter::measure` gives it inside AFE_SETTLE_MS. Not a figure this
+/// module derived: it is the settle every reading in `cal.csv` was taken after,
+/// so it is the one span on this board with evidence behind it.
+const VREF_SETTLE_MS: u64 = 20;
+
+/// How often the rail is re-measured while `wait_above` waits on it.
+///
+/// Long against `VREF_SETTLE_MS` on purpose. A look is now the settle plus a
+/// conversion rather than a conversion alone, and the reference is enabled for
+/// all of it, so the ratio of the two is the duty cycle VREF runs at across the
+/// wait: 10%, or 19 uA of the 189 uA typ it draws enabled. Shortening this does
+/// not find the rail sooner in any way that matters -- the rail is climbing
+/// over seconds -- it just spends the charge that climb is made of.
+const POLL_MS: u64 = 200;
 
 /// Block until the rail is at `min_mv` or above. There is no deadline: a supply
 /// that never gets there waits here forever.
@@ -76,24 +113,32 @@ const POLL_MS: u64 = 20;
 /// a rail that may still be climbing, and the whole thing being waited for -- or
 /// a missing CVREF, which is a board that has nothing to measure against.
 pub async fn wait_above(min_mv: u16) {
-    while !millivolts().is_some_and(|mv| mv >= min_mv) {
+    while !millivolts().await.is_some_and(|mv| mv >= min_mv) {
         Timer::after_millis(POLL_MS).await;
     }
 }
 
 /// VDD in millivolts, or `None` if it could not be measured.
 ///
-/// `None` means the reference never reported ready, which is either a supply
-/// below the 2.7 V it needs or a missing CVREF cap -- and neither leaves a
-/// number worth returning.
-pub fn millivolts() -> Option<u16> {
-    let code = if vref::init() { convert() } else { None };
+/// `None` covers two cases, and both mean "no number", not "carry on". The
+/// reference never reported ready -- a supply below the 2.7 V it needs, or a
+/// missing CVREF cap. Or it reported a supply the part cannot be running at,
+/// which says the reference was not at 2.5 V when the sample was taken and so
+/// says nothing about the rail.
+pub async fn millivolts() -> Option<u16> {
+    let code = if vref::init() {
+        Timer::after_millis(VREF_SETTLE_MS).await;
+        convert()
+    } else {
+        None
+    };
     vref::power_down();
     // Rounded, not truncated. One code is 1.83 mV of supply and the converter
     // has already floored once; flooring the scaling too would put an exact
     // 3.3 V rail at 3298 mV, under a threshold someone will reasonably write
     // as 3300.
-    code.map(|code| ((u32::from(code) * FULL_SCALE_MV + CODES / 2) / CODES) as u16)
+    code.filter(|&code| code < MAX_PLAUSIBLE_CODE)
+        .map(|code| ((u32::from(code) * FULL_SCALE_MV + CODES / 2) / CODES) as u16)
 }
 
 /// One software-triggered conversion of channel 15, ADC0 powered down again

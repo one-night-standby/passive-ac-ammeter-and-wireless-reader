@@ -5,7 +5,8 @@ runner = "pyocd flash --target mspm0g3507 --format elf"
 target = "thumbv6m-none-eabi"
 
 [alias]
-# xtask is a host-side tool (DSO screenshot/waveform export), not firmware;
+# xtask is host-side tooling (DSO export, bench calibration logging), not
+# firmware;
 # --target here overrides `build.target` above regardless of invocation
 # directory (config-file target settings only apply via directory
 # discovery, but a CLI --target flag always wins).

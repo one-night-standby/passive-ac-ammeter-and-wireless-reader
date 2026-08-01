@@ -215,7 +215,7 @@ dependencies = [
 [[package]]
 name = "embassy-embedded-hal"
 version = "0.6.0"
-source = "git+https://github.com/ozongzi/embassy?rev=f6daf50db52bb90e7dbee2314a04eee77b46b03b#f6daf50db52bb90e7dbee2314a04eee77b46b03b"
+source = "git+https://github.com/ozongzi/embassy?rev=79e1a3747#79e1a3747a2309f4f0cec0cafd7d9fc3c8fe2a0d"
 dependencies = [
  "embassy-futures",
  "embassy-hal-internal",
@@ -231,7 +231,7 @@ dependencies = [
 [[package]]
 name = "embassy-executor"
 version = "0.10.0"
-source = "git+https://github.com/ozongzi/embassy?rev=f6daf50db52bb90e7dbee2314a04eee77b46b03b#f6daf50db52bb90e7dbee2314a04eee77b46b03b"
+source = "git+https://github.com/ozongzi/embassy?rev=79e1a3747#79e1a3747a2309f4f0cec0cafd7d9fc3c8fe2a0d"
 dependencies = [
  "cordyceps",
  "cortex-m",
@@ -244,7 +244,7 @@ dependencies = [
 [[package]]
 name = "embassy-executor-macros"
 version = "0.8.0"
-source = "git+https://github.com/ozongzi/embassy?rev=f6daf50db52bb90e7dbee2314a04eee77b46b03b#f6daf50db52bb90e7dbee2314a04eee77b46b03b"
+source = "git+https://github.com/ozongzi/embassy?rev=79e1a3747#79e1a3747a2309f4f0cec0cafd7d9fc3c8fe2a0d"
 dependencies = [
  "darling",
  "proc-macro2",
@@ -255,17 +255,17 @@ dependencies = [
 [[package]]
 name = "embassy-executor-timer-queue"
 version = "0.1.0"
-source = "git+https://github.com/ozongzi/embassy?rev=f6daf50db52bb90e7dbee2314a04eee77b46b03b#f6daf50db52bb90e7dbee2314a04eee77b46b03b"
+source = "git+https://github.com/ozongzi/embassy?rev=79e1a3747#79e1a3747a2309f4f0cec0cafd7d9fc3c8fe2a0d"
 
 [[package]]
 name = "embassy-futures"
 version = "0.1.2"
-source = "git+https://github.com/ozongzi/embassy?rev=f6daf50db52bb90e7dbee2314a04eee77b46b03b#f6daf50db52bb90e7dbee2314a04eee77b46b03b"
+source = "git+https://github.com/ozongzi/embassy?rev=79e1a3747#79e1a3747a2309f4f0cec0cafd7d9fc3c8fe2a0d"
 
 [[package]]
 name = "embassy-hal-internal"
 version = "0.5.0"
-source = "git+https://github.com/ozongzi/embassy?rev=f6daf50db52bb90e7dbee2314a04eee77b46b03b#f6daf50db52bb90e7dbee2314a04eee77b46b03b"
+source = "git+https://github.com/ozongzi/embassy?rev=79e1a3747#79e1a3747a2309f4f0cec0cafd7d9fc3c8fe2a0d"
 dependencies = [
  "cortex-m",
  "critical-section",
@@ -275,7 +275,7 @@ dependencies = [
 [[package]]
 name = "embassy-mspm0"
 version = "0.1.0"
-source = "git+https://github.com/ozongzi/embassy?rev=f6daf50db52bb90e7dbee2314a04eee77b46b03b#f6daf50db52bb90e7dbee2314a04eee77b46b03b"
+source = "git+https://github.com/ozongzi/embassy?rev=79e1a3747#79e1a3747a2309f4f0cec0cafd7d9fc3c8fe2a0d"
 dependencies = [
  "cfg_aliases",
  "cortex-m",
@@ -306,7 +306,7 @@ dependencies = [
 [[package]]
 name = "embassy-sync"
 version = "0.8.0"
-source = "git+https://github.com/ozongzi/embassy?rev=f6daf50db52bb90e7dbee2314a04eee77b46b03b#f6daf50db52bb90e7dbee2314a04eee77b46b03b"
+source = "git+https://github.com/ozongzi/embassy?rev=79e1a3747#79e1a3747a2309f4f0cec0cafd7d9fc3c8fe2a0d"
 dependencies = [
  "cfg-if",
  "critical-section",
@@ -319,7 +319,7 @@ dependencies = [
 [[package]]
 name = "embassy-time"
 version = "0.5.1"
-source = "git+https://github.com/ozongzi/embassy?rev=f6daf50db52bb90e7dbee2314a04eee77b46b03b#f6daf50db52bb90e7dbee2314a04eee77b46b03b"
+source = "git+https://github.com/ozongzi/embassy?rev=79e1a3747#79e1a3747a2309f4f0cec0cafd7d9fc3c8fe2a0d"
 dependencies = [
  "cfg-if",
  "critical-section",
@@ -334,7 +334,7 @@ dependencies = [
 [[package]]
 name = "embassy-time-driver"
 version = "0.2.2"
-source = "git+https://github.com/ozongzi/embassy?rev=f6daf50db52bb90e7dbee2314a04eee77b46b03b#f6daf50db52bb90e7dbee2314a04eee77b46b03b"
+source = "git+https://github.com/ozongzi/embassy?rev=79e1a3747#79e1a3747a2309f4f0cec0cafd7d9fc3c8fe2a0d"
 dependencies = [
  "document-features",
 ]
@@ -342,7 +342,7 @@ dependencies = [
 [[package]]
 name = "embassy-time-queue-utils"
 version = "0.3.2"
-source = "git+https://github.com/ozongzi/embassy?rev=f6daf50db52bb90e7dbee2314a04eee77b46b03b#f6daf50db52bb90e7dbee2314a04eee77b46b03b"
+source = "git+https://github.com/ozongzi/embassy?rev=79e1a3747#79e1a3747a2309f4f0cec0cafd7d9fc3c8fe2a0d"
 dependencies = [
  "embassy-executor-timer-queue",
  "heapless 0.9.3",

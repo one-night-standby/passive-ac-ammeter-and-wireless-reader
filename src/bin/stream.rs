@@ -18,7 +18,7 @@
 //! parses (`MeterFrameParser.FRAME_PATTERN`), and its regex anchors at the end
 //! of the line, so nothing may be appended to it. `METER_CAL` carries what a
 //! calibration run needs and the phone silently ignores: the raw RMS, the gain
-//! it was taken at, and the probe's view of the input. `tools/cal_log.py`
+//! it was taken at, and the probe's view of the input. `cargo xtask cal-log`
 //! parses both.
 
 use embassy_executor::Spawner;
@@ -108,7 +108,7 @@ async fn main(spawner: Spawner) -> ! {
     };
 
     loop {
-        link.send(address.read(), &reading);
+        link.send(address.read(), &reading).await;
         Timer::after_millis(PERIOD_MS).await;
         reading = meter.measure(&mut dma).await;
     }
