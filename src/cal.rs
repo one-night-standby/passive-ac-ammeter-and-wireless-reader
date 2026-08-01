@@ -20,10 +20,11 @@ use crate::range::{Gain, Range};
 /// accuracy -- 1(1) is "误差 ... 相对于标定电流表读数". So any error a single
 /// scale factor can absorb is already free, and what is left after fitting is
 /// only what a straight line *cannot* absorb: curvature across the 20:1 range.
-/// And there is a great deal of it. Sensitivity runs 444 LSB/A at 1.15 A down
-/// to 136 LSB/A at 0.12 A -- a factor of 3.3 -- so no line, and no two- or
-/// three-constant curve, reaches the bottom of the measuring range. A dense
-/// table does, and it needs no model of the mechanism.
+/// And there is a great deal of it. Sensitivity runs 457 LSB/A at 1.90 A down
+/// to 171 LSB/A at 0.13 A -- a factor of 2.7 -- so no scale factor reaches the
+/// bottom of the measuring range, and the best straight line with a free offset
+/// still misses by 3.2%, six times the budget. A table does, and it needs no
+/// model of the mechanism.
 ///
 /// Also why nothing here should "correct" toward theory: if the reference
 /// instrument reads 2% low, matching it scores full marks and being right
@@ -44,124 +45,53 @@ use crate::range::{Gain, Range};
 /// choice. It stays that way while the front end's DC tracks its signal,
 /// because a PGA multiplies both.
 ///
-/// TO REFILL: `cargo xtask cal-log`, sweep the load across the range, and run
-/// the selection below over the CSV it writes.
+/// TO REFILL: set a load, let the front end settle, and record the pair the
+/// meter's second line and the reference ammeter show at the same moment. The
+/// bench app's calibration screen keeps the list and exports it; `cargo xtask
+/// cal-log` logs the same pairs to CSV when the reference is on USBTMC.
 ///
-/// Selected from a 362-frame run (`cal.csv`, 2026-08-01 16:57-17:16, address
-/// 13, reference SDM3055X-E, ADC on the 2.5 V VREF), 352 frames of which carry
-/// both numbers. Every entry below is one of those frames verbatim -- nothing
-/// here is a bin median, a fit, or any other number the bench did not read.
-/// The selection takes every frame that carries both numbers, with no filter on
-/// the quality flag, and only ever discards:
-///
-/// - frames are sorted by RMS and the longest subsequence that strictly ascends
-///   in *both* columns is kept. What it discards is the frames taken while the
-///   front end was still settling after a load step -- there the reference has
-///   moved and the meter has not, so the pair describes two different currents
-///   and no monotone table can contain it. 352 in, 274 out;
-/// - a point is kept only if its RMS is at least 2% above the last kept one.
-///   Below that the segment is shorter than the scatter on its endpoints and its
-///   slope is noise. The rule covers the two ends as well, which is where it
-///   matters most: the top of a sweep can hold two frames a fraction of an LSB
-///   apart whose references differ by most of an amp, and the last segment is
-///   the one `interpolate` extends to decide the `> 2 A` alarm. 274 in, 130 out;
-/// - of those, the fewest points whose piecewise-linear interpolation still
-///   reproduces all 130 within 0.3% -- picked by splitting at the worst-fitting
-///   point, so knots land where the curve bends rather than on a fixed grid.
-///   0.3% because tightening it to 0.2% moves the residual below by 0.02
-///   points: past here the limit is the scatter on the frames, not the knots.
-///   130 in, 68 out, and the segment slopes span 0.22-6.60 mA/LSB.
-///
-/// Against the 127 frames of the run that sit outside the 12 s following any 2%
-/// step on the reference -- long enough for the front end to have caught up, so
-/// the pairing is trustworthy -- the residual is 0.10% median, 0.36% at the
-/// 90th percentile, 0.91% worst. That window is cut on the reference and the
-/// clock alone: a frame is not excused from the check for disagreeing with the
-/// table. Local flatness will not do the same job, because for several seconds
-/// after a step both traces are flat at two different currents.
+/// Sixteen points, one per load setting, each pair read off the bench verbatim
+/// -- nothing here is a bin median, a fit, or any other number the bench did
+/// not produce. Sixteen is also `FIELD_MAX`, so a pushed table can describe
+/// this range at the same resolution this one does; the built-in table is not
+/// the denser of the two.
 ///
 /// What bounds this table:
 ///
-/// - The bottom is measured, not extrapolated: the run reaches 0.0880 A, below
-///   the 0.1 A the range asks for, so nothing under 0.2 A rests on an
-///   extension of the first segment. It is thin down there all the same -- the
-///   first few frames carry 2 to 4 LSB of RMS, so those segments' slopes are
-///   worth about as much as a 3 LSB reading is.
-/// - Above 2.6763 A the last segment is extended rather than clamped, so the
-///   `> 2 A` alarm of 2(3) fires at the right current.
-/// - **This is a single-direction sweep.** The front end takes seconds to settle
-///   after a load step, and the selection drops the frames inside that, so the
-///   table describes the settled value. A reading taken within a few seconds of
-///   a load change will not match it.
+/// - It spans 0.1305 to 1.9000 A. Both ends are extended rather than clamped:
+///   2 A lands 48 LSB past the last point, about a third of the last segment's
+///   own span, so the `> 2 A` alarm of 2(3) fires close to the right current.
+/// - **The bottom of the measuring range is not measured here.** The first
+///   point is 0.1305 A, so 0.12 A -- and the 0.1 A the range asks for -- read
+///   on the first segment extended downward, and that segment's slope comes
+///   from two readings 13 mA apart. Extended far enough it stops meaning
+///   anything: at zero RMS this table says 0.093 A. A point below 0.13 A is
+///   what fixes that, and no argument here substitutes for one.
+/// - Nothing measures 0.167 to 0.293 A either: 42.75 and 109.07 LSB are
+///   adjacent rows. That is a 1.75:1 step in current across one chord, against
+///   1.28:1 for the next widest gap, and it ends right where the sensitivity
+///   is known to bend (see `FIELD_MAX`).
+/// - **These are settled readings.** The front end takes seconds to catch up
+///   after a load step. A reading taken within a few seconds of a load change
+///   will not match this table, and a point recorded there does not belong in
+///   it.
 pub static CAL_X1: &[(f32, f32)] = &[
-    (2.27, 0.0880),
-    (2.64, 0.0893),
-    (3.77, 0.0909),
-    (4.30, 0.0944),
-    (5.74, 0.0988),
-    (7.40, 0.1029),
-    (9.28, 0.1067),
-    (9.48, 0.1078),
-    (10.21, 0.1095),
-    (10.96, 0.1101),
-    (13.28, 0.1143),
-    (14.26, 0.1169),
-    (15.90, 0.1191),
-    (17.60, 0.1227),
-    (20.20, 0.1271),
-    (21.60, 0.1282),
-    (22.37, 0.1305),
-    (24.47, 0.1337),
-    (25.62, 0.1362),
-    (29.49, 0.1421),
-    (37.66, 0.1592),
-    (39.68, 0.1628),
-    (41.27, 0.1671),
-    (44.61, 0.1720),
-    (46.28, 0.1759),
-    (50.50, 0.1833),
-    (51.97, 0.1857),
-    (58.45, 0.1871),
-    (63.23, 0.2068),
-    (66.75, 0.2141),
-    (68.11, 0.2154),
-    (72.36, 0.2235),
-    (80.26, 0.2366),
-    (88.15, 0.2517),
-    (105.09, 0.2862),
-    (108.72, 0.2990),
-    (111.93, 0.2998),
-    (125.07, 0.3259),
-    (145.02, 0.3668),
-    (151.59, 0.3893),
-    (156.98, 0.3920),
-    (174.03, 0.4281),
-    (180.54, 0.4391),
-    (214.61, 0.5170),
-    (234.26, 0.5561),
-    (239.65, 0.5699),
-    (283.56, 0.6612),
-    (354.30, 0.8161),
-    (372.74, 0.8571),
-    (386.11, 0.8928),
-    (395.20, 0.9024),
-    (444.27, 1.0044),
-    (478.03, 1.0837),
-    (489.56, 1.0972),
-    (499.72, 1.1298),
-    (512.25, 1.1520),
-    (558.70, 1.2566),
-    (593.30, 1.3241),
-    (695.66, 1.5441),
-    (735.20, 1.6659),
-    (752.66, 1.6703),
-    (799.88, 1.7617),
-    (820.14, 1.8176),
-    (867.90, 1.8660),
-    (887.65, 1.9574),
-    (997.20, 2.2043),
-    (1021.62, 2.2281),
-    (1218.58, 2.6763),
+    (22.31, 0.1305),
+    (30.09, 0.1435),
+    (35.07, 0.1540),
+    (42.75, 0.1670),
+    (109.07, 0.2930),
+    (130.00, 0.3360),
+    (157.68, 0.3950),
+    (185.34, 0.4550),
+    (223.49, 0.5340),
+    (273.93, 0.6400),
+    (358.55, 0.8160),
+    (455.47, 1.0330),
+    (545.09, 1.2240),
+    (630.57, 1.4040),
+    (745.60, 1.6450),
+    (868.68, 1.9000),
 ];
 
 pub static CAL_X2: &[(f32, f32)] = &[];
@@ -201,16 +131,15 @@ pub fn cal_for(range: Range) -> &'static [(f32, f32)] {
 ///
 /// Fitted to the same rows as `CAL_X1`, by least squares on *relative* error (a
 /// reading is judged as a percentage) and through the origin (the only shape
-/// `lsb_to_amps` can use here). Worst case 93% across those rows, at the bottom
-/// of the range -- a single scale factor cannot follow a sensitivity that moves
-/// by 3.3x across the measuring range and by 18x once the rows below 0.1 A are
-/// counted, which is the whole reason `CAL_X1` is a table. Nothing that reaches
-/// this constant is calibrated; it exists so an unfilled step reads a plausible
-/// number instead of a wild one.
+/// `lsb_to_amps` can use here). Worst case 57% across those rows, at the bottom
+/// of the range -- a line through the origin cannot follow a sensitivity that
+/// moves by 2.7x across the table, which is the whole reason `CAL_X1` is a
+/// table. Nothing that reaches this constant is calibrated; it exists so an
+/// unfilled step reads a plausible number instead of a wild one.
 ///
 /// Written to the shortest decimal that round-trips through f32, so the source
 /// does not imply a precision this constant does not have.
-pub const CAL_FALLBACK_A_PER_LSB: f32 = 0.002685222;
+pub const CAL_FALLBACK_A_PER_LSB: f32 = 0.0025214116;
 
 pub const CAL_FALLBACK_GAIN: f32 = 1.0;
 
