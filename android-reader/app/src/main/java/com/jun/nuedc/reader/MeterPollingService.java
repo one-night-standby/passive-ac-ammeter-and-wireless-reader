@@ -837,8 +837,8 @@ public final class MeterPollingService extends Service {
                     0, System.currentTimeMillis(), addr, currentMa,
                     MeterReading.classify(
                             currentMa,
-                            ReaderPreferences.DEFAULT_LOW_THRESHOLD_MA,
-                            ReaderPreferences.DEFAULT_HIGH_THRESHOLD_MA
+                            preferences.lowThresholdMa(),
+                            preferences.highThresholdMa()
                     ),
                     link.mac, link.name, link.rssi, "AUTO"
             ));
@@ -921,17 +921,26 @@ public final class MeterPollingService extends Service {
             return;
         }
         long remainingSeconds = Math.max(1L, (remainingMs + 999L) / 1_000L);
+        // 间隔可以长到 300 分钟。那时逐秒重画通知就是一万八千次没人看的刷新,
+        // 而「18000秒后」也不是人能一眼读出来的数。超过一分钟按分钟走,进了
+        // 最后一分钟再逐秒。
+        String left;
+        long delayMs;
+        if (remainingSeconds > 60L) {
+            long minutes = (remainingSeconds + 59L) / 60L;
+            left = minutes + "分钟";
+            delayMs = remainingMs - (minutes - 1L) * 60_000L;
+        } else {
+            left = remainingSeconds + "秒";
+            delayMs = remainingMs - (remainingSeconds - 1L) * 1_000L;
+        }
         updateNotification(String.format(
                 Locale.CHINA,
-                "%s · %d秒后自动存档",
+                "%s · %s后自动存档",
                 linkText(),
-                remainingSeconds
+                left
         ));
-        long untilNextSecond = remainingMs - (remainingSeconds - 1L) * 1_000L;
-        handler.postDelayed(
-                countdownTick,
-                Math.max(50L, Math.min(1_000L, untilNextSecond))
-        );
+        handler.postDelayed(countdownTick, Math.max(50L, Math.min(60_000L, delayMs)));
     }
 
     /* ══════════ 杂项 ══════════ */

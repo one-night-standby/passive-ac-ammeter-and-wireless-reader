@@ -6,9 +6,11 @@ import android.content.SharedPreferences;
 public final class ReaderPreferences {
     public static final int DEFAULT_LOW_THRESHOLD_MA = 200;
     public static final int DEFAULT_HIGH_THRESHOLD_MA = 2000;
+    /** 阈值可调的上限。电流表一帧最多七位数，但界面按 x.xxx A 显示，超过就写不下。 */
+    public static final int MAX_THRESHOLD_MA = 9_999;
     public static final int DEFAULT_POLLING_INTERVAL_SECONDS = 120;
     public static final int MIN_POLLING_INTERVAL_SECONDS = 10;
-    public static final int MAX_POLLING_INTERVAL_SECONDS = 300;
+    public static final int MAX_POLLING_INTERVAL_SECONDS = 300 * 60;
     public static final long SCAN_DURATION_MS = 8_000L;
     public static final long CONNECTION_TIMEOUT_MS = 10_000L;
     /**
@@ -21,6 +23,8 @@ public final class ReaderPreferences {
     private static final String FILE_NAME = "reader_settings";
     private static final String KEY_POLLING_INTERVAL_MINUTES = "polling_interval_minutes";
     private static final String KEY_POLLING_INTERVAL_SECONDS = "polling_interval_seconds";
+    private static final String KEY_LOW_THRESHOLD_MA = "low_threshold_ma";
+    private static final String KEY_HIGH_THRESHOLD_MA = "high_threshold_ma";
     private final SharedPreferences preferences;
 
     public ReaderPreferences(Context context) {
@@ -55,9 +59,36 @@ public final class ReaderPreferences {
     public void savePollingIntervalSeconds(int seconds) {
         if (seconds < MIN_POLLING_INTERVAL_SECONDS
                 || seconds > MAX_POLLING_INTERVAL_SECONDS) {
-            throw new IllegalArgumentException("Polling interval must be 10-300 seconds");
+            throw new IllegalArgumentException("Polling interval must be "
+                    + MIN_POLLING_INTERVAL_SECONDS + "-" + MAX_POLLING_INTERVAL_SECONDS
+                    + " seconds");
         }
         preferences.edit().putInt(KEY_POLLING_INTERVAL_SECONDS, seconds).apply();
+    }
+
+    public int lowThresholdMa() {
+        return clampThreshold(
+                preferences.getInt(KEY_LOW_THRESHOLD_MA, DEFAULT_LOW_THRESHOLD_MA));
+    }
+
+    public int highThresholdMa() {
+        int high = clampThreshold(
+                preferences.getInt(KEY_HIGH_THRESHOLD_MA, DEFAULT_HIGH_THRESHOLD_MA));
+        // 低限必须严格小于超限，否则 classify 会把每一个读数都判成越限。存的时候
+        // 已经拦过一次，这里兜住手改过 xml、或者只有一个键落盘的情况。
+        return high > lowThresholdMa() ? high : DEFAULT_HIGH_THRESHOLD_MA;
+    }
+
+    /** 两个阈值一起存：它们是一对约束，分开存会出现低限大于超限的中间态。 */
+    public void saveThresholds(int lowMa, int highMa) {
+        if (lowMa < 0 || highMa > MAX_THRESHOLD_MA || lowMa >= highMa) {
+            throw new IllegalArgumentException(
+                    "Thresholds must satisfy 0 <= low < high <= " + MAX_THRESHOLD_MA + " mA");
+        }
+        preferences.edit()
+                .putInt(KEY_LOW_THRESHOLD_MA, lowMa)
+                .putInt(KEY_HIGH_THRESHOLD_MA, highMa)
+                .apply();
     }
 
     public static String formatIntervalSeconds(int seconds) {
@@ -72,5 +103,9 @@ public final class ReaderPreferences {
                 MIN_POLLING_INTERVAL_SECONDS,
                 Math.min(MAX_POLLING_INTERVAL_SECONDS, seconds)
         );
+    }
+
+    private int clampThreshold(int ma) {
+        return Math.max(0, Math.min(MAX_THRESHOLD_MA, ma));
     }
 }
