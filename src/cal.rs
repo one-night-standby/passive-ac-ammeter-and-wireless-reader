@@ -257,6 +257,20 @@ const _: () = assert!(cal_strictly_ascending(CAL_X32), "{}", CAL_ORDER_MSG);
 /// costs 128 bytes of table and a 144-byte flash record.
 pub const FIELD_MAX: usize = 16;
 
+/// Raising it costs flash slots, not RAM. The record is `2 + FIELD_MAX` flash
+/// words and the store is one 1 KB sector, so 16 points give 144-byte records
+/// and seven of them per erase; 32 would give 272 bytes and three. Those slots
+/// are what lets a push append instead of erasing, which is the whole reason a
+/// brownout mid-push cannot leave the meter with neither table.
+const _: () = assert!(
+    // The staged-point mask is a `u16`, one bit per slot. Both ways it breaks
+    // past 16 are quiet: the shift in `stage_point` overflows, and the
+    // all-present mask in `commit_field` truncates -- between them a push that
+    // dropped points would commit as though it were complete.
+    FIELD_MAX <= u16::BITS as usize,
+    "FIELD_MAX is bounded by the width of the staged-point mask"
+);
+
 /// A calibration table small enough to travel over the link and live in flash.
 ///
 /// This is the same `(LSB, amps)` relation as `CAL_X1`, measured against

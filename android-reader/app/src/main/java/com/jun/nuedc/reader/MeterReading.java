@@ -13,11 +13,11 @@ public final class MeterReading {
     /**
      * 判成负载断开的上限，mA。
      *
-     * <p>低限是可调的报警阈值，这个不是：0.01 A 以下不是「电流小」而是「没有
+     * <p>低限是可调的报警阈值，这个不是：0.1 A 以下不是「电流小」而是「没有
      * 电流」，把它报成低限会让人去查负载为什么变轻，而实际上负载根本不在。两者
      * 要分开说，所以这个判据固定在前面，不跟着 {@link ReaderPreferences} 的低限走。
      */
-    public static final int DISCONNECT_MA = 10;
+    public static final int DISCONNECT_MA = 100;
 
     public final long id;
     public final long timestamp;
