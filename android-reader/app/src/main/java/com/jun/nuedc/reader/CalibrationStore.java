@@ -26,7 +26,9 @@ public final class CalibrationStore {
     private static final String KEY_PUSHED = "pushed";
 
     private static final int DEFAULT_ADDRESS = 6;
-    private static final int DEFAULT_TARGET_COUNT = 10;
+    /** 12 而不是 10:同一条靶位曲线上 10 点最坏弦误差 0.35%→0.47%,
+     *  而 0.5% 是全部预算,现场还要留给参考表本身和沉降。 */
+    private static final int DEFAULT_TARGET_COUNT = 12;
 
     private final SharedPreferences preferences;
 

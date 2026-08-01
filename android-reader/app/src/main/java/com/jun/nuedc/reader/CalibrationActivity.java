@@ -63,11 +63,27 @@ public final class CalibrationActivity extends Activity {
     private static final int MAX_POINTS = 16;
 
     /**
-     * 靶位的两端,单位 LSB。取自台上那次扫描的实际跨度(0.115 A 到 2.38 A),
-     * 也就是固件里 CAL_X1 的首尾——现场没必要、也没条件走得比它更宽。
+     * 靶位曲线,单位 LSB,17 个采样点;取 n 个靶位就是在它上面等间隔插值。
+     *
+     * <p>两端:低端 14 LSB(≈0.116 A,台上那次扫描到的最低点),高端 988 LSB
+     * (≈2.15 A)。高端<b>不是</b>固件表的顶(1093 LSB / 2.38 A):题面 6.1 的负载
+     * 只到 2.2 A,把靶位放在够不着的地方,操作的人会一直看到"调大负载"而永远
+     * 铺不满。2.15 A 又高于 2 A,所以 2(3) 的超限判决点落在插值段里,不靠外推。
+     *
+     * <p>中间的疏密不是等比的。误差集中在低端:同样 10 个点等比 log(RMS) 放,
+     * 最坏弦误差 0.47%,而逐段看,0.13-0.15 A 那一段一个人占掉 0.58%,0.34 A
+     * 以上每段都在 0.15% 以下——灵敏度从 117 LSB/A 涨到 449 LSB/A,低端一个
+     * ΔI 换来的 ΔRMS 少得多。所以这条曲线按曲率加权(节点密度 ∝ |g''|^½,
+     * g = ln I 对 ln RMS),再和等比各取一半。
+     *
+     * <p>取一半而不是全按曲率,是因为曲率本身估得不牢:台上那 215 帧里真正
+     * 沉降好的只有 22 帧、落在 9 个不同电流上,而且 0.294 A 到 0.888 A 之间
+     * 一帧都没有。全按曲率会把顶端拉成一根 2.5:1 的长弦,横跨的正是数据最
+     * 稀的那一段。各取一半后最宽段 1.75:1(12 点),形状还在,赌得少些。
      */
-    private static final double SPAN_LO_LSB = 13.5;
-    private static final double SPAN_HI_LSB = 1093.0;
+    private static final double[] TARGET_CURVE_LSB = {
+            14, 17, 21, 26, 33, 41, 51, 65, 83, 107, 139, 182, 241, 325, 448, 641, 988
+    };
 
     /** 认为一个靶位"已经有点了"的半径。比它更近的两个点,分段斜率就是噪声。 */
     private static final double TARGET_TOLERANCE = 0.15;
@@ -676,11 +692,16 @@ public final class CalibrationActivity extends Activity {
         return String.format(Locale.CHINA, "靶位已铺满,已记 %d 点", points.size());
     }
 
+    /** 在 {@link #TARGET_CURVE_LSB} 上等间隔取 {@link #targetCount} 个靶位。 */
     private double[] targets() {
         double[] targets = new double[targetCount];
-        double ratio = Math.log(SPAN_HI_LSB / SPAN_LO_LSB) / (targetCount - 1);
+        int last = TARGET_CURVE_LSB.length - 1;
         for (int i = 0; i < targetCount; i++) {
-            targets[i] = SPAN_LO_LSB * Math.exp(ratio * i);
+            double at = (double) i * last / (targetCount - 1);
+            int floor = Math.min((int) at, last - 1);
+            double frac = at - floor;
+            targets[i] = TARGET_CURVE_LSB[floor]
+                    + (TARGET_CURVE_LSB[floor + 1] - TARGET_CURVE_LSB[floor]) * frac;
         }
         return targets;
     }
