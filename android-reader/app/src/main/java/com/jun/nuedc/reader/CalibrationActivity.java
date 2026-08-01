@@ -400,7 +400,10 @@ public final class CalibrationActivity extends Activity {
             appendLog("· 表内:" + source + "," + count + " 点"
                     + (error == null ? "" : ",ERR=" + error));
             // 上一次提交的应答丢了、但表其实装上了,就是这条查询来兜的。
-            if ("FIELD".equals(source) && count == pushOrder.size()) {
+            // 重启之后 pushOrder 是空的,拿点数比——认不出是不是"我们这张",
+            // 但这个标志本来也只是给自动补推用的。
+            int mine = pushOrder.isEmpty() ? points.size() : pushOrder.size();
+            if ("FIELD".equals(source) && count == mine) {
                 store.markPushed(true);
             }
         }
