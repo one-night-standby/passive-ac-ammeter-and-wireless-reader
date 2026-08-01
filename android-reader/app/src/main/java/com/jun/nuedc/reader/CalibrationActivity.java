@@ -274,16 +274,21 @@ public final class CalibrationActivity extends Activity {
         row1.addView(flatButton("导出", v -> exportTable()));
         root.addView(row1, wide());
 
+        // 两个按钮是一个开关的两头,不是"做一件事"和"撤销"。表里两张表随时可以
+        // 换着用:出厂表一直在固件里,现场表的点一直在手机上,换过去换回来都不用
+        // 重新量。当场要证明现场标定确实在起作用,来回按这两个就是。
         LinearLayout row2 = new LinearLayout(this);
         row2.setOrientation(LinearLayout.HORIZONTAL);
-        row2.addView(flatButton("推送到表", v -> startPush()));
+        row2.addView(flatButton("推送并启用", v -> startPush()));
+        row2.addView(flatButton("切回出厂表", v -> clearMeterTable()));
         row2.addView(flatButton("读表内状态",
                 v -> sendCommand(String.format(Locale.ROOT, "CALGET,ADDR=%d", address))));
-        row2.addView(flatButton("清除表内表", v -> clearMeterTable()));
         root.addView(row2, wide());
 
         autoRepush = new CheckBox(this);
-        autoRepush.setText("掉电后自动重推(看到 SRC=ROM 时)");
+        // 只在"现场表已经启用"的前提下才补推。主动切回出厂表会先清掉那个前提,
+        // 所以这个勾不会把人刚切回去的表又推回来。
+        autoRepush.setText("启用现场表后,掉电退回出厂表时自动补推");
         autoRepush.setChecked(true);
         root.addView(autoRepush);
 
@@ -579,9 +584,19 @@ public final class CalibrationActivity extends Activity {
         refreshLive();
     }
 
+    /**
+     * 切回出厂表。
+     *
+     * <p>先落下"不要再自动推了"这个意思,再发命令。顺序反过来的话,{@code CALOFF}
+     * 生效后的第一帧就带着 {@code SRC=ROM} 回来,正好是自动重推等的那个条件——
+     * 于是刚切回去的表在一两秒内被推了回来,而界面上看不出发生过什么。
+     *
+     * <p>手机上的点不动:切回来只要按「推送并启用」,不用重新量一遍。
+     */
     private void clearMeterTable() {
+        store.markPushed(false);
         sendCommand(String.format(Locale.ROOT, "CALOFF,ADDR=%d", address));
-        appendLog("→ 已请求表回到出厂表");
+        appendLog("→ 切回出厂表(手机上的 " + points.size() + " 个点还在,可随时推回去)");
     }
 
     private void sendCommand(String line) {
@@ -609,8 +624,17 @@ public final class CalibrationActivity extends Activity {
                         settled ? "稳" : "动", spread() * 100));
             }
             text.append('\n');
-            text.append(String.format(Locale.CHINA, "表读  %8.3f A    FLAG=%s  SRC=%s\n",
-                    lastMa / 1000.0, lastFlag, lastSource));
+            text.append(String.format(Locale.CHINA, "表读  %8.3f A    FLAG=%s\n",
+                    lastMa / 1000.0, lastFlag));
+            // 说的是表此刻用哪张表出这个数,不是手机上有什么。这一行和 OLED 上
+            // 的读数是同一张表算出来的——现场标定改的就是它。
+            text.append("表内  ").append("FIELD".equals(lastSource)
+                    ? "现场表(手机推的)"
+                    : "ROM".equals(lastSource) ? "出厂表 CAL_X1" : "未知(" + lastSource + ")");
+            if (!points.isEmpty() && !store.pushed()) {
+                text.append("   手机上 ").append(points.size()).append(" 点未推");
+            }
+            text.append('\n');
         }
         text.append(nextTargetHint());
         if (pushingIndex >= 0) {
