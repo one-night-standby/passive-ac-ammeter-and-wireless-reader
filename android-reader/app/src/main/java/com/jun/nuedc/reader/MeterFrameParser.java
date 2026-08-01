@@ -9,10 +9,11 @@ import java.util.regex.Pattern;
 /**
  * 电流表上报的两种帧。
  *
- * <p>{@code METER_TEST} 是读数帧，正则锚到行尾，字段不可扩展。
- * {@code METER_CAL} 带原始 RMS、档位和质量标志，电流表在读数不可信时
- * <b>只发这一条、不发 METER_TEST</b>——所以它不是可选的调试信息：不解析它，
- * 「表故障」和「表离线」在读表器看来完全一样。
+ * <p>{@code METER_TEST} 是读数帧，正则锚到行尾，字段不可扩展。每一次读数都会
+ * 发这一条，电流表面板上显示什么，这里就是什么。
+ *
+ * <p>{@code METER_CAL} 带原始 RMS、档位和 FLAG，是给标定台用的：它和读数一起
+ * 发，不代替读数，FLAG 也不是读数的状态标记。
  */
 public final class MeterFrameParser {
     private static final int MAX_BUFFER_LENGTH = 2048;
@@ -121,7 +122,7 @@ public final class MeterFrameParser {
         public final int currentMa;
         /** METER_TEST 的 STATUS；METER_CAL 帧为 null。 */
         public final String meterStatus;
-        /** METER_CAL 的 FLAG；METER_TEST 帧为 null。OK 之外都表示这次读数不可信。 */
+        /** METER_CAL 的 FLAG；METER_TEST 帧为 null。标定台的旁注，不是读数的状态。 */
         public final String flag;
         /** 保活心跳：只说明这个地址此刻在线，不是任何请求的应答。 */
         public final boolean alive;
@@ -140,11 +141,6 @@ public final class MeterFrameParser {
         /** 带读数的帧。只有这种能落库。 */
         public boolean hasReading() {
             return currentMa >= 0;
-        }
-
-        /** 电流表答了，但明说这次读数不可信——必须和「没人应答」分开报。 */
-        public boolean isFault() {
-            return flag != null && !"OK".equals(flag);
         }
     }
 }

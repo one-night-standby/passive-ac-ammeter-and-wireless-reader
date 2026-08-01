@@ -256,19 +256,18 @@ impl Link {
 
     /// One reading, on the wire.
     ///
-    /// `METER_TEST` is withheld when the reading is one the meter cannot stand
-    /// behind, because that frame has nowhere to say so -- its STATUS field is
-    /// the alarm classification, and sending a fiction as NORMAL is worse than
-    /// sending nothing: a reader that stops hearing from a meter shows it
-    /// offline, which is true, while a confident wrong number is not.
+    /// Every reading goes out, whatever the meter thinks of it, and the number
+    /// on the wire is the number on the panel. The two readouts are one
+    /// instrument: a panel showing 0.42 A while the reader shows nothing is not
+    /// a meter being careful, it is a meter disagreeing with itself, and the
+    /// operator has no way to tell that from a link that dropped the frame.
     ///
-    /// `OverRange` is the exception. It means the signal will not fit even at
-    /// unity gain, which on this front end is a current past the top of scale
-    /// -- the number is understated but the direction is known, and that is
-    /// exactly the case 2(3) wants alarmed. It goes out as HIGH.
+    /// STATUS is the alarm classification of the number being sent and nothing
+    /// else. It is not a quality mark and does not change with one.
     ///
-    /// `METER_CAL` always goes out, including for the withheld cases. A frame
-    /// the bench cannot use is still evidence, and it carries its own FLAG.
+    /// `METER_CAL` carries the FLAG, so what the meter made of the reading is
+    /// still on the wire for the bench -- alongside the reading rather than
+    /// instead of it.
     ///
     /// Each line is built whole before any of it is sent, and a line that
     /// overran `LINE_MAX` is dropped rather than sent short. A truncated frame
@@ -280,23 +279,18 @@ impl Link {
         let ma = milliamps(reading);
         let mut line: heapless::String<LINE_MAX> = heapless::String::new();
 
-        let test_status = match quality {
-            Quality::Good => Some(status(ma)),
-            Quality::OverRange => Some("HIGH"),
-            Quality::RefBad | Quality::InputBad | Quality::Incomplete => None,
-        };
-        if let Some(test_status) = test_status {
-            if write!(
-                line,
-                "METER_TEST,ADDR={},CURRENT_MA={},STATUS={}\r\n",
-                addr, ma, test_status
-            )
-            .is_ok()
-            {
-                self.put_line(&line).await;
-            }
-            line.clear();
+        if write!(
+            line,
+            "METER_TEST,ADDR={},CURRENT_MA={},STATUS={}\r\n",
+            addr,
+            ma,
+            status(ma)
+        )
+        .is_ok()
+        {
+            self.put_line(&line).await;
         }
+        line.clear();
 
         let mut built = write!(
             line,

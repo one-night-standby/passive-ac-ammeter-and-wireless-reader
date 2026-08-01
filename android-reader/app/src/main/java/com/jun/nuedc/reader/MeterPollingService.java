@@ -713,13 +713,10 @@ public final class MeterPollingService extends Service {
                 if (!solicited || !forRound) {
                     kickRoundIfIdle();                         // 认出地址了,补一轮
                 }
-            } else if (frame.isFault()) {
-                // 表答了,但说这次读数不可信。和「没人应答」必须分开:一个是表
-                // 有毛病,一个是表不在,读表器指示的东西不一样。
-                broadcastState("METER_FAULT", String.format(
-                        Locale.CHINA, "%d号表读数异常(%s)", frame.address, frame.flag));
-                onReplyMissing(link, frame.address, forRound);
             }
+            // METER_CAL 到这里就没事了。它带的 FLAG 是给标定台看的,不是读数的
+            // 状态标记:电流表测到什么就发什么,读数永远走 METER_TEST,读表器
+            // 显示的就是电流表面板上那个数。
         }
     }
 
