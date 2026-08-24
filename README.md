@@ -12,7 +12,12 @@ BLE 读取一个或多个电流表，完成手动/自动采集、低限/超限/�
 
 ## 系统组成
 
-![Uploading image.png…]()
+硬件电路：
+<img width="580" height="304" alt="2c0ef6799bbb41d3f91828549498f405" src="https://github.com/user-attachments/assets/5135c7c8-1cae-44e0-bac9-c2fb46c34eab" />
+
+软件逻辑：
+<img width="579" height="534" alt="d12166a76381c2d4f54c3ae67ccc5b17" src="https://github.com/user-attachments/assets/e35ac103-2d73-4ea9-a658-7e7d4d78eb83" />
+
 
 
 ## 仓库结构
