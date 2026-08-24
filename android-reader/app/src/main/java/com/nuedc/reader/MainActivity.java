@@ -1,8 +1,7 @@
-package com.jun.nuedc.reader;
+package com.nuedc.reader;
 
 import android.Manifest;
 import android.app.Activity;
-import android.app.AlertDialog;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
@@ -68,6 +67,12 @@ public final class MainActivity extends Activity implements MeterDashboardView.L
                     MeterPollingService.EXTRA_AUTO,
                     false
             ));
+            // 倒计时以服务为准:一轮真正排下去了界面才重新计时,哪怕这一轮
+            // 一台都没测到——空轮和满轮等下一轮的时间是一样长的。
+            dashboard.setCountdownMillis(intent.getLongExtra(
+                    MeterPollingService.EXTRA_NEXT_CYCLE_MS,
+                    -1L
+            ));
             if ("ERROR".equals(state) && detail != null) {
                 Toast.makeText(MainActivity.this, detail, Toast.LENGTH_LONG).show();
             }
@@ -87,6 +92,10 @@ public final class MainActivity extends Activity implements MeterDashboardView.L
         dashboard = new MeterDashboardView(this);
         dashboard.setListener(this);
         dashboard.setPollingIntervalSeconds(preferences.pollingIntervalSeconds());
+        dashboard.setThresholds(
+                preferences.lowThresholdMa(),
+                preferences.highThresholdMa()
+        );
         setContentView(dashboard);
         enterImmersiveMode();
         registerEventReceiver();
@@ -174,26 +183,18 @@ public final class MainActivity extends Activity implements MeterDashboardView.L
     }
 
     @Override
-    public void onIntervalRequested() {
-        int[] values = {10, 30, 60, 120, 180, 240, 300};
-        String[] labels = {
-                "10 秒",
-                "30 秒",
-                "1 分钟",
-                "2 分钟（默认）",
-                "3 分钟",
-                "4 分钟",
-                "5 分钟"
-        };
-        new AlertDialog.Builder(this)
-                .setTitle("自动采集间隔")
-                .setItems(labels, (dialog, which) -> {
-                    preferences.savePollingIntervalSeconds(values[which]);
-                    dashboard.setPollingIntervalSeconds(values[which]);
-                    startReaderAction(MeterPollingService.ACTION_UPDATE_INTERVAL);
-                })
-                .setNegativeButton("取消", null)
-                .show();
+    public void onIntervalChanged(int seconds) {
+        preferences.savePollingIntervalSeconds(seconds);
+        startReaderAction(MeterPollingService.ACTION_UPDATE_INTERVAL);
+    }
+
+    /**
+     * 阈值只存进 preferences 就够了:服务和界面在同一个进程里，拿的是同一个
+     * SharedPreferences 实例，下一次自动轮次落库时读到的已经是新值。
+     */
+    @Override
+    public void onThresholdsChanged(int lowThresholdMa, int highThresholdMa) {
+        preferences.saveThresholds(lowThresholdMa, highThresholdMa);
     }
 
     private void refreshDashboard() {

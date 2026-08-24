@@ -90,8 +90,8 @@ impl SoftI2c {
     /// Returns whether the slave acknowledged: SDA pulled low by the far end
     /// during the ninth clock. This is the only failure a bit-banged master
     /// can observe at all, so it is the whole error detection this bus has --
-    /// an unpowered or absent display NACKs, and without this the driver would
-    /// write into the void and report success.
+    /// a display whose rail has sagged out from under it NACKs, and without
+    /// this the driver would write into the void and report success.
     #[must_use]
     fn write_byte(&mut self, byte: u8) -> bool {
         for bit in (0..8).rev() {
@@ -141,8 +141,9 @@ impl SoftI2c {
     }
 }
 
-/// Nobody drove the ACK bit low. On this bus that means the display is absent,
-/// unpowered, or not answering at the address we used.
+/// Nobody drove the ACK bit low. The panel is soldered to this bus, so that
+/// means it is not being held up by its rail, or the transaction was corrupted
+/// on the wire.
 #[derive(Debug)]
 pub struct Nack(NoAcknowledgeSource);
 

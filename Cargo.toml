@@ -36,14 +36,17 @@ test = false
 bench = false
 
 [dependencies]
-embassy-mspm0 = { git = "https://github.com/ozongzi/embassy", rev = "f6daf50db52bb90e7dbee2314a04eee77b46b03b", features = ["mspm0g3507pm", "rt", "time-driver-any", "unstable-pac"] }
-embassy-executor = { git = "https://github.com/ozongzi/embassy", rev = "f6daf50db52bb90e7dbee2314a04eee77b46b03b", features = ["platform-cortex-m", "executor-thread"] }
-embassy-time = { git = "https://github.com/ozongzi/embassy", rev = "f6daf50db52bb90e7dbee2314a04eee77b46b03b" }
+embassy-mspm0 = { git = "https://github.com/ozongzi/embassy", rev = "79e1a3747", features = ["mspm0g3507pm", "rt", "time-driver-any", "unstable-pac"] }
+embassy-executor = { git = "https://github.com/ozongzi/embassy", rev = "79e1a3747", features = ["platform-cortex-m", "executor-thread"] }
+embassy-time = { git = "https://github.com/ozongzi/embassy", rev = "79e1a3747" }
 # `select` for the two things that can start a measurement, and the async read
 # traits the buffered UART speaks.
-embassy-futures = { git = "https://github.com/ozongzi/embassy", rev = "f6daf50db52bb90e7dbee2314a04eee77b46b03b" }
+embassy-futures = { git = "https://github.com/ozongzi/embassy", rev = "79e1a3747" }
 embedded-io-async = "0.7"
 cortex-m = { version = "0.7.7", features = ["inline-asm", "critical-section-single-core"] }
+# Named directly because `cal` guards the field table with it. The
+# implementation is the single-core one `cortex-m` registers above.
+critical-section = "1"
 cortex-m-rt = "0.7.5"
 panic-halt = "1"
 embedded-graphics-core = "0.4.0"

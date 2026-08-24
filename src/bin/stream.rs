@@ -18,7 +18,7 @@
 //! parses (`MeterFrameParser.FRAME_PATTERN`), and its regex anchors at the end
 //! of the line, so nothing may be appended to it. `METER_CAL` carries what a
 //! calibration run needs and the phone silently ignores: the raw RMS, the gain
-//! it was taken at, and the probe's view of the input. `tools/cal_log.py`
+//! it was taken at, and the probe's view of the input. `cargo xtask cal-log`
 //! parses both.
 
 use embassy_executor::Spawner;
@@ -41,6 +41,8 @@ mod led;
 mod link;
 #[path = "../meter.rs"]
 mod meter;
+#[path = "../nvcal.rs"]
+mod nvcal;
 #[path = "../range.rs"]
 mod range;
 #[path = "../sampler.rs"]
@@ -81,6 +83,10 @@ async fn main(spawner: Spawner) -> ! {
     let mut meter = Meter::new(p.PA8, p.PA26);
     let mut dma = Channel::new(p.DMA_CH0, Irqs);
 
+    // Same table this part would use under `main.rs`: a bench run logged here
+    // has to describe the meter as it reads in the field, field table included.
+    cal::load_field();
+
     // The first reading is taken with the radio still dark. Its start-up
     // current is the largest single draw in this firmware and it lands on a
     // harvested rail that has just come up; putting the measurement first
@@ -108,7 +114,7 @@ async fn main(spawner: Spawner) -> ! {
     };
 
     loop {
-        link.send(address.read(), &reading);
+        link.send(address.read(), &reading).await;
         Timer::after_millis(PERIOD_MS).await;
         reading = meter.measure(&mut dma).await;
     }

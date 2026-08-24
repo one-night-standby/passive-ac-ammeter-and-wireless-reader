@@ -37,12 +37,13 @@
 //!   `range`   -- OPA1 PGA, DAC bias pivot, and the autoranger
 //!   `dsp`     -- windowing, true RMS
 //!   `cal`     -- per-range LSB -> amps tables
+//!   `nvcal`   -- the field table those fall back from, in flash
 //!   `supply`  -- the rail itself, off ADC0's internal monitor
 //!   `ui`      -- the OLED readout
 //!   `led`     -- the power-on indicator
 
 use embassy_executor::Spawner;
-use embassy_futures::select::{Either3, select3};
+use embassy_futures::select::select;
 use embassy_mspm0::dma::{self, Channel};
 use embassy_mspm0::gpio::{Input, Level, Output, Pull};
 use embassy_mspm0::uart::BufferedInterruptHandler;
@@ -56,6 +57,7 @@ mod dsp;
 mod led;
 mod link;
 mod meter;
+mod nvcal;
 mod oled;
 mod range;
 mod sampler;
@@ -63,7 +65,7 @@ mod supply;
 mod ui;
 mod vref;
 
-use link::{Address, HEARTBEAT_MS, Link};
+use link::{Address, Link};
 use meter::Meter;
 use ui::{DISPLAY_ON_MS, Panel};
 
@@ -72,13 +74,15 @@ bind_interrupts!(struct Irqs {
     UART2 => BufferedInterruptHandler<peripherals::UART2>;
 });
 
-/// Radio buffers. TX only has to hold the two frames of one reading; RX only
-/// has to hold one command line, and anything past that is a reader talking
-/// over itself. Both are `static` because `BufferedUart` keeps them for as long
+/// Radio buffers. TX only has to hold the two frames of one reading. RX has to
+/// hold more than one command line: a calibration push sends 40-byte `CALPT`
+/// lines and re-sends one whose answer went missing, so two can land together,
+/// and a ring that overflows turns the second into a line the parser has to
+/// throw away. Both are `static` because `BufferedUart` keeps them for as long
 /// as the port is open, which here is forever.
 static mut TX_BUF: [u8; 192] = [0; 192];
 
-static mut RX_BUF: [u8; 64] = [0; 64];
+static mut RX_BUF: [u8; 128] = [0; 128];
 
 /// The rail this meter starts up on, in millivolts. Nothing analog and nothing
 /// on the radio runs until `supply` measures at least this.
@@ -97,22 +101,11 @@ const BOOT_MIN_MV: u16 = 3_300;
 /// button and a `MEAS` command return from here, and which one did is not worth
 /// distinguishing: they are the same request.
 async fn wait_for_request(trigger: &mut Input<'static>, link: &mut Link, address: &Address) {
-    loop {
-        let addr = address.read();
-        match select3(
-            trigger.wait_for_falling_edge(),
-            link.wait_command(addr),
-            Timer::after_millis(HEARTBEAT_MS),
-        )
-        .await
-        {
-            Either3::First(()) | Either3::Second(_) => return,
-            // Re-read the switch on every beat rather than caching it: moving
-            // the switch is the one operation 2(2) allows during a run, so the
-            // address has to be able to change between two beats.
-            Either3::Third(()) => link.send_alive(address.read()),
-        }
-    }
+    // The heartbeat is not raced against the command here, it lives inside
+    // `wait_command` -- see there for why cancelling a half-sent reply is a
+    // thing worth designing against. What is left to race is the button, and a
+    // press mid-reply is a person, not a timer.
+    select(trigger.wait_for_falling_edge(), link.wait_command(address)).await;
 }
 
 #[embassy_executor::main]
@@ -142,8 +135,10 @@ async fn main(spawner: Spawner) -> ! {
     // VREF and ADC0 powered down in between. An always-armed watch is available
     // -- ADC0's window comparator raising HIGHIFG onto the event fabric -- and
     // costs more, because nothing but the CPU can cycle VREF, so arming it pins
-    // the reference on at 189 uA typ (330 uA max) against the 2.4 uA that a 1.5%
-    // duty comes to. The CPU time the polling costs is a fifth of that.
+    // the reference on at 189 uA typ (330 uA max) against the 19 uA a 10% duty
+    // comes to. Nearly all of each look is the reference settling, which the
+    // CPU sleeps through; an armed watch would be paying for that settle
+    // continuously and would still be reading the same converter.
     //
     // There is no deadline. A rail that never reaches BOOT_MIN_MV parks the
     // meter here, dark, which is the honest state to be in: no reading it
@@ -172,6 +167,11 @@ async fn main(spawner: Spawner) -> ! {
     // come up. Nothing is lost by waiting -- the reading is already in hand
     // when the port opens, so the first frame goes out as soon as there is
     // anything to send it over.
+    // Before the first reading, because the first reading is reported like
+    // every other one and there is no version of this that is allowed to go out
+    // on the built-in table while a field table sits in flash.
+    cal::load_field();
+
     let mut in_hand = Some(meter.measure(&mut dma).await);
 
     // SAFETY: this is the only place either buffer is named, and the `Link`
@@ -215,7 +215,7 @@ async fn main(spawner: Spawner) -> ! {
         // second the display spends lighting up is a second the radio could
         // have spent delivering it.
         if let Some(link) = &mut link {
-            link.send(address.read(), &reading);
+            link.send(address.read(), &reading).await;
         }
         panel.show(&reading);
 

@@ -1,4 +1,4 @@
-package com.jun.nuedc.reader;
+package com.nuedc.reader;
 
 import android.content.Context;
 import android.graphics.Canvas;
@@ -8,10 +8,8 @@ import android.graphics.Paint;
 import android.graphics.Path;
 import android.graphics.RectF;
 import android.graphics.Typeface;
-import android.media.AudioAttributes;
-import android.media.Ringtone;
-import android.media.RingtoneManager;
-import android.net.Uri;
+import android.media.AudioManager;
+import android.media.ToneGenerator;
 import android.os.SystemClock;
 import android.os.VibrationEffect;
 import android.os.Vibrator;
@@ -47,19 +45,20 @@ public final class MeterDashboardView extends View {
         void onReadFailed(int address);
         void onAutoModeChanged(boolean enabled);
         void onClearHistory();
-        void onIntervalRequested();
+        /** 小键盘上改好的间隔,已经在 10 秒 - 300 分钟内。 */
+        void onIntervalChanged(int seconds);
+        /** 小键盘上改好的阈值,单位 mA,已经满足 0 ≤ 低限 < 超限 ≤ 9999。 */
+        void onThresholdsChanged(int lowThresholdMa, int highThresholdMa);
     }
 
     /* ══════════ 与原型对齐的常量 ══════════ */
     private static final int SLOTS = 16;
     private static final float STEP = 360f / SLOTS;          // 22.5°
-    private static final int LOW_MA = 200;
-    private static final int HIGH_MA = 2000;
-    private static final int FULL_MA = 2200;
-    /* 读条时长。它同时是「发出请求到落库」的窗口:电流表答一次要测量 260 ms
-       加链路时延,服务端的应答时限是 REPLY_TIMEOUT_MS,读条必须比它长,否则
-       读条走完时应答还在路上,存下去的就是上一次的值。 */
-    private static final long STORE_MS = 1400;
+    /* 等应答的上限,也是读条走满一圈的时间。答来了就提前结束(见 onLiveFrame),
+       所以这个数只在真的没人答时才会走满,给得宽不影响手感。必须比服务端的
+       REPLY_TIMEOUT_MS 长:先超时的应该是这里,不然读条还在转、服务端已经把
+       这次请求判死了。 */
+    private static final long STORE_MS = 3200;
     private static final long ALERT_MS = 2200;                // 状态变化后的短暂提示
     /* 同一地址的响铃/震动去重窗口。不是「冷却」:每一次读数只要越限就该响,
        包括电流表上按键触发、值没变的那一次。这里只挡同一次读数被重复触发
@@ -87,6 +86,9 @@ public final class MeterDashboardView extends View {
     private static final int C_LOW = 0xFFC87C00;
     private static final int C_HIGH = 0xFFDC2626;
     private static final int C_OFF = 0xFF828C98;              // rgb(130,140,152)
+    /* 负载断开:比离线更沉的同色系灰。两者都是「这条线上没有电流」,但一个是
+       表不说话、一个是表说了「没有」,后者是确认过的事实,所以压得更实。 */
+    private static final int C_DISC = 0xFF4A525C;             // rgb(74,82,92)
     private static final int SLOT_OFF = 0xFF8A94A3;           // .slot.is-off
 
     /* ══════════ 设计坐标(980×462,对应原型 CSS 布局) ══════════ */
@@ -95,9 +97,9 @@ public final class MeterDashboardView extends View {
     private static final float SB_CY = 17.6f;
     private static final float DIAL_X = 33f, DIAL_Y = 31.25f, DIAL_C = 183f;
     private static final float SLOT_R = 144f, RING_R = 168f, COUNT_R = 104f, HUB_R = 88f;
-    private static final float SLOT_HALF_W = 28f, SLOT_HALF_H = 14.5f;
+    private static final float SLOT_HALF_W = 32f, SLOT_HALF_H = 17f;
     private static final float HUB_ADDR_BASE = 148f, HUB_VALUE_BASE = 189f;
-    private static final float HUB_STATE_BASE = 209.5f, HUB_SUB_BASE = 225.5f;
+    private static final float HUB_STATE_BASE = 210.5f, HUB_SUB_BASE = 228f;
     private static final float LEFT_CENTER = 216f;
     private static final float FOOT_CY = 422.6f;
     private static final float TOGGLE_W = 122f, TOGGLE_H = 36.75f, TOGGLE_BTN_W = 58f;
@@ -147,6 +149,9 @@ public final class MeterDashboardView extends View {
         boolean everSeen;
         int frameMa = -1;
         long frameWallTs;
+        /** 最近一次<b>带读数</b>的帧的 uptime 时刻。和 lastAt 分开:lastAt 每一拍
+            心跳都在动,拿它判「这一次问到没问到」会把心跳当成应答。 */
+        long frameAt = Long.MIN_VALUE / 4;
         long lastAt = Long.MIN_VALUE / 4;                     // uptime 时刻,判静默只用这个钟
         String mac = "", name = "";
         int rssi = -127;
@@ -203,6 +208,10 @@ public final class MeterDashboardView extends View {
     private int holdMa;
     private long holdUntil;
 
+    // 判定阈值:界面上点一下就能改,所以不能是常量
+    private int lowMa = ReaderPreferences.DEFAULT_LOW_THRESHOLD_MA;
+    private int highMa = ReaderPreferences.DEFAULT_HIGH_THRESHOLD_MA;
+
     // 模式
     private boolean autoMode;
     private float activation;
@@ -226,7 +235,7 @@ public final class MeterDashboardView extends View {
     private boolean expectCaptureRefresh;
     private final Live[] live = new Live[SLOTS];
     private final long[] alarmMuteUntil = new long[SLOTS];
-    private Ringtone alarmRingtone;
+    private ToneGenerator alarmTone;
     private final List<Row> rows = new ArrayList<>();
     private boolean connectionError;
     private String connectionDetail = "正在连接 HC-42…";
@@ -245,7 +254,8 @@ public final class MeterDashboardView extends View {
     private float readoutX, readoutY, cursorX = -1;
 
     // 图表手势
-    private static final int TOUCH_NONE = 0, TOUCH_DIAL = 1, TOUCH_CHART = 2, TOUCH_HUB = 3, TOUCH_UI = 4;
+    private static final int TOUCH_NONE = 0, TOUCH_DIAL = 1, TOUCH_CHART = 2, TOUCH_HUB = 3,
+            TOUCH_UI = 4, TOUCH_PAD = 5;
     private int touchMode = TOUCH_NONE;
     private boolean pinching;
     private float panStartX, panU0, panU1, chartMoved, lastSpanX;
@@ -264,6 +274,24 @@ public final class MeterDashboardView extends View {
     private float flyFromRight, flyFromBase, flyToRight, flyToBase;
     private int flyNumFrom, flyNumTo, flyUnitFrom, flyUnitTo;
 
+    // 数字小键盘:阈值和间隔就地改,没有确认键——单位键就是确认键
+    private static final int PAD_NONE = 0, PAD_INTERVAL = 1, PAD_LOW = 2, PAD_HIGH = 3;
+    private static final int KEY_NONE = -1, KEY_UNIT_A = 12, KEY_UNIT_B = 13, KEY_CLOSE = 14;
+    private static final float PAD_W = 468, PAD_H = 300;
+    private static final float KEY_W = 72, KEY_H = 46, KEY_GAP = 9;
+    private int padMode = PAD_NONE;
+    private boolean padOpen;
+    private String padInput = "";
+    private long padCaretAt;                                  // 每次按键重新计时,刚打完的字后面光标是亮的
+    private long padErrorAt;                                  // 越界:红一下 + 抖一下
+    private int padPressed = KEY_NONE;
+    private final Tween padAlpha = new Tween(0);              // .18s 弹入 / .14s 收起
+    private final RectF padCard = new RectF();
+    private final RectF[] padKeys = new RectF[12];
+    private final RectF padUnitA = new RectF();
+    private final RectF padUnitB = new RectF();
+    private final RectF padClose = new RectF();
+
     // 命中区(绘制时更新)
     private final float[] slotOx = new float[SLOTS];
     private final float[] slotOy = new float[SLOTS];
@@ -272,12 +300,14 @@ public final class MeterDashboardView extends View {
     private final int[] slotZ = new int[SLOTS];
     private final RectF modeManualRect = new RectF();
     private final RectF modeAutoRect = new RectF();
-    private final RectF footNoteRect = new RectF();
+    private final RectF intervalChipRect = new RectF();
+    private final RectF lowChipRect = new RectF();
+    private final RectF highChipRect = new RectF();
     private final RectF chipOneRect = new RectF();
     private final RectF chipAllRect = new RectF();
     private final RectF resetRect = new RectF();
-    private final RectF prevRect = new RectF(649, 229.1f, 669, 249.1f);
-    private final RectF nextRect = new RectF(723, 229.1f, 743, 249.1f);
+    private final RectF prevRect = new RectF(646, 226.1f, 672, 252.1f);
+    private final RectF nextRect = new RectF(720, 226.1f, 746, 252.1f);
     private final RectF clearRect = new RectF();
 
     private float viewScale = 1f, viewOffX, viewOffY;
@@ -322,6 +352,10 @@ public final class MeterDashboardView extends View {
         for (int i = 0; i < SLOTS; i++) {
             live[i] = new Live();
         }
+        for (int i = 0; i < padKeys.length; i++) {
+            padKeys[i] = new RectF();
+        }
+        layoutPad();
         stroke.setStyle(Paint.Style.STROKE);
         setFocusable(true);
         setContentDescription("无线读表器横屏仪表盘");
@@ -345,17 +379,12 @@ public final class MeterDashboardView extends View {
         long prevMax = maxSeenId;
         history = new ArrayList<>(allHistory);
         int newTotal = 0, newInScope = 0;
-        boolean autoArrived = false;
         for (MeterReading r : history) {
             if (r.id > maxSeenId) maxSeenId = r.id;
             if (r.id > prevMax) {
                 newTotal++;
                 if (allScope || r.address == panelAddr) newInScope++;
-                if ("AUTO".equalsIgnoreCase(r.source)) autoArrived = true;
             }
-        }
-        if (autoArrived && autoMode) {
-            remain = intervalSeconds;                          // 一轮存下来了,重新计时
         }
         if (firstLoad) {
             firstLoad = false;
@@ -382,12 +411,41 @@ public final class MeterDashboardView extends View {
         applyMode(enabled);
     }
 
+    /**
+     * 对齐服务排下的下一轮时刻。{@code ms < 0} 表示此刻没有排着的轮次,不动环。
+     *
+     * <p>倒计时不看有没有测到数:一轮问下来一台都没答,下一轮照样在一个完整
+     * 间隔之后——环也就该从满的地方重新走。
+     */
+    public void setCountdownMillis(long ms) {
+        if (!autoMode || ms < 0L) {
+            return;
+        }
+        remain = Math.min(intervalSeconds, ms / 1000f);
+        invalidate();
+    }
+
     public void setPollingIntervalSeconds(int seconds) {
         intervalSeconds = Math.max(10, seconds);
         if (autoMode) {
             remain = intervalSeconds;
         }
         invalidate();
+    }
+
+    /** 调用方保证 0 ≤ 低限 < 超限;界面上的输入在 padConfirm 里已经拦过。 */
+    public void setThresholds(int lowThresholdMa, int highThresholdMa) {
+        lowMa = lowThresholdMa;
+        highMa = highThresholdMa;
+        invalidate();
+    }
+
+    /**
+     * 圆盘条与曲线的满量程。留在超限之上一档,报警的读数不会顶在边框上——
+     * 看不出「刚过线」和「过了很多」的区别,就等于没画。
+     */
+    private int fullMa() {
+        return highMa + 200;
     }
 
     /** 实时帧:进圆盘不进记录 */
@@ -404,14 +462,20 @@ public final class MeterDashboardView extends View {
         if (currentMa >= 0) {
             m.frameMa = currentMa;
             m.frameWallTs = wallTs;
-            // 每一次读数都判一次:越限就响,不要求状态发生变化。读数是稀疏
+            m.frameAt = SystemClock.uptimeMillis();
+            // 这一次问的就是它,答来了就结束等待。读条量的是「在等应答」,
+            // 答到了还继续走完只是空转,而且拖长了两次读取之间的最小间隔。
+            if (address == pendingAddr) {
+                pendingUntil = m.frameAt;
+            }
+            // 每一次读数都判一次:该报就响,不要求状态发生变化。读数是稀疏
             // 的——手动读一次、自动轮次一次、表上按一次键一次——每一次都是
             // 一个独立的、值得被告知的事件。
             String st = classifyStatus(currentMa);
-            if (MeterReading.LOW.equals(st) || MeterReading.HIGH.equals(st)) {
+            if (alarms(st)) {
                 long alarmAt = SystemClock.uptimeMillis();
                 m.alertUntil = alarmAt + ALERT_MS;
-                alarmFeedback(address, alarmAt);
+                alarmFeedback(address, alarmAt, toneFor(st));
             }
         }
         m.lastAt = SystemClock.uptimeMillis();
@@ -446,6 +510,11 @@ public final class MeterDashboardView extends View {
         removeCallbacks(modelLoop);
         removeCallbacks(renderLoop);
         removeCallbacks(panelSwitch);
+        // ToneGenerator 占的是全局有限的音频会话,不放会一直挂着。
+        if (alarmTone != null) {
+            alarmTone.release();
+            alarmTone = null;
+        }
         super.onDetachedFromWindow();
     }
 
@@ -464,9 +533,9 @@ public final class MeterDashboardView extends View {
                 continue;
             }
             // frameMa < 0 是「在场但还没读过数」——心跳只说明它在,不带电流。
-            // 这不是一个电流档位:交给 classifyStatus 的话 -1 < 200 会被判成
-            // 低限,于是表一出现就先假报一次低限,而真正读到 0.064 A 时状态
-            // 已经是低限了,跳变沿不存在,该响的那次反而不响。
+            // 这不是一个电流档位:交给 classifyStatus 的话 -1 会一路落到负载
+            // 断开,于是表一出现就先说一次负载断开,而真正读到 0.064 A 时该报
+            // 的低限又因为不是跳变沿而不报。
             String st;
             if (m.silent) {
                 st = MeterReading.OFFLINE;
@@ -487,13 +556,16 @@ public final class MeterDashboardView extends View {
             m.status = st;
         }
         if (pendingAddr >= 0 && now >= pendingUntil) {
-            commitPending();                                   // 读条一定走完,不中途打断
+            commitPending();                                   // 答到了,或者等满了
         }
         if (autoMode) {
             remain = Math.max(0f, remain - dt);
         }
         if (clearArmed && now >= clearDeadline) {
             clearArmed = false;
+        }
+        if (!padOpen && padMode != PAD_NONE && padAlpha.get(now) <= 0.004f) {
+            padMode = PAD_NONE;                                // 收起动画放完才真正关掉
         }
     }
 
@@ -567,9 +639,14 @@ public final class MeterDashboardView extends View {
         int addr = pendingAddr;
         pendingAddr = -1;
         Live m = live[addr];
-        // 还要求真的收到过读数:一台只在心跳、这次读取又没答上来的表,
-        // 在场但没有可存的数,不能把上一次的值当成这一次的结果。
-        boolean hasFrame = present(addr) && m.everSeen && !m.silent && m.frameMa >= 0;
+        // 要求读数是<b>这一次问来的</b>:frameAt 必须落在请求之后。只看
+        // frameMa 存不存在是不够的——它记的是最近一次读到的值,一台还在心跳、
+        // 这次却没答上来的表照样满足,于是上一次的读数会被当成这一次的结果存
+        // 进库里,而表上的 OLED 显示的是它刚测到的新值。两边对不上就是从这里
+        // 来的。答不上来的原因不必区分:命令落在测量周期里被丢掉,或者应答比
+        // 读条慢,结果都一样——这一次没有可存的数。
+        boolean hasFrame = present(addr) && m.everSeen && !m.silent
+                && m.frameMa >= 0 && m.frameAt >= pendingFrom;
         int ma = hasFrame ? m.frameMa : -1;
         String status = hasFrame ? classifyStatus(ma) : MeterReading.OFFLINE;
         boolean willFly = allScope || panelAddr == addr;       // 出现在当前筛选里,才有得飞
@@ -694,6 +771,14 @@ public final class MeterDashboardView extends View {
                 downY = dy;
                 movePx = 0;
                 pinching = false;
+                if (padMode != PAD_NONE) {
+                    // 小键盘是模态的:开着的时候底下的转盘、曲线、记录都不接手势。
+                    // 收起动画还在放的时候只吞手势不认键——那 140 ms 里再按一次
+                    // 单位键会把刚存好的值又存一遍。
+                    touchMode = TOUCH_PAD;
+                    padPressed = padOpen ? padKeyAt(dx, dy) : KEY_NONE;
+                    return true;
+                }
                 if (dist(dx, dy, DIAL_X + DIAL_C, DIAL_Y + DIAL_C) <= HUB_R) {
                     touchMode = TOUCH_HUB;
                     hubPressed = true;                          // :active 按压反馈
@@ -709,6 +794,8 @@ public final class MeterDashboardView extends View {
                     vel = 0;
                 } else if (resetAlpha.to > 0 && resetRect.contains(dx, dy)) {
                     touchMode = TOUCH_UI;
+                } else if (lowChipRect.contains(dx, dy) || highChipRect.contains(dx, dy)) {
+                    touchMode = TOUCH_UI;                       // 阈值牌坐在曲线里,得抢在平移前面
                 } else if (CHART_WRAP.contains(dx, dy) && chartDomainSpan > 0) {
                     touchMode = TOUCH_CHART;
                     chartMoved = 0;
@@ -727,7 +814,11 @@ public final class MeterDashboardView extends View {
                 return true;
             case MotionEvent.ACTION_MOVE:
                 movePx = Math.max(movePx, (float) Math.hypot(dx - downX, dy - downY));
-                if (touchMode == TOUCH_DIAL) {
+                if (touchMode == TOUCH_PAD) {
+                    if (padPressed != KEY_NONE && padKeyAt(dx, dy) != padPressed) {
+                        padPressed = KEY_NONE;                  // 手指滑出这个键就撤销按压
+                    }
+                } else if (touchMode == TOUCH_DIAL) {
                     float a = angleAt(dx, dy);
                     float d = norm180(a - pointerAngle);
                     pointerAngle = a;
@@ -753,7 +844,15 @@ public final class MeterDashboardView extends View {
                 }
                 return true;
             case MotionEvent.ACTION_UP:
-                if (touchMode == TOUCH_DIAL) {
+                if (touchMode == TOUCH_PAD) {
+                    int hit = padKeyAt(dx, dy);
+                    if (hit != KEY_NONE && hit == padPressed) {
+                        padTap(hit);
+                    } else if (hit == KEY_NONE && movePx < 8 && !padCard.contains(dx, dy)) {
+                        closePad();                             // 点卡片外 = 不改了
+                    }
+                    padPressed = KEY_NONE;
+                } else if (touchMode == TOUCH_DIAL) {
                     dragging = false;
                     // 点地址只是选中并滚过去,不触发存档
                     if (pressSlot >= 0 && movePx < 8 && velAtDown < 30) {
@@ -782,6 +881,7 @@ public final class MeterDashboardView extends View {
                 dragging = false;
                 hubPressed = false;
                 pressSlot = -1;
+                padPressed = KEY_NONE;
                 touchMode = TOUCH_NONE;
                 pinching = false;
                 return true;
@@ -861,8 +961,16 @@ public final class MeterDashboardView extends View {
             }
             return;
         }
-        if (footNoteRect.contains(x, y)) {
-            if (listener != null) listener.onIntervalRequested();
+        if (intervalChipRect.contains(x, y)) {
+            openPad(PAD_INTERVAL);
+            return;
+        }
+        if (highChipRect.contains(x, y)) {
+            openPad(PAD_HIGH);
+            return;
+        }
+        if (lowChipRect.contains(x, y)) {
+            openPad(PAD_LOW);
             return;
         }
         if (chipOneRect.contains(x, y)) {
@@ -938,6 +1046,173 @@ public final class MeterDashboardView extends View {
         modeText.retarget(enabled ? 1f : 0f, now, 260);
     }
 
+    /* ══════════ 数字小键盘:阈值和间隔就地改 ══════════ */
+    private void openPad(int mode) {
+        long now = SystemClock.uptimeMillis();
+        padMode = mode;
+        padOpen = true;
+        padInput = "";
+        padErrorAt = 0;
+        padPressed = KEY_NONE;
+        padCaretAt = now;
+        padAlpha.retarget(1f, now, 180);
+    }
+
+    private void closePad() {
+        padOpen = false;
+        padAlpha.retarget(0f, SystemClock.uptimeMillis(), 140);
+    }
+
+    /** 键位与内容无关,尺寸也不随输入变,所以构造时算一次就够。 */
+    private void layoutPad() {
+        float left = (DESIGN_W - PAD_W) / 2f;
+        float top = (DESIGN_H - PAD_H) / 2f;
+        padCard.set(left, top, left + PAD_W, top + PAD_H);
+        float keysLeft = padCard.right - 24 - (3 * KEY_W + 2 * KEY_GAP);
+        float keysTop = top + (PAD_H - (4 * KEY_H + 3 * KEY_GAP)) / 2f;
+        for (int i = 0; i < padKeys.length; i++) {
+            float kx = keysLeft + (i % 3) * (KEY_W + KEY_GAP);
+            float ky = keysTop + (i / 3) * (KEY_H + KEY_GAP);
+            padKeys[i].set(kx, ky, kx + KEY_W, ky + KEY_H);
+        }
+        float paneLeft = left + 26;
+        float paneRight = keysLeft - 24;
+        float unitW = (paneRight - paneLeft - 8) / 2f;
+        float unitBottom = keysTop + 4 * KEY_H + 3 * KEY_GAP;   // 与键盘底边齐平
+        padUnitA.set(paneLeft, unitBottom - 44, paneLeft + unitW, unitBottom);
+        padUnitB.set(paneRight - unitW, unitBottom - 44, paneRight, unitBottom);
+        padClose.set(padCard.right - 40, top + 12, padCard.right - 14, top + 38);
+    }
+
+    private int padKeyAt(float x, float y) {
+        for (int i = 0; i < padKeys.length; i++) {
+            if (padKeys[i].contains(x, y)) {
+                return i;
+            }
+        }
+        if (padUnitA.contains(x, y)) return KEY_UNIT_A;
+        if (padUnitB.contains(x, y)) return KEY_UNIT_B;
+        if (padClose.contains(x, y)) return KEY_CLOSE;
+        return KEY_NONE;
+    }
+
+    private void padTap(int key) {
+        vibrate();
+        padCaretAt = SystemClock.uptimeMillis();
+        if (key == KEY_CLOSE) {
+            closePad();
+        } else if (key == KEY_UNIT_A || key == KEY_UNIT_B) {
+            padConfirm(key == KEY_UNIT_B);
+        } else if (key == 11) {
+            if (!padInput.isEmpty()) {
+                padInput = padInput.substring(0, padInput.length() - 1);
+            }
+        } else {
+            padType(key == 9 ? '.' : key == 10 ? '0' : (char) ('1' + key));
+        }
+    }
+
+    private void padType(char c) {
+        if (c == '.') {
+            if (padInput.contains(".")) {
+                return;
+            }
+            padInput = padInput.isEmpty() ? "0." : padInput + ".";
+            return;
+        }
+        if (padInput.equals("0")) {
+            padInput = "";                                     // 前导零直接被顶掉
+        }
+        int dot = padInput.indexOf('.');
+        if (dot >= 0 && padInput.length() - dot > 3) {
+            return;                                            // 最多三位小数,再多也显示不出来
+        }
+        if (padInput.length() >= 6) {
+            return;
+        }
+        padInput += c;
+    }
+
+    /** 输入框里的数。空的、只有小数点的、读不成数的都算没有输入。 */
+    private float padValue() {
+        try {
+            float v = Float.parseFloat(padInput);
+            return v < 0 ? Float.NaN : v;
+        } catch (NumberFormatException e) {
+            return Float.NaN;
+        }
+    }
+
+    /** 单位键就是确认键:按的是哪个单位,输入的数就按哪个单位读进来。 */
+    private void padConfirm(boolean secondUnit) {
+        float v = padValue();
+        if (Float.isNaN(v)) {
+            padFail();
+            return;
+        }
+        if (padMode == PAD_INTERVAL) {
+            int seconds = Math.round(secondUnit ? v * 60f : v);
+            if (seconds < ReaderPreferences.MIN_POLLING_INTERVAL_SECONDS
+                    || seconds > ReaderPreferences.MAX_POLLING_INTERVAL_SECONDS) {
+                padFail();
+                return;
+            }
+            setPollingIntervalSeconds(seconds);
+            if (listener != null) {
+                listener.onIntervalChanged(seconds);
+            }
+        } else {
+            int ma = Math.round(secondUnit ? v * 1000f : v);
+            int low = padMode == PAD_LOW ? ma : lowMa;
+            int high = padMode == PAD_HIGH ? ma : highMa;
+            if (low < 0 || high > ReaderPreferences.MAX_THRESHOLD_MA || low >= high) {
+                padFail();
+                return;
+            }
+            setThresholds(low, high);
+            if (listener != null) {
+                listener.onThresholdsChanged(low, high);
+            }
+        }
+        closePad();
+    }
+
+    /* 越界不悄悄夹到边界上:夹过的值和输入的不是同一个意思,而这两个数决定
+       什么时候响铃。红一下、抖一下,让人自己改。 */
+    private void padFail() {
+        padErrorAt = SystemClock.uptimeMillis();
+        vibrateEffect(VibrationEffect.createOneShot(28, VibrationEffect.DEFAULT_AMPLITUDE));
+    }
+
+    private String padTitle() {
+        if (padMode == PAD_INTERVAL) return "自动采集间隔";
+        return padMode == PAD_LOW ? "低限阈值" : "超限阈值";
+    }
+
+    private String padCurrent() {
+        if (padMode == PAD_INTERVAL) return "现在 " + intervalChipText();
+        return "现在 " + fmtA(padMode == PAD_LOW ? lowMa : highMa) + " A";
+    }
+
+    private String padRange() {
+        if (padMode == PAD_INTERVAL) {
+            // 两端单位不同,各自带上单位写出来,别折算成同一个单位的大数
+            return ReaderPreferences.formatIntervalSeconds(
+                    ReaderPreferences.MIN_POLLING_INTERVAL_SECONDS)
+                    + " – " + ReaderPreferences.formatIntervalSeconds(
+                    ReaderPreferences.MAX_POLLING_INTERVAL_SECONDS);
+        }
+        if (padMode == PAD_LOW) {
+            return "0 – " + fmtA(highMa - 1) + " A";
+        }
+        return fmtA(lowMa + 1) + " – " + fmtA(ReaderPreferences.MAX_THRESHOLD_MA) + " A";
+    }
+
+    private String padUnitLabel(boolean secondUnit) {
+        if (padMode == PAD_INTERVAL) return secondUnit ? "分钟" : "秒";
+        return secondUnit ? "A" : "mA";
+    }
+
     private void chartTap(float x, float y, long now) {
         int idx = nearestChartPoint(x, y);
         if (idx >= 0) {
@@ -989,7 +1264,7 @@ public final class MeterDashboardView extends View {
         readoutOn = true;
         readoutAlpha.retarget(1f, SystemClock.uptimeMillis(), 140);
         readoutText = clockFormat.format(new Date(r.timestamp)) + " · 地址 " + hex1(r.address)
-                + " · " + fmtA(r.currentMa) + " A · " + statusLabel(r.status);
+                + " · " + fmtA(r.currentMa) + " A · " + statusLabel(statusOf(r));
         readoutX = PLOT_X + p[0] * (PLOT_W / CHW);
         readoutY = PLOT_Y + p[1] * (PLOT_H / CHH) - 8;
         cursorX = p[0];
@@ -1037,33 +1312,53 @@ public final class MeterDashboardView extends View {
         }
     }
 
-    /** 一次越限读数:震动两下 + 响一声系统铃(走闹钟音量,静音通知也听得见)。 */
-    private void alarmFeedback(int addr, long now) {
+    /** 要出声的三种状态:越限说负载不对,断开说负载不在,都得让人知道。 */
+    private static boolean alarms(String status) {
+        return MeterReading.LOW.equals(status)
+                || MeterReading.HIGH.equals(status)
+                || MeterReading.DISCONNECTED.equals(status);
+    }
+
+    /**
+     * 这个状态该用哪一声。
+     *
+     * <p>断开走 CDMA 音型里的低音档,和越限那声在音高上分开:两件事要去查的地方
+     * 不一样——越限查负载,断开查接线——不看屏幕光凭声音就该分得出是哪一件。
+     */
+    private static int toneFor(String status) {
+        return MeterReading.DISCONNECTED.equals(status)
+                ? ToneGenerator.TONE_CDMA_LOW_SS
+                : ToneGenerator.TONE_CDMA_ALERT_CALL_GUARD;
+    }
+
+    /**
+     * 一次该报的读数:震动两下 + 一串预警蜂鸣(走闹钟流,静音通知也听得见)。
+     *
+     * <p>用 {@link ToneGenerator} 自己发音,不取系统铃声:默认通知音是一声
+     * 「叮」,听感是「收到了」,而这里要说的是「出事了」。告警音的语义得由这个
+     * 程序自己定,不能跟着用户的通知音设置走。
+     *
+     * <p>音型长度由它自己定死,再用 duration 兜一道:读数可能每隔几秒就来一次,
+     * 一次告警必须在下一次读数之前结束,不能像闹钟铃那样一响十几秒。
+     */
+    private void alarmFeedback(int addr, long now, int tone) {
         if (now < alarmMuteUntil[addr]) {
             return;                                            // 同一次读数被重复处理时去个重
         }
         alarmMuteUntil[addr] = now + ALARM_DEDUP_MS;
         vibrateEffect(VibrationEffect.createWaveform(new long[]{0, 120, 80, 120}, -1));
         try {
-            if (alarmRingtone == null) {
-                Uri uri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION);
-                alarmRingtone = RingtoneManager.getRingtone(getContext(), uri);
-                if (alarmRingtone != null) {
-                    alarmRingtone.setAudioAttributes(new AudioAttributes.Builder()
-                            .setUsage(AudioAttributes.USAGE_ALARM)
-                            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                            .build());
-                }
+            if (alarmTone == null) {
+                alarmTone = new ToneGenerator(
+                        AudioManager.STREAM_ALARM, ToneGenerator.MAX_VOLUME);
             }
-            if (alarmRingtone != null) {
-                // 先停再播。Ringtone.play() 在正在播放时不会重头开始,而是
-                // 直接被吞掉——默认通知音有一两秒,读数可能来得更快,于是
-                // 「响一次吞一次」。停一下才能保证每一次越限都听得见。
-                alarmRingtone.stop();
-                alarmRingtone.play();
-            }
-        } catch (Exception ignored) {
-            // 没有可用铃声也不影响视觉报警
+            // 先停再发:同一次告警还在响时 startTone 会被吞掉,而每一次都该
+            // 出声。
+            alarmTone.stopTone();
+            alarmTone.startTone(tone, 600);
+        } catch (RuntimeException ignored) {
+            // 音频资源被占满或没有可用输出,不影响震动和视觉报警
+            alarmTone = null;
         }
     }
 
@@ -1089,6 +1384,7 @@ public final class MeterDashboardView extends View {
         drawLog(canvas, now);
         drawReadout(canvas, now);
         drawFlyer(canvas, now);
+        drawKeypad(canvas, now);
         canvas.restore();
     }
 
@@ -1190,7 +1486,7 @@ public final class MeterDashboardView extends View {
             float a = i * STEP + angle;
             float off = Math.abs(norm180(a)) / 180f;
             Live m = live[i];
-            boolean alarm = MeterReading.LOW.equals(m.status) || MeterReading.HIGH.equals(m.status);
+            boolean alarm = alarms(m.status);
             boolean alerting = now < m.alertUntil;             // 只在刚变化时提示
             float beat = alerting ? 1f + 0.045f * (float) Math.sin(now / 130.0) : 1f;
             slotScale[i] = lerp(1.14f, 0.82f, off) * beat;
@@ -1223,30 +1519,30 @@ public final class MeterDashboardView extends View {
         // 编号用离散判定色;不在线灰,空地址浅
         int color = liveNow ? statusColor(m.status) : (isPresent ? SLOT_OFF : INK3);
         String id = hex1(i);
-        float idW = measure(id, 12, monoBold, 0.04f);
-        float contentW = 5 + 4 + idW;
+        float idW = measure(id, 15, monoBold, 0.04f);
+        float contentW = 6 + 5 + idW;
         float left = -contentW / 2f;
-        float headCy = -SLOT_HALF_H + 10.6f;
+        float headCy = -SLOT_HALF_H + 12f;
         // 在线点:静态红绿,状态没变就不该动;空地址是空心圈
         if (!isPresent) {
             stroke.setColor(mulAlpha(INK3, alpha));
             stroke.setStrokeWidth(1);
-            canvas.drawCircle(left + 2.5f, headCy, 2.5f, stroke);
+            canvas.drawCircle(left + 3, headCy, 3, stroke);
         } else {
             fill.setColor(mulAlpha(m.silent ? C_HIGH : C_OK, alpha));
-            canvas.drawCircle(left + 2.5f, headCy, 2.5f, fill);
+            canvas.drawCircle(left + 3, headCy, 3, fill);
         }
-        text(canvas, id, left + 5 + 4, headCy + 4.3f, 12, color, Paint.Align.LEFT, monoBold,
+        text(canvas, id, left + 6 + 5, headCy + 5.4f, 15, color, Paint.Align.LEFT, monoBold,
                 0.04f, alpha);
         if (isPresent) {
             // 圆盘是实时的:条子跟着帧走(宽度 .32s 过渡),条用连续变暖色
-            m.bar.retarget(liveNow ? clamp(m.frameMa / (float) FULL_MA, 0f, 1f) : 0f, now, 320);
+            m.bar.retarget(liveNow ? clamp(m.frameMa / (float) fullMa(), 0f, 1f) : 0f, now, 320);
             float frac = m.bar.get(now);
             fill.setColor(mulAlpha(LINE, alpha));
-            canvas.drawRoundRect(-22, 6.7f, 22, 9.7f, 2, 2, fill);
+            canvas.drawRoundRect(-25, 8f, 25, 11.5f, 2, 2, fill);
             if (frac > 0.001f) {
                 fill.setColor(mulAlpha(warmColor(m.frameMa), alpha));
-                canvas.drawRoundRect(-22, 6.7f, -22 + 44 * frac, 9.7f, 2, 2, fill);
+                canvas.drawRoundRect(-25, 8f, -25 + 50 * frac, 11.5f, 2, 2, fill);
             }
         }
         canvas.restore();
@@ -1276,7 +1572,7 @@ public final class MeterDashboardView extends View {
         boolean hasShown = holding ? holdMa >= 0 : liveNow;
         int shownMa = holding ? holdMa : (liveNow ? m.frameMa : -1);
 
-        text(canvas, hex1(focus), cx, DIAL_Y + HUB_ADDR_BASE, 13, INK3, Paint.Align.CENTER,
+        text(canvas, hex1(focus), cx, DIAL_Y + HUB_ADDR_BASE, 15, INK3, Paint.Align.CENTER,
                 monoBold, 0.1f, 1);
 
         // 中心数值:直接跳变,不滚动;大数字用连续变暖色
@@ -1306,7 +1602,7 @@ public final class MeterDashboardView extends View {
             label = statusLabel(m.status);
             labelCol = statusColor(m.status);
         }
-        text(canvas, label, cx, DIAL_Y + HUB_STATE_BASE, 12, labelCol, Paint.Align.CENTER,
+        text(canvas, label, cx, DIAL_Y + HUB_STATE_BASE, 14, labelCol, Paint.Align.CENTER,
                 sansMedium, 0, 1);
 
         String sub;
@@ -1327,7 +1623,7 @@ public final class MeterDashboardView extends View {
                     ? "上次存 " + clockFormat.format(new Date(lastStored.timestamp))
                     : "点一下读一次";
         }
-        text(canvas, sub, cx, DIAL_Y + HUB_SUB_BASE, 10.5f, INK3, Paint.Align.CENTER, mono, 0, 1);
+        text(canvas, sub, cx, DIAL_Y + HUB_SUB_BASE, 12, INK3, Paint.Align.CENTER, mono, 0, 1);
         canvas.restore();
     }
 
@@ -1348,8 +1644,14 @@ public final class MeterDashboardView extends View {
 
     /* ── 采集模式开关 ── */
     private void drawFoot(Canvas canvas, long now) {
-        String note = autoMode ? intervalNote() : "点中心读一次";
-        float noteW = measure(note, 11.5f, sans, 0);
+        // 间隔本身就是按钮:显示它的那几个字点开就是小键盘
+        String chip = intervalChipText();
+        String before = autoMode ? "每 " : "点中心读一次 · 自动 ";
+        String after = autoMode ? " 自动测一轮" : "";
+        float chipW = measure(chip, 12.5f, sans, 0) + 18;
+        float beforeW = measure(before, 11.5f, sans, 0);
+        float afterW = measure(after, 11.5f, sans, 0);
+        float noteW = beforeW + chipW + afterW;
         float groupW = TOGGLE_W + 12 + noteW;
         float left = LEFT_CENTER - groupW / 2f;
         float top = FOOT_CY - TOGGLE_H / 2f;
@@ -1372,20 +1674,37 @@ public final class MeterDashboardView extends View {
                 Paint.Align.CENTER, sansMedium, 0, 1);
         text(canvas, "自动", left + 3 + TOGGLE_BTN_W * 1.5f, FOOT_CY + 4.5f, 12.5f, autoCol,
                 Paint.Align.CENTER, sansMedium, 0, 1);
-        text(canvas, note, left + TOGGLE_W + 12, FOOT_CY + 4.1f, 11.5f, INK3,
+
+        float noteLeft = left + TOGGLE_W + 12;
+        text(canvas, before, noteLeft, FOOT_CY + 4.1f, 11.5f, INK3, Paint.Align.LEFT, sans, 0, 1);
+        intervalChipRect.set(noteLeft + beforeW, FOOT_CY - 12.5f,
+                noteLeft + beforeW + chipW, FOOT_CY + 12.5f);
+        drawValueChip(canvas, intervalChipRect, chip, 12.5f, INK2, 1f);
+        text(canvas, after, intervalChipRect.right, FOOT_CY + 4.1f, 11.5f, INK3,
                 Paint.Align.LEFT, sans, 0, 1);
 
         modeManualRect.set(left + 3, top, left + 3 + TOGGLE_BTN_W, bottom);
         modeAutoRect.set(left + 3 + TOGGLE_BTN_W, top, left + 119, bottom);
-        footNoteRect.set(left + TOGGLE_W + 6, FOOT_CY - 14, left + TOGGLE_W + 18 + noteW,
-                FOOT_CY + 14);
     }
 
-    private String intervalNote() {
+    private String intervalChipText() {
         if (intervalSeconds % 60 == 0) {
-            return "每 " + (intervalSeconds / 60) + " 分钟自动测一轮";
+            return (intervalSeconds / 60) + " 分钟";
         }
-        return "每 " + intervalSeconds + " 秒自动测一轮";
+        return intervalSeconds + " 秒";
+    }
+
+    /** 可点的数值牌:凹底加一圈描边,和旁边的说明文字区分开。 */
+    private void drawValueChip(Canvas canvas, RectF rect, String label, float size,
+                               int color, float alpha) {
+        float r = rect.height() / 2f;
+        fill.setColor(mulAlpha(SUNKEN, alpha));
+        canvas.drawRoundRect(rect, r, r, fill);
+        stroke.setColor(mulAlpha(LINE2, alpha));
+        stroke.setStrokeWidth(1);
+        canvas.drawRoundRect(rect, r, r, stroke);
+        text(canvas, label, rect.centerX(), rect.centerY() + size * 0.36f, size, color,
+                Paint.Align.CENTER, sans, 0, alpha);
     }
 
     /* ── 右侧标题与筛选 ── */
@@ -1432,7 +1751,7 @@ public final class MeterDashboardView extends View {
 
         Map<Integer, List<MeterReading>> groups = chartGroups();
         long tMin = Long.MAX_VALUE, tMax = Long.MIN_VALUE;
-        float top = FULL_MA / 1000f;
+        float top = fullMa() / 1000f;
         int n = 0;
         for (List<MeterReading> arr : groups.values()) {
             for (MeterReading r : arr) {
@@ -1451,8 +1770,8 @@ public final class MeterDashboardView extends View {
         canvas.translate(PLOT_X, PLOT_Y);
         canvas.scale(PLOT_W / CHW, PLOT_H / CHH);
 
-        float yLow = yOf(LOW_MA / 1000f, top);
-        float yHigh = yOf(HIGH_MA / 1000f, top);
+        float yLow = yOf(lowMa / 1000f, top);
+        float yHigh = yOf(highMa / 1000f, top);
         fill.setColor(mulAlpha(0xFFC87C00, 0.06f * fade));
         canvas.drawRect(CH_L, yLow, CH_R, CH_B, fill);
         fill.setColor(mulAlpha(0xFFDC2626, 0.06f * fade));
@@ -1462,9 +1781,7 @@ public final class MeterDashboardView extends View {
         canvas.drawLine(CH_L, CH_B, CH_R, CH_B, stroke);
         drawDashed(canvas, CH_L, yHigh, CH_R, yHigh, mulAlpha(C_HIGH, fade), limitDash);
         drawDashed(canvas, CH_L, yLow, CH_R, yLow, mulAlpha(C_LOW, fade), limitDash);
-        text(canvas, "2.0", 0, yHigh + 3, 9, mulAlpha(INK3, fade), Paint.Align.LEFT, mono, 0, 1);
-        text(canvas, "0.2", 0, yLow + 3, 9, mulAlpha(INK3, fade), Paint.Align.LEFT, mono, 0, 1);
-        if (top > FULL_MA / 1000f + 0.05f) {
+        if (top > fullMa() / 1000f + 0.05f) {
             text(canvas, String.format(Locale.US, "%.1f", top), 0, CH_T + 3, 9,
                     mulAlpha(INK3, fade), Paint.Align.LEFT, mono, 0, 1);
         }
@@ -1507,10 +1824,11 @@ public final class MeterDashboardView extends View {
                     float py = yOf(r.currentMa / 1000f, top);
                     chartPtXY.add(new float[]{px, py});
                     chartPtRec.add(r);
-                    if (MeterReading.LOW.equals(r.status) || MeterReading.HIGH.equals(r.status)) {
+                    String st = statusOf(r);
+                    if (alarms(st)) {
                         fill.setColor(mulAlpha(FRAME, fade));
                         canvas.drawCircle(px, py, 4, fill);
-                        stroke.setColor(mulAlpha(statusColor(r.status), fade));
+                        stroke.setColor(mulAlpha(statusColor(st), fade));
                         stroke.setStrokeWidth(2);
                         canvas.drawCircle(px, py, 4, stroke);
                     }
@@ -1555,6 +1873,13 @@ public final class MeterDashboardView extends View {
         }
         canvas.restore();
 
+        // 两条限值线的刻度就是阈值本身,点开就能改。画在图表变换之外,免得
+        // 跟着 508/520 的缩放走形。
+        drawLimitChip(canvas, highChipRect, fmtLimit(highMa),
+                PLOT_Y + yHigh * (PLOT_H / CHH), C_HIGH, fade);
+        drawLimitChip(canvas, lowChipRect, fmtLimit(lowMa),
+                PLOT_Y + yLow * (PLOT_H / CHH), C_LOW, fade);
+
         // 复位按钮 .2s 淡入
         boolean zoomed = viewU0 > 0.001f || viewU1 < 0.999f;
         resetAlpha.retarget(zoomed ? 1f : 0f, now, 200);
@@ -1570,6 +1895,21 @@ public final class MeterDashboardView extends View {
             text(canvas, "复位", resetRect.centerX(), resetRect.centerY() + 3.8f, 10.5f,
                     INK2, Paint.Align.CENTER, sans, 0, ra);
         }
+    }
+
+    private void drawLimitChip(Canvas canvas, RectF rect, String label, float cy,
+                               int color, float alpha) {
+        // 右边贴着纵轴、往左边的刻度栏里长:阈值写到三位小数也压不到数据点上
+        float w = measure(label, 11f, mono, 0) + 12;
+        float right = PLOT_X + CH_L * (PLOT_W / CHW);
+        rect.set(right - w, cy - 10f, right, cy + 10f);
+        fill.setColor(mulAlpha(FRAME, alpha));
+        canvas.drawRoundRect(rect, 10, 10, fill);
+        stroke.setColor(mulAlpha(color, 0.42f * alpha));
+        stroke.setStrokeWidth(1);
+        canvas.drawRoundRect(rect, 10, 10, stroke);
+        text(canvas, label, rect.centerX(), cy + 4f, 11, color, Paint.Align.CENTER,
+                mono, 0, alpha);
     }
 
     private void drawReadout(Canvas canvas, long now) {
@@ -1610,11 +1950,11 @@ public final class MeterDashboardView extends View {
     private void drawPagerButton(Canvas canvas, RectF rect, String label, boolean enabled) {
         float a = enabled ? 1f : 0.35f;
         fill.setColor(mulAlpha(FRAME, a));
-        canvas.drawRoundRect(rect, 6, 6, fill);
+        canvas.drawRoundRect(rect, 8, 8, fill);
         stroke.setColor(mulAlpha(LINE2, a));
         stroke.setStrokeWidth(1);
-        canvas.drawRoundRect(rect, 6, 6, stroke);
-        text(canvas, label, rect.centerX(), rect.centerY() + 4.3f, 12, INK2,
+        canvas.drawRoundRect(rect, 8, 8, stroke);
+        text(canvas, label, rect.centerX(), rect.centerY() + 5.4f, 15, INK2,
                 Paint.Align.CENTER, sans, 0, a);
     }
 
@@ -1696,7 +2036,8 @@ public final class MeterDashboardView extends View {
             stroke.setStrokeWidth(1);
             canvas.drawLine(LOG_RECT.left, top, LOG_RECT.right, top, stroke);
         }
-        int col = statusColor(r.status);
+        String status = statusOf(r);
+        int col = statusColor(status);
         text(canvas, clockFormat.format(new Date(r.timestamp)), REC_T_X, rowBaseline(i, 11.5f),
                 11.5f, INK2, Paint.Align.LEFT, mono, 0, othersAlpha);
         text(canvas, hex1(r.address), REC_A_X, rowBaseline(i, 11.5f), 11.5f, INK2,
@@ -1711,7 +2052,7 @@ public final class MeterDashboardView extends View {
             text(canvas, value, REC_V_RIGHT - unitW - 3, base, 13, col, Paint.Align.RIGHT,
                     sansMedium, 0, rowAlpha);
         }
-        text(canvas, statusLabel(r.status), REC_S_RIGHT, rowBaseline(i, 10.5f), 10.5f, col,
+        text(canvas, statusLabel(status), REC_S_RIGHT, rowBaseline(i, 10.5f), 10.5f, col,
                 Paint.Align.RIGHT, sansMedium, 0, othersAlpha);
         canvas.restore();
     }
@@ -1734,6 +2075,131 @@ public final class MeterDashboardView extends View {
         text(canvas, "A", right, base, unitSize, unitColor, Paint.Align.RIGHT, sansMedium, 0, 1);
         text(canvas, flyNum, right - unitW - gap, base, numSize, numColor, Paint.Align.RIGHT,
                 sansMedium, 0, 1);
+    }
+
+    /* ── 数字小键盘 ── */
+    private void drawKeypad(Canvas canvas, long now) {
+        if (padMode == PAD_NONE) {
+            return;
+        }
+        float a = padAlpha.get(now);
+        if (a <= 0.003f) {
+            return;
+        }
+        fill.setColor(mulAlpha(INK, 0.34f * a));
+        canvas.drawRoundRect(0, 0, DESIGN_W, DESIGN_H, 30, 30, fill);
+
+        // 弹入的 96% → 100%,和收起时反过来走同一条路
+        int save = a < 0.999f
+                ? canvas.saveLayerAlpha(padCard.left - 50, padCard.top - 50,
+                padCard.right + 50, padCard.bottom + 50, Math.round(a * 255))
+                : canvas.save();
+        canvas.scale(lerp(0.96f, 1f, a), lerp(0.96f, 1f, a),
+                padCard.centerX(), padCard.centerY());
+        float shakeT = padErrorAt > 0 ? (now - padErrorAt) / 380f : 1f;
+        if (shakeT < 1f) {
+            canvas.translate((float) Math.sin(shakeT * Math.PI * 6) * 6f * (1 - shakeT), 0);
+        }
+
+        fill.setColor(FRAME);
+        fill.setShadowLayer(34, 0, 14, 0x590A101A);
+        canvas.drawRoundRect(padCard, 20, 20, fill);
+        fill.clearShadowLayer();
+        stroke.setColor(LINE2);
+        stroke.setStrokeWidth(1);
+        canvas.drawRoundRect(padCard, 20, 20, stroke);
+
+        float paneLeft = padUnitA.left;
+        float paneRight = padUnitB.right;
+        text(canvas, padTitle(), paneLeft, padCard.top + 46, 15, INK, Paint.Align.LEFT,
+                sansMedium, 0, 1);
+        text(canvas, padCurrent(), paneLeft, padCard.top + 68, 11, INK3, Paint.Align.LEFT,
+                sans, 0, 1);
+
+        float base = padCard.top + 138;
+        float typedW = padInput.isEmpty() ? 0 : measure(padInput, 38, sansMedium, 0);
+        if (!padInput.isEmpty()) {
+            text(canvas, padInput, paneLeft, base, 38, INK, Paint.Align.LEFT, sansMedium, 0, 1);
+        }
+        // 光标:还没打字时,它是唯一说明「这里在等输入」的东西
+        if ((now - padCaretAt) / 530L % 2 == 0) {
+            fill.setColor(ACCENT);
+            canvas.drawRoundRect(paneLeft + typedW + 2, base - 27,
+                    paneLeft + typedW + 4.4f, base + 4, 1.2f, 1.2f, fill);
+        }
+        stroke.setColor(padInput.isEmpty() ? LINE2 : ACCENT);
+        stroke.setStrokeWidth(padInput.isEmpty() ? 1 : 1.6f);
+        canvas.drawLine(paneLeft, base + 12, paneRight, base + 12, stroke);
+        boolean bad = padErrorAt > 0 && now - padErrorAt < 1400;
+        text(canvas, padRange(), paneLeft, base + 32, 10.5f, bad ? C_HIGH : INK3,
+                Paint.Align.LEFT, mono, 0, 1);
+
+        for (int i = 0; i < padKeys.length; i++) {
+            drawPadKey(canvas, i);
+        }
+        boolean ready = !Float.isNaN(padValue());
+        drawPadUnit(canvas, padUnitA, padUnitLabel(false), padPressed == KEY_UNIT_A, ready);
+        drawPadUnit(canvas, padUnitB, padUnitLabel(true), padPressed == KEY_UNIT_B, ready);
+        text(canvas, "按单位键即保存", (paneLeft + paneRight) / 2f, padUnitA.bottom + 19, 10.5f,
+                INK3, Paint.Align.CENTER, sans, 0, 1);
+
+        stroke.setColor(padPressed == KEY_CLOSE ? INK : INK3);
+        stroke.setStrokeWidth(1.6f);
+        float ccx = padClose.centerX(), ccy = padClose.centerY();
+        canvas.drawLine(ccx - 5, ccy - 5, ccx + 5, ccy + 5, stroke);
+        canvas.drawLine(ccx + 5, ccy - 5, ccx - 5, ccy + 5, stroke);
+        canvas.restoreToCount(save);
+    }
+
+    private void drawPadKey(Canvas canvas, int i) {
+        RectF r = padKeys[i];
+        boolean pressed = padPressed == i;
+        canvas.save();
+        if (pressed) {
+            canvas.scale(0.97f, 0.97f, r.centerX(), r.centerY());
+        }
+        fill.setColor(pressed ? mixColor(SUNKEN, INK, 0.1f) : SUNKEN);
+        canvas.drawRoundRect(r, 12, 12, fill);
+        if (i == 11) {
+            drawBackspace(canvas, r.centerX(), r.centerY());
+        } else {
+            String label = i == 9 ? "." : i == 10 ? "0" : String.valueOf((char) ('1' + i));
+            text(canvas, label, r.centerX(), r.centerY() + 7, 20, INK, Paint.Align.CENTER,
+                    sansMedium, 0, 1);
+        }
+        canvas.restore();
+    }
+
+    /** 单位键就是确认键,所以它长得像确认键;没输入数字时是灰的。 */
+    private void drawPadUnit(Canvas canvas, RectF r, String label, boolean pressed,
+                             boolean ready) {
+        canvas.save();
+        if (pressed) {
+            canvas.scale(0.97f, 0.97f, r.centerX(), r.centerY());
+        }
+        fill.setColor(ready ? (pressed ? mixColor(ACCENT, INK, 0.22f) : ACCENT)
+                : mulAlpha(INK, 0.14f));
+        canvas.drawRoundRect(r, 13, 13, fill);
+        text(canvas, label, r.centerX(), r.centerY() + 5.4f, 15, ready ? FRAME : INK3,
+                Paint.Align.CENTER, sansMedium, 0, 1);
+        canvas.restore();
+    }
+
+    /* 退格画出来而不是打出来:⌫ 在不少机器的默认字体里是空豆腐。 */
+    private void drawBackspace(Canvas canvas, float cx, float cy) {
+        workPath.reset();
+        workPath.moveTo(cx - 11, cy);
+        workPath.lineTo(cx - 4, cy - 7);
+        workPath.lineTo(cx + 10, cy - 7);
+        workPath.lineTo(cx + 10, cy + 7);
+        workPath.lineTo(cx - 4, cy + 7);
+        workPath.close();
+        stroke.setColor(INK2);
+        stroke.setStrokeWidth(1.6f);
+        stroke.setStrokeJoin(Paint.Join.ROUND);
+        canvas.drawPath(workPath, stroke);
+        canvas.drawLine(cx + 1, cy - 3.2f, cx + 7, cy + 3.2f, stroke);
+        canvas.drawLine(cx + 7, cy - 3.2f, cx + 1, cy + 3.2f, stroke);
     }
 
     /* ══════════ 图表数据 ══════════ */
@@ -1781,8 +2247,20 @@ public final class MeterDashboardView extends View {
         return null;
     }
 
-    private static String classifyStatus(int ma) {
-        return MeterReading.classify(ma, LOW_MA, HIGH_MA);
+    private String classifyStatus(int ma) {
+        return MeterReading.classify(ma, lowMa, highMa);
+    }
+
+    /**
+     * 显示时用当前阈值重判一次。库里存的是那一刻的判定,改完阈值再看,
+     * 一条 1.8 A 的记录不能既在红线之上又写着「正常」——曲线上的线就画在
+     * 旁边,两种说法同时出现只会让人以为界面坏了。
+     */
+    private String statusOf(MeterReading r) {
+        if (r.currentMa < 0 || MeterReading.OFFLINE.equals(r.status)) {
+            return r.status;
+        }
+        return classifyStatus(r.currentMa);
     }
 
     private static String hex1(int n) {
@@ -1791,6 +2269,15 @@ public final class MeterDashboardView extends View {
 
     private static String fmtA(int ma) {
         return String.format(Locale.US, "%.3f", ma / 1000f);
+    }
+
+    /** 限值牌上的读数:0.200 A 写成 0.2,0.250 A 才写两位——刻度栏只有这么宽。 */
+    private static String fmtLimit(int ma) {
+        String s = fmtA(ma);
+        while (s.endsWith("0") && !s.endsWith(".0")) {
+            s = s.substring(0, s.length() - 1);
+        }
+        return s;
     }
 
     private static String fmtHub(int ma) {
@@ -1819,6 +2306,7 @@ public final class MeterDashboardView extends View {
         if (status == null) return "未读";
         if (MeterReading.LOW.equals(status)) return "低限";
         if (MeterReading.HIGH.equals(status)) return "超限";
+        if (MeterReading.DISCONNECTED.equals(status)) return "负载断开";
         if (MeterReading.OFFLINE.equals(status)) return "离线";
         return "正常";
     }
@@ -1827,6 +2315,7 @@ public final class MeterDashboardView extends View {
         if (status == null) return INK3;
         if (MeterReading.LOW.equals(status)) return C_LOW;
         if (MeterReading.HIGH.equals(status)) return C_HIGH;
+        if (MeterReading.DISCONNECTED.equals(status)) return C_DISC;
         if (MeterReading.OFFLINE.equals(status)) return C_OFF;
         return C_OK;
     }
@@ -1842,13 +2331,23 @@ public final class MeterDashboardView extends View {
         return hsl(lerp(42, 0, u), lerp(100, 72, u), lerp(40, 50, u));
     }
 
-    private static int warmColor(int ma) {
+    /* 变暖的区间跟着阈值缩放:默认 0.2/2.0 A 时正好是原型的 0.16 和 0.32 A。
+       写死成绝对宽度的话,把超限调到 0.5 A 会让整条量程都是红的。 */
+    private int warmColor(int ma) {
         if (ma < 0) {
             return C_OFF;
         }
+        // 负载断开落在连续色标的冷端,而那一端画出来是「离低限还远」的琥珀偏绿。
+        // 数字必须和状态标签说同一件事,否则中心一个暖色的 0.003、下面一行写着
+        // 负载断开,界面自己跟自己打架。
+        if (ma < MeterReading.DISCONNECT_MA) {
+            return C_DISC;
+        }
         float amps = ma / 1000f;
-        float lowP = clamp((LOW_MA / 1000f + 0.16f - amps) / 0.16f, 0f, 1f);
-        float highP = clamp((amps - (HIGH_MA / 1000f - 0.32f)) / 0.32f, 0f, 1f);
+        float lowBand = Math.max(0.02f, lowMa * 0.8f / 1000f);
+        float highBand = Math.max(0.05f, highMa * 0.16f / 1000f);
+        float lowP = clamp((lowMa / 1000f + lowBand - amps) / lowBand, 0f, 1f);
+        float highP = clamp((amps - (highMa / 1000f - highBand)) / highBand, 0f, 1f);
         return highP >= lowP ? heat(highP, true) : heat(lowP, false);
     }
 
