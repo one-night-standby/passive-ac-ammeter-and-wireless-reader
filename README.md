@@ -1,5 +1,3 @@
-<img width="1279" height="1706" alt="7180bca395bf51f9f957c683e8a5379e" src="https://github.com/user-attachments/assets/a5a61a1d-50db-4525-9a47-80fbcdb6d6b5" /># 无源交流电流表及无线读表器
-
 > **Passive AC Ammeter and Wireless Reader** — 2026 年全国大学生电子设计竞赛（TI 杯）B 题作品
 
 自制“无源”交流电流表与无线读表系统。电流表以电流互感器（CT）电磁耦合取电并同时完成电流传感
@@ -8,11 +6,8 @@
 BLE 读取一个或多个电流表，完成手动/自动采集、低限/超限/离线报警、历史存储与趋势显示。
 
 ##作品实物图
-<div style="text-align: center; margin: 20px 0;">
-  <img src="https://github.com/user-attachments/assets/a5a61a1d-50db-4525-9a47-80fbcdb6d6b5" 
-       alt="无源交流电流表及无线读表器实物图" 
-       width="600">
-</div>
+
+![项目图片](https://github.com/user-attachments/assets/a5a61a1d-50db-4525-9a47-80fbcdb6d6b5)
 
 
 ## 系统组成
