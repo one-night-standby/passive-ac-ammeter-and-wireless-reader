@@ -12,20 +12,8 @@ BLE 读取一个或多个电流表，完成手动/自动采集、低限/超限/�
 
 ## 系统组成
 
-```mermaid
-flowchart LR
-    L["36 V 交流负载回路<br/>0.1～2.2 A"] --> CT["CT 原边 N1 ≤ 5 匝"]
-    CT --> SEC["CT 次级（带抽头）<br/>取电 + 传感"]
-    SEC --> PWR["整流 → 储能 → 稳压 3.3 V"]
-    PWR --> MCU["LP-MSPM0G3507<br/>Rust / Embassy"]
-    SEC --> AFE["高阻传感 / 偏置 / 保护前端"]
-    AFE --> ADC["PA18 直采 或 OPA1 → PA16"]
-    ADC --> MCU
-    MCU --> OLED["SSD1306 OLED 128×64"]
-    MCU --> UART["UART2 @ 115200"]
-    UART --> HC42["HC-42 BLE（电路 B，可插拔）"]
-    HC42 -. "BLE 0xFFE0 / 0xFFE1" .-> APP["Android 读表器（电路 C）"]
-```
+![Uploading image.png…]()
+
 
 ## 仓库结构
 
