@@ -1,4 +1,4 @@
-# 无源交流电流表及无线读表器
+<img width="1279" height="1706" alt="7180bca395bf51f9f957c683e8a5379e" src="https://github.com/user-attachments/assets/a5a61a1d-50db-4525-9a47-80fbcdb6d6b5" /># 无源交流电流表及无线读表器
 
 > **Passive AC Ammeter and Wireless Reader** — 2026 年全国大学生电子设计竞赛（TI 杯）B 题作品
 
@@ -6,6 +6,10 @@
 （题目规定的唯一供电方式），由 TI MSPM0G3507（LP-MSPM0G3507 开发板）运行 Rust 裸机固件，
 实现自动量程、真有效值测量、OLED 显示与 HC-42 BLE 无线上报；读表器端为 Android App，通过
 BLE 读取一个或多个电流表，完成手动/自动采集、低限/超限/离线报警、历史存储与趋势显示。
+
+##作品实物图
+![Uploading 7180bca395bf51f9f957c683e8a5379e.jpg…]()
+
 
 ## 系统组成
 
