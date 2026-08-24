@@ -28,17 +28,14 @@ flowchart LR
 
 | 路径 | 内容 |
 | --- | --- |
-| `src/` | 电流表固件（Rust，`#![no_std]`，Embassy） |
+| `src/` | 电流表固件（Rust，`#![no_std]`，Embassy；含片内标定存储 `nvcal.rs`） |
 | `src/bin/` | 附加固件：`stream`、`btcfg`、`oparails` |
-| `android-reader/` | 无线读表器 Android App（Kotlin / Gradle） |
-| `tools/cal_log.py` | 标定采集工具：BLE 帧 + 台式万用表配对写 CSV |
-| `xtask/` | 主机侧示波器工具（Siglent SDS2102X Plus 截图 / 波形导出 / SCPI 查询） |
-| `docs/` | 题面、硬件与软件方案、App 设计、板卡与 HC-42 资料、设计报告 |
-| `output/` | 设计报告多版本成品（docx / pdf / tex） |
+| `android-reader/` | 无线读表器 Android App（Kotlin / Gradle，含标定台） |
+| `xtask/` | 主机侧测试工具：示波器（SDS2102X Plus）、万用表（SDM3055X-E）、标定采集 `cal-log` |
+| `docs/` | 硬件参考手册：HC-42 规格书、LP-MSPM0G3507 板卡资料、MSPM0G TRM |
 | `STRUCTURE.md` | DSP 流程与固件设计要点（中文，含各模块取舍） |
 | `cal.csv` | 分档标定表（LSB → A，分段线性查表） |
 | `app-prototype.html` | 读表器界面单文件原型（本地模拟数据） |
-| `pyproject.toml` / `uv.lock` | Python 工具依赖（bleak、pyvisa 等） |
 
 ## 电流表固件
 
@@ -98,21 +95,29 @@ flowchart LR
 命令方向（下行，故意不用 `METER_*` 打头，避免被自己的回显触发）：
 
 ```text
-MEAS                 # 广播：范围内所有表都测
-MEAS,ADDR=n          # 只有地址拨码等于 n 的表响应
+MEAS                    # 广播：范围内所有表都测
+MEAS,ADDR=n             # 只有地址拨码等于 n 的表响应
+CALPT,ADDR=n,I=i,X=lsb,Y=amps   # 标定：暂存一个点（不落盘）
+CALEND,ADDR=n,N=count   # 标定：安装暂存点，写入片内 flash
+CALOFF,ADDR=n           # 标定：清除现场表，回到内置 ROM 表
+CALGET,ADDR=n           # 标定：查询当前用哪张表
 ```
+
+`CAL*` 命令只认指定地址，没有广播形式——一张表只能推给它实测出来的那块表。
 
 上报方向（上行，每行 CRLF 结尾）：
 
 ```text
 METER_TEST,ADDR=01,CURRENT_MA=1234,STATUS=NORMAL
-METER_CAL,ADDR=01,RMS=0.12,GAIN=1,FLAG=OK,MEAN=...,PP=...
+METER_CAL,ADDR=01,RMS=0.12,GAIN=1,FLAG=OK,SRC=ROM,MEAN=...,PP=...
 IMHERE,ADDR=01
+CALACK,ADDR=01,I=5            # 应答 CALPT，出错时带 ERR=...
+CALSTAT,ADDR=01,SRC=ROM,N=16  # 应答 CALEND / CALOFF / CALGET
 ```
 
-`STATUS` 分类：`< 200 mA` 为 `LOW`，`> 2000 mA` 为 `HIGH`，其余 `NORMAL`（题面 2(3) 阈值）。
-`METER_CAL` 携带原始 RMS、档位、探测帧 mean/pp 与质量标志，供 `tools/cal_log.py` 采集标定。
-`METER_TEST` 是 Android 端解析的帧（正则锚定行尾），不可追加字段。
+`STATUS` 分类：`< 200 mA` 为 `LOW`，`> 2000 mA` 为 `HIGH`，其余 `NORMAL`（赛题报警阈值）。
+`METER_CAL` 携带原始 RMS、档位、质量标志与标定来源（`SRC=ROM` 内置表 / `SRC=FIELD` 现场表），
+供 `xtask cal-log` 采集标定。`METER_TEST` 是 Android 端解析的帧（正则锚定行尾），不可追加字段。
 
 ## 无线读表器（Android）
 
@@ -163,24 +168,27 @@ gradle assembleDebug
 
 ### 标定与测试工具
 
+标定采集、示波器和万用表工具都在 `xtask`（主机侧，`cargo xtask`）：
+
 ```sh
-uv sync                      # Python 3.14：bleak、pyvisa、pyusb …
-./tools/cal_log.py --list    # 枚举蓝牙设备
-./tools/cal_log.py --out cal-x32.csv   # 蓝牙帧到达时同步读 SDM3055X-E，配对写 CSV
+cargo xtask cal-log --out cal-x32.csv    # 自动发 MEAS 驱动电流表，每帧配一次 DMM 读数写 CSV
+cargo xtask cal-log --list-ble           # 枚举蓝牙设备
+cargo xtask cal-log --list-dmm           # 列出 VISA/USBTMC 仪器
+cargo xtask scope-shot                   # 示波器截图（SDS2102X Plus）
+cargo xtask scope-dump C1                # 波形导出 CSV
+cargo xtask scope-query <SCPI>           # 原始 SCPI 查询
 ```
 
-`xtask` 提供示波器工具：`cargo xtask scope-shot`（截图）、`cargo xtask scope-dump C1`
-（波形导出 CSV）、`cargo xtask scope-query <SCPI>`。
+`cal-log` 的详细参数（扫描秒数、地址、万用表连接方式、取数 SCPI 等）见
+`cargo xtask cal-log --help`。注意标定时对着 `main` 固件用，`stream` 固件会自行定时测量、
+跟它抢链路。
 
 ## 文档
 
-- [docs/B题_无源交流电流表及无线读表器.md](docs/B题_无源交流电流表及无线读表器.md) — 题面整理与验收清单
-- [docs/本地项目完整方案_硬件与软件.md](docs/本地项目完整方案_硬件与软件.md) — 硬件与软件完整方案
-- [docs/C无线读表器_App设计.md](docs/C无线读表器_App设计.md) — 读表器 App 设计
-- [docs/LP-MSPM0G3507_开发板信息.md](docs/LP-MSPM0G3507_开发板信息.md) — 板卡资料
 - [STRUCTURE.md](STRUCTURE.md) — DSP 流程与固件设计要点
-- `docs/HC42.pdf` — HC-42 模块手册；`docs/slau846-g-series-trm.pdf` — MSPM0G 技术参考手册
-- `docs/report.tex` / `docs/report.pdf` — 设计报告（`output/` 下另有按版本整理的成品）
+- `docs/HC42.pdf` — HC-42 蓝牙透传模块规格书
+- `docs/LP-MSPM0G3507_开发板信息.md` — LP-MSPM0G3507 开发板资料
+- `docs/slau846-g-series-trm.pdf` — MSPM0G 系列技术参考手册（TRM）
 
 ## 许可证
 
