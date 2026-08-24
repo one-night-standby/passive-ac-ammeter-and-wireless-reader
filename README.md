@@ -8,7 +8,11 @@
 BLE 读取一个或多个电流表，完成手动/自动采集、低限/超限/离线报警、历史存储与趋势显示。
 
 ##作品实物图
-![Uploading 7180bca395bf51f9f957c683e8a5379e.jpg…]()
+<div style="text-align: center; margin: 20px 0;">
+  <img src="https://github.com/user-attachments/assets/a5a61a1d-50db-4525-9a47-80fbcdb6d6b5" 
+       alt="无源交流电流表及无线读表器实物图" 
+       width="600">
+</div>
 
 
 ## 系统组成
